@@ -1,19 +1,3 @@
----
-robots: By accessing this content, You agree to the terms below (v1.1). Non-commercial use only. Attribution required.
-DC.rights: https://qnfo.org/LICENSE Users are bound by terms upon access.
-license: QNFO Content License Agreement v1.1 (see below)
-author: Rowan Brad Quni
-email: rowan.quni@qnfo.org
-website: http://qnfo.org
-LinkedIn: https://www.linkedin.com/in/rowan-quni-868006341
-ORCID: https://orcid.org/0009-0002-4317-5604
-tags: QNFO, License, EULA, Non-Commercial, Attribution, Research, Science, Open Access, Intellectual Property, Version 1.1, Rowan Brad Quni, Bradley Gudzinas] # Added name tag
-created: 2025-03-01T09:31:40Z
-modified: 2025-04-23T09:14:42Z
-aliases: [QNFO Content License Agreement (Version 1.1), "QNFO Content License Agreement v1.1", "QNFO License v1.1"]
-title: LICENSE
----
-
 # QNFO Content License Agreement (Version 1.1)
 
 **Effective Date:** January 1, 2025
