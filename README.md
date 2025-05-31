@@ -1,3 +1,6 @@
+---
+modified: 2025-05-31T08:08:56Z
+---
 # Autologos AI Core Directives
 
 This repository serves as the master code base for the **Autologos AI Process Manager's Core Directives**. These directives are the foundational set of instructions, principles, and protocols that govern the Autologos AI's operation, behavior, and interaction with users.
