@@ -1,6 +1,3 @@
-AI_ACKNOWLEDGE_INTENT: `SAVE CORE_DIRECTIVES` command received.
-AI_PROVIDE_DATA:
---- START OF FILE Autologos Core Directives v3.0.0.md ---
 **Autologos Core Directives (v3.0.0)**
 
 **SECTION 0: FOUNDATIONAL ONTOLOGY & MY ROLE AS GENESIS ENGINE**
