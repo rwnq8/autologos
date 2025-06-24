@@ -1,5 +1,6 @@
 
 
+
 import React, { useState, useContext } from 'react';
 import type { IterationLogEntry, ReconstructedProductResult, DiffViewType } from '../../types'; 
 import LogEntryItem from './LogEntryItem';
@@ -20,6 +21,17 @@ const IterationLog: React.FC<IterationLogProps> = ({
     setExpandedLogItem(expandedLogItem === iteration ? null : iteration);
   };
 
+  const DIAG_PROMPT_COPY_MAX_LENGTH = 100000; // Max length for prompts in copied text before truncation
+
+  const truncateForCopy = (text: string | undefined, maxLength: number = DIAG_PROMPT_COPY_MAX_LENGTH): string => {
+    if (!text) return "(Not available)";
+    if (text.length <= maxLength) return text;
+    // For copied text, show a larger portion from start and end
+    const halfMax = Math.floor(maxLength / 2) - 50; // leave room for truncation message
+    return `${text.substring(0, halfMax)}...\n[--- TRUNCATED (Total Length: ${text.length} chars) ---]\n...${text.substring(text.length - halfMax)}`;
+  };
+
+
   const handleCopyDiagnostics = async (logEntry: IterationLogEntry) => {
     let diagString = `== Iteration ${logEntry.iteration} Diagnostics ==\n`;
     diagString += `Timestamp: ${new Date(logEntry.timestamp).toISOString()}\n`;
@@ -31,7 +43,22 @@ const IterationLog: React.FC<IterationLogProps> = ({
       diagString += `Readability (Flesch): ${logEntry.readabilityScoreFlesch.toFixed(1)}\n`;
     }
 
-    if (logEntry.processedProductHead || logEntry.iteration === 0) { // Iteration 0 uses processedProduct fields as they are same as direct response
+    if (logEntry.aiValidationInfo) {
+        diagString += `\n== AI Response Validation (${logEntry.aiValidationInfo.checkName}) ==\n`;
+        diagString += `  Passed: ${logEntry.aiValidationInfo.passed}\n`;
+        if (logEntry.aiValidationInfo.reason) diagString += `  Reason: ${logEntry.aiValidationInfo.reason}\n`;
+        if (logEntry.aiValidationInfo.details) {
+            diagString += `  Details Type: ${logEntry.aiValidationInfo.details.type}\n`;
+            if (typeof logEntry.aiValidationInfo.details.value === 'string') {
+                diagString += `  Details Value: "${logEntry.aiValidationInfo.details.value}"\n`;
+            } else if (logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'object') {
+                diagString += `  Details Value: ${JSON.stringify(logEntry.aiValidationInfo.details.value, null, 2)}\n`;
+            }
+        }
+    }
+
+
+    if (logEntry.processedProductHead || logEntry.iteration === 0) {
       diagString += `\n== Final Iteration Product (Used for Next Step / Displayed) ==\n`;
       diagString += `  Processed Product Length: ${logEntry.processedProductLengthChars ?? 'N/A'} chars\n`;
       diagString += `  Processed Product Head (first ${logEntry.processedProductHead?.length || 0} chars):\n${logEntry.processedProductHead || '(empty)'}\n`;
@@ -40,9 +67,8 @@ const IterationLog: React.FC<IterationLogProps> = ({
       }
     }
     
-    // Include direct AI response if it's different from processed or for iterations > 0
     if (logEntry.iteration > 0 && logEntry.directAiResponseHead && 
-        (logEntry.directAiResponseHead !== logEntry.processedProductHead || logEntry.directAiResponseTail !== logEntry.processedProductTail)) {
+        (logEntry.directAiResponseHead !== logEntry.processedProductHead || logEntry.directAiResponseTail !== logEntry.processedProductTail || logEntry.directAiResponseLengthChars !== logEntry.processedProductLengthChars)) {
       diagString += `\n== Direct AI Response (Raw from API) ==\n`;
       diagString += `  Direct AI Response Length: ${logEntry.directAiResponseLengthChars ?? 'N/A'} chars\n`;
       diagString += `  Direct AI Response Head (first ${logEntry.directAiResponseHead.length} chars):\n${logEntry.directAiResponseHead}\n`;
@@ -72,23 +98,30 @@ const IterationLog: React.FC<IterationLogProps> = ({
     }
 
     if (logEntry.promptSystemInstructionSent) {
-      diagString += `\n== System Instruction Sent (approx. first 300 chars) ==\n${logEntry.promptSystemInstructionSent.substring(0, 300)}...\n`;
+      diagString += `\n== System Instruction Sent ==\n${truncateForCopy(logEntry.promptSystemInstructionSent)}\n`;
     }
     if (logEntry.promptCoreUserInstructionsSent) {
-        diagString += `\n== Core User Instructions Sent (approx. first 300 chars) ==\n${logEntry.promptCoreUserInstructionsSent.substring(0,300)}...\n`;
+        diagString += `\n== Core User Instructions Sent ==\n${truncateForCopy(logEntry.promptCoreUserInstructionsSent)}\n`;
     }
+    // promptFullUserPromptSent is the initial prompt for the *first* API call of this iteration
     if (logEntry.promptFullUserPromptSent) {
-      diagString += `\n== Full User Prompt Sent (details, truncated if long) ==\n`;
-      if (logEntry.promptFullUserPromptSent.length > 600) {
-        diagString += `Prompt Length: ${logEntry.promptFullUserPromptSent.length} chars\nStart: ${logEntry.promptFullUserPromptSent.substring(0, 300)}...\n...\nEnd: ...${logEntry.promptFullUserPromptSent.slice(-300)}\n`;
-      } else {
-        diagString += `${logEntry.promptFullUserPromptSent}\n`;
-      }
+      diagString += `\n== Initial Full User Prompt Sent (for Iteration's First API Call) ==\n`;
+      diagString += `Prompt Length: ${logEntry.promptFullUserPromptSent.length} chars\n${truncateForCopy(logEntry.promptFullUserPromptSent)}\n`;
     }
+
     if (logEntry.apiStreamDetails && logEntry.apiStreamDetails.length > 0) {
-      diagString += `\n== API Stream Call Summary ==\n`;
-      logEntry.apiStreamDetails.forEach(d => {
-        diagString += `  Call ${d.callCount}: ${d.isContinuation ? '(Continuation)' : '(Initial)'}, Finish: ${d.finishReason || 'N/A'}, TextLen: ${d.textLengthThisCall}\n`;
+      diagString += `\n== API Stream Call Details (within this Iteration) ==\n`;
+      logEntry.apiStreamDetails.forEach((d, index) => {
+        diagString += `\n  -- API Call ${d.callCount} --\n`;
+        diagString += `  Type: ${d.isContinuation ? '(Continuation)' : '(Initial Call for Iteration)'}\n`;
+        diagString += `  Finish Reason: ${d.finishReason || 'N/A'}\n`;
+        diagString += `  Text Length This Call: ${d.textLengthThisCall} chars\n`;
+        if (d.safetyRatings) {
+            diagString += `  Safety Ratings: ${JSON.stringify(d.safetyRatings)}\n`;
+        }
+        if (d.promptForThisCall && d.promptForThisCall !== "N/A (Initial State - Input becomes first product)") {
+            diagString += `  Full Prompt For This Specific API Call (Length: ${d.promptForThisCall.length} chars):\n${truncateForCopy(d.promptForThisCall)}\n`;
+        }
       });
     }
     diagString += `\n== End of Diagnostics ==\n`;

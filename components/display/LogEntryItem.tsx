@@ -1,10 +1,10 @@
 
-
-import React, { useState, useContext } from 'react'; 
-import type { IterationLogEntry, ReconstructedProductResult, ModelConfig, AiResponseValidationInfo, ReductionDetailValue } from '../../types';
-import * as GeminaiDiff from 'diff'; 
-import { useProcessContext } from '../../contexts/ProcessContext'; 
+import React, { useState, useContext } from 'react';
+import type { IterationLogEntry, ReconstructedProductResult, ModelConfig, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, SelectableModelName } from '../../types';
+import * as GeminaiDiff from 'diff';
+import { useProcessContext } from '../../contexts/ProcessContext';
 import { countWords } from '../../services/textAnalysisService';
+import { SELECTABLE_MODELS } from '../../types';
 
 
 interface LogEntryItemProps {
@@ -14,7 +14,7 @@ interface LogEntryItemProps {
   onRewind: (iterationNumber: number) => void;
   onExportIterationMarkdown: (iterationNumber: number) => void;
   onCopyDiagnostics: (logEntry: IterationLogEntry) => Promise<void>;
-  reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[]) => ReconstructedProductResult; 
+  reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[]) => ReconstructedProductResult;
   iterationHistory: IterationLogEntry[];
   copyStatusForThisItem: string | undefined;
   isProcessing: boolean;
@@ -28,11 +28,11 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
   onExportIterationMarkdown,
   onCopyDiagnostics,
   reconstructProductCallback,
-  iterationHistory, 
+  iterationHistory,
   copyStatusForThisItem,
   isProcessing,
 }) => {
-  const { initialPrompt } = useProcessContext(); 
+  const { initialPrompt } = useProcessContext();
   const [expandedDiagnostics, setExpandedDiagnostics] = useState<{ [key: string]: boolean }>({});
 
   const toggleDiagnosticSection = (key: string) => {
@@ -73,11 +73,11 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
       let oldTextResult: ReconstructedProductResult;
       let newTextResult: ReconstructedProductResult;
       let overallReconstructionError: string | undefined;
-            
+
       newTextResult = reconstructProductCallback(logEntry.iteration, iterationHistory);
 
       if (logEntry.iteration === 0) {
-         oldTextResult = { product: "", error: undefined }; 
+         oldTextResult = { product: "", error: undefined };
       } else {
         oldTextResult = reconstructProductCallback(logEntry.iteration - 1, iterationHistory);
       }
@@ -93,8 +93,8 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
         const productToShow = typeof newTextResult.product === 'string' ? newTextResult.product : "Content unavailable";
         diffDisplayComponent = [<span key="no_change" className="text-slate-600 dark:text-slate-300 block">No textual changes recorded from Iteration {logEntry.iteration - 1}.<br />Current Content:<br />{productToShow}</span>];
       } else if (!overallReconstructionError && typeof oldTextResult.product === 'string' && typeof newTextResult.product === 'string') {
-        diffDisplayComponent = renderWordDiffDisplay(oldTextResult.product, newTextResult.product); 
-        
+        diffDisplayComponent = renderWordDiffDisplay(oldTextResult.product, newTextResult.product);
+
         const prevWords = countWords(oldTextResult.product);
         const currentWords = countWords(newTextResult.product);
         netWordChange = currentWords - prevWords;
@@ -112,6 +112,63 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
   const iterZeroResultForExportCheck = logEntry.iteration === 0 ? reconstructProductCallback(0, iterationHistory) : null;
   const canExportIteration = (logEntry.iteration === 0 && iterZeroResultForExportCheck && !iterZeroResultForExportCheck.error && iterZeroResultForExportCheck.product.trim() !== "") || (logEntry.iteration > 0 && logEntry.productDiff && logEntry.productDiff.trim() !== "");
 
+  const DIAG_PROMPT_MAX_DISPLAY_LENGTH = 2000;
+
+  const truncateForDisplay = (text: string | undefined, maxLength: number = DIAG_PROMPT_MAX_DISPLAY_LENGTH): string => {
+    if (!text) return "(Not available)";
+    if (text.length <= maxLength) return text;
+    return `${text.substring(0, maxLength / 2)}...\n[TRUNCATED - Full prompt in copied diagnostics or raw log - Total Length: ${text.length} chars]\n...${text.substring(text.length - maxLength / 2)}`;
+  };
+
+  const modelUsedDisplayName = logEntry.currentModelForIteration
+    ? SELECTABLE_MODELS.find(m => m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration
+    : "N/A";
+
+  const renderStrategyRationale = (rationale: string | undefined) => {
+    if (!rationale) return <p className="mt-1 text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-black/40 p-1.5 rounded">No specific strategy rationale logged.</p>;
+
+    const parts = rationale.split(' | ');
+    const knownPrefixes: { prefix: string; className: string; label?: string }[] = [
+        { prefix: "Strategist LLM Advice Received:", className: "text-purple-600 dark:text-purple-400 font-semibold", label: "Strategist LLM Advice:" },
+        { prefix: "Strategist overrode heuristic model.", className: "text-amber-600 dark:text-amber-400 font-semibold", label: "Strategist Model Override:" },
+        { prefix: "Strategist concurred with heuristic model choice:", className: "text-sky-500 dark:text-sky-300", label: "Strategist Model Concurrence:" },
+        { prefix: "Strategist suggested model", className: "text-slate-500 dark:text-slate-400 italic", label: "Strategist Model Suggestion (Ignored/Logged):" },
+        { prefix: "Strategist set Flash thinking budget to:", className: "text-teal-600 dark:text-teal-400 font-semibold", label: "Strategist Flash Config:" },
+        { prefix: "Strategist adjusted core parameters:", className: "text-rose-600 dark:text-rose-400 font-semibold", label: "Strategist Core Param Adjust:" },
+        { prefix: "Strategist parameter advice", className: "text-slate-500 dark:text-slate-400 italic", label: "Strategist Param Advice (Ignored/Logged):" },
+        { prefix: "Strategist provided dynamic meta-instruction:", className: "text-fuchsia-600 dark:text-fuchsia-400 font-semibold", label: "Strategist Meta-Instruction:" },
+        { prefix: "Strategist suggested meta-instruction", className: "text-slate-500 dark:text-slate-400 italic", label: "Strategist Meta-Instruction Suggestion (Ignored/Logged):" },
+        { prefix: "Strategist LLM consultation skipped", className: "text-slate-500 dark:text-slate-500", label: "Strategist Skipped:" },
+        { prefix: "Strategist consultation skipped", className: "text-slate-500 dark:text-slate-500", label: "Strategist Skipped:" },
+        { prefix: "Heuristic Sweep:", className: "text-indigo-600 dark:text-indigo-400", label: "Heuristic Sweep:" },
+        { prefix: "Heuristic Nudge (Code):", className: "text-purple-600 dark:text-purple-400", label: "Heuristic Nudge (Code):" },
+        { prefix: "Heuristic Model Switch (Code):", className: "text-orange-600 dark:text-orange-400", label: "Heuristic Model Switch (Code):" },
+        { prefix: "Heuristic Fallback:", className: "text-gray-500 dark:text-gray-400", label: "Heuristic Fallback:" },
+        { prefix: "Heuristic Correction:", className: "text-yellow-600 dark:text-yellow-400", label: "Heuristic Correction:" },
+        { prefix: "Heuristic:", className: "text-indigo-600 dark:text-indigo-400", label: "Heuristic:" },
+        { prefix: "Parameter Clamp:", className: "text-red-500 dark:text-red-400 font-semibold", label: "System Param Clamp:" },
+        { prefix: "Plan Mode:", className: "text-blue-600 dark:text-blue-400", label: "Mode:" },
+    ];
+
+    return (
+        <ul className="list-none mt-1 text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-black/40 p-1.5 rounded space-y-0.5 text-xs">
+            {parts.map((part, index) => {
+                let styledPart: React.ReactNode = part.trim();
+                let matched = false;
+                for (const item of knownPrefixes) {
+                    if (part.trim().startsWith(item.prefix)) {
+                        styledPart = <><strong className={item.className}>{item.label || item.prefix}</strong>{part.trim().substring(item.prefix.length)}</>;
+                        matched = true;
+                        break;
+                    }
+                }
+                return <li key={index} className={`break-words ${matched ? "pl-1" : "pl-3"}`}>{styledPart}</li>;
+            })}
+        </ul>
+    );
+  };
+
+
   return (
     <div className="bg-slate-50 dark:bg-white/5 p-4 rounded-md shadow hover:bg-slate-100/80 dark:hover:bg-white/10 transition-colors duration-150">
       <div className="flex justify-between items-start flex-wrap gap-2">
@@ -128,16 +185,17 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
             </p>
             <p className="text-sm text-slate-600 dark:text-slate-300 break-words">{logEntry.status}</p>
             {!isExpanded && <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 italic">Summary: {getProductSummaryForDisplay(logEntry)}</p>}
-            
-            {(logEntry.iteration >= 0 && !isExpanded) && ( 
+
+            {(logEntry.iteration >= 0 && !isExpanded) && (
               <p className="text-xs mt-1">
-                {(logEntry.linesAdded || logEntry.linesRemoved || (logEntry.iteration === 0 && logEntry.linesAdded !== undefined) ) && (
+                {(logEntry.linesAdded !== undefined || logEntry.linesRemoved !== undefined ) && (
                   <>
                     Changes: {logEntry.linesAdded !== undefined ? <span className="text-green-600 dark:text-green-400">+{logEntry.linesAdded} lines</span> : ''}
                     {(logEntry.linesAdded !== undefined && logEntry.linesRemoved !== undefined) ? ', ' : ''}
                     {logEntry.linesRemoved !== undefined ? <span className="text-red-600 dark:text-red-400">-{logEntry.linesRemoved} lines</span> : ''}
                   </>
                 )}
+                {logEntry.currentModelForIteration && <span className="ml-2 text-slate-500 dark:text-slate-400">Model: {SELECTABLE_MODELS.find(m=>m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration}</span>}
               </p>
             )}
             {isExpanded && (
@@ -158,10 +216,10 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
           {canExportIteration && (
             <button
               onClick={() => onExportIterationMarkdown(logEntry.iteration)}
-              disabled={isProcessing}
               className="inline-flex items-center px-2.5 py-1 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 disabled:opacity-50 transition-colors"
               title={`Download Iteration ${logEntry.iteration} as Markdown`}
               aria-label={`Download Iteration ${logEntry.iteration} as Markdown`}
+              disabled={isProcessing}
             >
               Iter. .md
             </button>
@@ -179,10 +237,10 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
           )}
           <button
             onClick={() => onCopyDiagnostics(logEntry)}
-            disabled={isProcessing}
             className="inline-flex items-center px-2.5 py-1 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 disabled:opacity-50 transition-colors relative"
             title="Copy diagnostics for this iteration to clipboard"
             aria-label="Copy diagnostics for this iteration"
+            disabled={isProcessing}
           >
             {copyStatusForThisItem || "Copy Diag."}
           </button>
@@ -209,8 +267,47 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
             <h4 className="text-sm font-semibold text-primary-600 dark:text-primary-300 mb-2">
                AI Interaction Diagnostics
             </h4>
-            {(logEntry.promptSystemInstructionSent || logEntry.promptCoreUserInstructionsSent || logEntry.promptFullUserPromptSent || (logEntry.apiStreamDetails && logEntry.apiStreamDetails.length > 0) || logEntry.modelConfigUsed || logEntry.readabilityScoreFlesch !== undefined || logEntry.fileProcessingInfo || logEntry.aiValidationInfo || logEntry.directAiResponseHead || logEntry.processedProductHead) ? (
+            {(logEntry.promptSystemInstructionSent || logEntry.promptCoreUserInstructionsSent || logEntry.promptFullUserPromptSent || (logEntry.apiStreamDetails && logEntry.apiStreamDetails.length > 0) || logEntry.modelConfigUsed || logEntry.readabilityScoreFlesch !== undefined || logEntry.fileProcessingInfo || logEntry.aiValidationInfo || logEntry.directAiResponseHead || logEntry.processedProductHead || logEntry.strategyRationale || logEntry.activeMetaInstruction) ? (
               <div className="space-y-2 text-xs">
+                {logEntry.strategyRationale && (
+                  <div>
+                    <button onClick={() => toggleDiagnosticSection(`strategy_rationale_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
+                      Strategy Rationale <span className="ml-1">{expandedDiagnostics[`strategy_rationale_${logEntry.iteration}`] ? '▲' : '▼'}</span>
+                    </button>
+                    {expandedDiagnostics[`strategy_rationale_${logEntry.iteration}`] && renderStrategyRationale(logEntry.strategyRationale)}
+                  </div>
+                )}
+                 {logEntry.activeMetaInstruction && (
+                  <div className="mt-1.5">
+                    <h5 className="font-semibold text-slate-700 dark:text-slate-300 text-xs mb-0.5">
+                      Active Meta-Instruction Applied:
+                    </h5>
+                    <p className="italic text-fuchsia-600 dark:text-fuchsia-400 bg-fuchsia-50 dark:bg-fuchsia-900/30 p-1 rounded text-xs">
+                        "{logEntry.activeMetaInstruction}"
+                    </p>
+                  </div>
+                )}
+                {logEntry.currentModelForIteration && (
+                  <div className="mt-1.5">
+                     <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">
+                       Model Used for Iteration:
+                       <span className="font-normal ml-1 text-slate-600 dark:text-slate-400">
+                         {modelUsedDisplayName}
+                       </span>
+                     </p>
+                  </div>
+                )}
+                 {logEntry.modelConfigUsed && (
+                  <div className="mt-1">
+                     <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">
+                       Applied Parameters:
+                       <span className="font-normal ml-1 text-slate-600 dark:text-slate-400">
+                         Temp: {logEntry.modelConfigUsed.temperature.toFixed(2)}, Top-P: {logEntry.modelConfigUsed.topP.toFixed(2)}, Top-K: {logEntry.modelConfigUsed.topK}
+                         {logEntry.modelConfigUsed.thinkingConfig !== undefined && ` (Thinking Budget: ${logEntry.modelConfigUsed.thinkingConfig.thinkingBudget})`}
+                       </span>
+                     </p>
+                  </div>
+                )}
                 {logEntry.processedProductHead && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`processed_product_info_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
@@ -231,10 +328,10 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     )}
                   </div>
                 )}
-                {logEntry.directAiResponseHead && (
+                {logEntry.directAiResponseHead && (logEntry.directAiResponseHead !== logEntry.processedProductHead || logEntry.directAiResponseTail !== logEntry.processedProductTail || logEntry.directAiResponseLengthChars !== logEntry.processedProductLengthChars) && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`direct_ai_response_info_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      Direct AI Response Details <span className="ml-1">{expandedDiagnostics[`direct_ai_response_info_${logEntry.iteration}`] ? '▲' : '▼'}</span>
+                      Direct AI Response Details (if different) <span className="ml-1">{expandedDiagnostics[`direct_ai_response_info_${logEntry.iteration}`] ? '▲' : '▼'}</span>
                     </button>
                     {expandedDiagnostics[`direct_ai_response_info_${logEntry.iteration}`] && (
                       <div className="mt-1 space-y-0.5 bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400">
@@ -288,15 +385,20 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                             <p>Passed: <span className={logEntry.aiValidationInfo.passed ? 'text-green-600 font-semibold' : 'text-red-600 font-semibold'}>{logEntry.aiValidationInfo.passed ? 'Yes' : 'No'}</span></p>
                             {logEntry.aiValidationInfo.reason && <p>Reason: {logEntry.aiValidationInfo.reason}</p>}
                             {logEntry.aiValidationInfo.details && (
-                                <div>Details: 
+                                <div>Details:
                                   <ul className="list-disc list-inside ml-2">
                                     <li>Type: '{logEntry.aiValidationInfo.details.type}'</li>
                                     {logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'string' && <li>Value: "{logEntry.aiValidationInfo.details.value}"</li>}
-                                    {logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'object' && 
+                                    {logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'object' && 'marker' in logEntry.aiValidationInfo.details.value && 'snippet' in logEntry.aiValidationInfo.details.value ? (
+                                      <>
+                                        <li>Marker: "{(logEntry.aiValidationInfo.details.value as PromptLeakageDetailValue).marker}"</li>
+                                        <li>Snippet: <pre className="whitespace-pre-wrap text-xs bg-slate-200 dark:bg-black/50 p-1 rounded">{(logEntry.aiValidationInfo.details.value as PromptLeakageDetailValue).snippet}</pre></li>
+                                      </>
+                                    ) : logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'object' && !( 'marker' in logEntry.aiValidationInfo.details.value) ? (
                                       Object.entries(logEntry.aiValidationInfo.details.value as ReductionDetailValue).map(([key, val]) => (
                                         <li key={key}>{key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}: {typeof val === 'number' ? val.toFixed(2) : val}</li>
                                       ))
-                                    }
+                                    ) : null}
                                   </ul>
                                 </div>
                             )}
@@ -304,16 +406,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     )}
                   </div>
                 )}
-                {logEntry.modelConfigUsed && (
-                  <div className="mt-1">
-                     <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">
-                       Applied Parameters:
-                       <span className="font-normal ml-1 text-slate-600 dark:text-slate-400">
-                         Temp: {logEntry.modelConfigUsed.temperature.toFixed(2)}, Top-P: {logEntry.modelConfigUsed.topP.toFixed(2)}, Top-K: {logEntry.modelConfigUsed.topK}
-                       </span>
-                     </p>
-                  </div>
-                )}
+
                 {logEntry.readabilityScoreFlesch !== undefined && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`readability_score_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
@@ -332,7 +425,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     <button onClick={() => toggleDiagnosticSection(`sys_instr_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
                       System Instruction Sent <span className="ml-1">{expandedDiagnostics[`sys_instr_${logEntry.iteration}`] ? '▲' : '▼'}</span>
                     </button>
-                    {expandedDiagnostics[`sys_instr_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-48 overflow-y-auto">{logEntry.promptSystemInstructionSent}</pre>}
+                    {expandedDiagnostics[`sys_instr_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-48 overflow-y-auto">{truncateForDisplay(logEntry.promptSystemInstructionSent, 1000)}</pre>}
                   </div>
                 )}
                  {logEntry.promptCoreUserInstructionsSent && (
@@ -340,33 +433,33 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     <button onClick={() => toggleDiagnosticSection(`core_instr_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
                         Core User Instructions Sent <span className="ml-1">{expandedDiagnostics[`core_instr_${logEntry.iteration}`] ? '▲' : '▼'}</span>
                     </button>
-                    {expandedDiagnostics[`core_instr_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-48 overflow-y-auto">{logEntry.promptCoreUserInstructionsSent}</pre>}
+                    {expandedDiagnostics[`core_instr_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-48 overflow-y-auto">{truncateForDisplay(logEntry.promptCoreUserInstructionsSent, 1000)}</pre>}
                   </div>
                 )}
                 {logEntry.promptFullUserPromptSent && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`full_prompt_init_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      Initial Full User Prompt Sent <span className="ml-1">{expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] ? '▲' : '▼'}</span>
+                      Initial Full User Prompt Sent (for Iteration) <span className="ml-1">{expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] ? '▲' : '▼'}</span>
                     </button>
-                    {expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-72 overflow-y-auto">{logEntry.promptFullUserPromptSent}</pre>}
+                    {expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-72 overflow-y-auto">{truncateForDisplay(logEntry.promptFullUserPromptSent)}</pre>}
                   </div>
                 )}
                 {logEntry.apiStreamDetails && logEntry.apiStreamDetails.length > 0 && (
                   <div>
-                    <p className="font-semibold text-slate-700 dark:text-slate-300 mt-2 mb-1 text-xs">API Stream Call Details:</p>
+                    <p className="font-semibold text-slate-700 dark:text-slate-300 mt-2 mb-1 text-xs">API Stream Call Details (within this Iteration):</p>
                     <div className="space-y-1.5 max-h-96 overflow-y-auto">
                       {logEntry.apiStreamDetails.map((detail, index) => (
                         <div key={index} className="bg-slate-100/70 dark:bg-black/30 p-1.5 rounded border border-slate-200 dark:border-slate-700">
-                          <p><strong>Call {detail.callCount}:</strong> {detail.isContinuation ? '(Continuation)' : '(Initial Call)'}</p>
+                          <p><strong>API Call {detail.callCount}:</strong> {detail.isContinuation ? '(Continuation)' : '(Initial Call for Iteration)'}</p>
                           <p>Finish Reason: <span className="font-mono text-primary-700 dark:text-primary-300">{detail.finishReason || 'N/A'}</span></p>
-                          <p>Text Length: {detail.textLengthThisCall} chars</p>
+                          <p>Text Length This Call: {detail.textLengthThisCall} chars</p>
                           {detail.safetyRatings && <p>Safety Ratings: <span className="font-mono text-orange-600 dark:text-orange-400">{JSON.stringify(detail.safetyRatings)}</span></p>}
-                          {(detail.isContinuation || logEntry.iteration === 0) && detail.promptForThisCall && detail.promptForThisCall !== "N/A (Initial State - Input becomes first product)" && (
+                          {detail.promptForThisCall && detail.promptForThisCall !== "N/A (Initial State - Input becomes first product)" && (
                             <div>
                               <button onClick={() => toggleDiagnosticSection(`stream_prompt_${logEntry.iteration}_${index}`)} className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex items-center">
-                                View Prompt for this API Call <span className="ml-1 text-xs">{expandedDiagnostics[`stream_prompt_${logEntry.iteration}_${index}`] ? '▲' : '▼'}</span>
+                                View Full Prompt for this Specific API Call <span className="ml-1 text-xs">{expandedDiagnostics[`stream_prompt_${logEntry.iteration}_${index}`] ? '▲' : '▼'}</span>
                               </button>
-                              {expandedDiagnostics[`stream_prompt_${logEntry.iteration}_${index}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-200 dark:bg-black/50 p-1 rounded text-slate-600 dark:text-slate-400 max-h-48 overflow-y-auto">{detail.promptForThisCall}</pre>}
+                              {expandedDiagnostics[`stream_prompt_${logEntry.iteration}_${index}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-200 dark:bg-black/50 p-1 rounded text-slate-600 dark:text-slate-400 max-h-72 overflow-y-auto">{truncateForDisplay(detail.promptForThisCall)}</pre>}
                             </div>
                           )}
                         </div>

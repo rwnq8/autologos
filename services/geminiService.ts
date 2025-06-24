@@ -1,15 +1,16 @@
 
+
 import { GoogleGenAI } from "@google/genai";
-import type { GenerateContentResponse, Part, Content } from "@google/genai";
-import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, ParameterAdvice, LoadedFile, PlanStage, ModelParameterGuidance, SuggestedParamsResponse } from "../types.ts";
-import { getUserPromptComponents, buildTextualPromptPart, CONVERGED_PREFIX } from './promptBuilderService';
+import type { GenerateContentResponse, Part, Content, GenerateContentParameters } from "@google/genai";
+import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, LoadedFile, PlanStage, SuggestedParamsResponse, RetryContext, OutlineGenerationResult, NudgeStrategy, SelectableModelName, StrategistAdvice, IterationLogEntry, AiResponseValidationInfo, StagnationInfo } from "../types.ts";
+import { getUserPromptComponents, buildTextualPromptPart, CONVERGED_PREFIX, getOutlineGenerationPromptComponents } from './promptBuilderService';
+import { SELECTABLE_MODELS } from '../types.ts';
 
 const API_KEY: string | undefined = (() => {
   try {
     if (typeof process !== 'undefined' && process.env) {
       const key = process.env.API_KEY;
       if (typeof key === 'string' && key.length > 0) {
-        console.info("API_KEY loaded from process.env.");
         return key;
       } else if (key === undefined) {
         console.warn("process.env.API_KEY is undefined. Gemini API calls will be disabled if a key is not found by other means.");
@@ -35,7 +36,6 @@ if (API_KEY) {
     try {
         ai = new GoogleGenAI({ apiKey: API_KEY });
         apiKeyAvailable = true;
-        console.info("GoogleGenAI client initialized successfully.");
     } catch (error) {
         console.error("Error during GoogleGenAI client initialization. Gemini API calls will be disabled.", error);
         ai = null;
@@ -46,139 +46,277 @@ if (API_KEY) {
     apiKeyAvailable = false;
 }
 
-export const DEFAULT_MODEL_NAME = 'gemini-2.5-flash-preview-04-17';
-
-// Default starting point for global mode's dynamic parameter sweep & reset target
+export const DEFAULT_MODEL_NAME: SelectableModelName = 'gemini-2.5-flash-preview-04-17';
 export const CREATIVE_DEFAULTS: ModelConfig = { temperature: 0.75, topP: 0.95, topK: 60 };
-// Target for the end of global mode's dynamic parameter sweep - now sharply deterministic
 export const FOCUSED_END_DEFAULTS: ModelConfig = { temperature: 0.0, topP: 1.0, topK: 1 };
-// General defaults, used if no specific strategy applies (e.g., initial suggestion basis before dynamic takes over)
 export const GENERAL_BALANCED_DEFAULTS: ModelConfig = { temperature: 0.6, topP: 0.9, topK: 40 };
-// Legacy focused defaults, less used now with dynamic strategy.
-export const LEGACY_FOCUSED_DEFAULTS: ModelConfig = { temperature: 0.3, topP: 0.85, topK: 20 };
 
-
-const MIN_WORDS_FOR_ANALYSIS = 30; // Applied to text content if available, or manifest
-
-interface TextStats {
-  wordCount: number;
-  sentenceCount: number;
-  avgSentenceLength: number;
-  uniqueWordCount: number;
-  lexicalDiversity: number;
-}
-
-function analyzeTextComplexity(text: string): TextStats {
-  if (!text || !text.trim()) {
-    return { wordCount: 0, sentenceCount: 0, avgSentenceLength: 0, uniqueWordCount: 0, lexicalDiversity: 0 };
-  }
-  const words = text.toLowerCase().match(/\b[\w'-]+\b/g) || [];
-  const wordCount = words.length;
-  const sentences = text.split(/[.?!;]+(?=\s+|$)/g).filter(s => s.trim().length > 0);
-  const sentenceCount = sentences.length > 0 ? sentences.length : (wordCount > 0 ? 1 : 0);
-  const uniqueWords = new Set(words);
-  const uniqueWordCount = uniqueWords.size;
-  const lexicalDiversity = wordCount > 0 ? uniqueWordCount / wordCount : 0;
-  const avgSentenceLength = sentenceCount > 0 ? wordCount / sentenceCount : 0;
-
-  return {
-    wordCount,
-    sentenceCount,
-    avgSentenceLength,
-    uniqueWordCount,
-    lexicalDiversity,
-  };
-}
 
 export const getAiModelDetails = (currentModelName: string): StaticAiModelDetails => {
-  return {
-    modelName: currentModelName,
-    tools: "Multi-modal File Input, Dynamic Parameters, Stagnation Nudge",
-  };
+  const model = SELECTABLE_MODELS.find(m => m.name === currentModelName);
+  return { modelName: model ? model.displayName : currentModelName, tools: model ? model.description : "Details unavailable" };
 };
-
 export const isApiKeyAvailable = (): boolean => apiKeyAvailable;
 
-export const suggestModelParameters = (
-  textForAnalysis: string
-): SuggestedParamsResponse => {
-  const isTextProvided = textForAnalysis && textForAnalysis.trim().length > 0;
-  let baseConfig: ModelConfig = { ...CREATIVE_DEFAULTS };
-  const rationales: string[] = [];
-
-  rationales.push(`Using creative default settings as a starting point, suitable for initial exploration.`);
-
-  if (!isTextProvided) {
-    rationales.push(`No textual context provided for analysis. Using creative default starting settings.`);
-    return { config: baseConfig, rationales };
-  }
-
-  const stats = analyzeTextComplexity(textForAnalysis);
-
-  if (stats.wordCount < MIN_WORDS_FOR_ANALYSIS) {
-    rationales.push(`Provided textual context is short (${stats.wordCount} words). Advanced analysis for parameter tuning is less reliable; using creative default starting settings.`);
-    return { config: baseConfig, rationales };
-  }
-
-  rationales.push(`Context analyzed. Recommending creative starting parameters for broad initial exploration. These will dynamically adjust towards focused settings in global mode.`);
-  return { config: baseConfig, rationales };
+export const suggestModelParameters = (textForAnalysis: string): SuggestedParamsResponse => {
+    // This is a simplified placeholder. Real implementation would analyze text.
+    if (textForAnalysis.length < 100) {
+        return { config: { ...CREATIVE_DEFAULTS, temperature: 0.8 }, rationales: ["Input is short, suggesting higher creativity for initial expansion."] };
+    } else if (textForAnalysis.length < 1000) {
+        return { config: { ...GENERAL_BALANCED_DEFAULTS }, rationales: ["Input is of moderate length, suggesting balanced parameters."] };
+    } else {
+        return { config: { ...FOCUSED_END_DEFAULTS, temperature: 0.3 }, rationales: ["Input is very long, suggesting more focused parameters for coherence."] };
+    }
 };
 
-export const getModelParameterGuidance = (config: ModelConfig, isGlobalMode: boolean = false): ModelParameterGuidance => {
-  const warnings: string[] = [];
-  const advice: ParameterAdvice = {};
-  const tempDesc = isGlobalMode ? "Starting Temperature" : "Temperature";
-  const topPDesc = isGlobalMode ? "Starting Top-P" : "Top-P";
-  const topKDesc = isGlobalMode ? "Starting Top-K" : "Top-K";
+export const getModelParameterGuidance = (config: ModelConfig, isGlobalMode: boolean = false): any => {
+    const warnings: string[] = [];
+    const advice: any = {};
 
-  if (config.temperature === 0.0) {
-    advice.temperature = `${tempDesc}: Deterministic output; usually used with Top-K=1 for greedy decoding.`;
-  } else if (config.temperature > 0 && config.temperature < 0.3) {
-    advice.temperature = `${tempDesc}: Very focused and less random output. Good for precision or maintaining strict coherence.`;
-  } else if (config.temperature >= 0.3 && config.temperature < 0.7) {
-    advice.temperature = `${tempDesc}: Balanced output. Good for factual responses or controlled creativity.`;
-  } else if (config.temperature >= 0.7 && config.temperature <= 1.0) {
-    advice.temperature = `${tempDesc}: More creative and diverse output. Good for brainstorming or nuanced generation. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
-  } else if (config.temperature > 1.0 && config.temperature <= 1.5) {
-    advice.temperature = `${tempDesc}: Highly creative; may start to introduce more randomness or less coherence. Higher risk of hallucination. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
-  } else {
-    advice.temperature = `${tempDesc}: Extremely creative/random; high chance of unexpected or less coherent output. Not recommended for most tasks. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
-    warnings.push(`Very high ${tempDesc} ( > 1.5) might lead to highly random or incoherent output and increased hallucination risk.`);
-  }
+    if (config.temperature >= 0.9) advice.temperature = "High temperature: Expect more creative, less predictable output.";
+    else if (config.temperature <= 0.2) advice.temperature = "Low temperature: Output will be more focused and deterministic.";
+    if (config.topP < 0.9 && config.topP !== 1.0) advice.topP = "Lower Top-P: May restrict creativity. Consider raising if output is too repetitive.";
+    if (config.topK < 10 && config.topK !== 1) advice.topK = "Low Top-K: Limits token choices significantly. Can be good for factual recall.";
 
-  if (config.topP === 0.0 && config.temperature === 0.0) {
-     advice.topP = `${topPDesc}: Not typically used when temperature is 0 (greedy decoding is active).`;
-  } else if (config.topP === 0.0 && config.temperature > 0) {
-    advice.topP = `${topPDesc}: Top-P is 0 but temperature > 0. This is an unusual setting; typically topP > 0.8 for nucleus sampling. May result in no tokens being selected if not handled carefully by the model.`;
-    warnings.push(`${topPDesc} = 0 with Temperature > 0 is an unusual setting and might lead to unexpected behavior or no output.`);
-  } else if (config.topP > 0 && config.topP < 0.3) {
-    advice.topP = `${topPDesc}: Very restrictive selection of tokens. Output may be limited. Useful for high precision if combined with low temperature.`;
-  } else if (config.topP >= 0.3 && config.topP < 0.7) {
-    advice.topP = `${topPDesc}: Moderately selective. Balances focus with some diversity.`;
-  } else if (config.topP >= 0.7 && config.topP < 0.9) {
-    advice.topP = `${topPDesc}: Less restrictive, allowing for more diverse token choices. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
-  } else if (config.topP >= 0.9 && config.topP <= 1.0) {
-    advice.topP = `${topPDesc}: Allows a wider range of tokens, increasing diversity. Values around 0.9-0.95 are common for balanced creative tasks. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
-  }
+    if(isGlobalMode && config.temperature > 0.7 && config.maxIterations && config.maxIterations > 20) {
+        warnings.push("High starting temperature in Global Mode with many iterations. Parameters will sweep towards deterministic; initial output may be very diverse.");
+    }
+    if(config.thinkingConfig?.thinkingBudget === 0 && config.modelName === 'gemini-2.5-flash-preview-04-17') {
+        advice.thinkingConfig = "Thinking Budget is 0: Flash model will respond faster but may have lower quality for complex tasks.";
+    }
 
-  if (config.topK === 1) {
-    advice.topK = `${topKDesc}: Greedy decoding. Always picks the single most likely next token. Best for factual, deterministic output.`;
-  } else if (config.topK > 1 && config.topK < 10) {
-    advice.topK = `${topKDesc}: Very limited token choices. Output may be repetitive. Good for specific answers when combined with low temperature.`;
-  } else if (config.topK >= 10 && config.topK < 40) {
-    advice.topK = `${topKDesc}: Moderately limited token choices. Good for focused output with some variety.`;
-  } else if (config.topK >= 40 && config.topK < 80) {
-    advice.topK = `${topKDesc}: Broader token selection. Good for creative exploration. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
-  } else {
-    advice.topK = `${topKDesc}: Very broad token selection. Relies more on Temperature and Top-P for filtering. Can increase randomness or lack of focus if not carefully managed. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
-  }
-
-  if (config.temperature > 0.8 && config.topK < 20 && config.topK > 1) {
-    warnings.push(`Higher ${tempDesc} with low ${topKDesc} may lead to unfocused or repetitive output. Consider increasing ${topKDesc} or decreasing ${tempDesc}.`);
-  }
-  return { warnings, advice };
+    return { warnings, advice };
 };
 
+
+export const getStrategicAdviceFromLLM = async (
+    currentIteration: number,
+    maxIterations: number,
+    inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX',
+    lastUsedModel: SelectableModelName | undefined,
+    lastUsedConfig: ModelConfig | null | undefined,
+    stagnationInfo: StagnationInfo,
+    lastValidationInfo: AiResponseValidationInfo | undefined,
+    currentGoal: string,
+    recentIterationSummaries: string[]
+): Promise<StrategistAdvice | null> => {
+    if (!ai || !apiKeyAvailable) {
+        console.warn("Strategist LLM call skipped: API key or client not available.");
+        return null;
+    }
+
+    const maxRetries = 1;
+    const retryDelayMs = 1000;
+
+    const strategistSystemPrompt = `You are an AI Process Strategist. Your task is to analyze the current state of an iterative content generation process and suggest the optimal Gemini model, its thinking configuration (if applicable for 'gemini-2.5-flash-preview-04-17'), optionally minor adjustments to temperature/TopP/TopK, and optionally a meta-instruction for the *next* iteration of the main content generation AI.
+    Provide your response strictly in JSON format with the following fields: "suggestedModelName" (optional string from valid list), "suggestedThinkingBudget" (optional, 0 or 1 for 'gemini-2.5-flash-preview-04-17' only), "suggestedTemperature" (optional number 0.0-2.0), "suggestedTopP" (optional number 0.0-1.0), "suggestedTopK" (optional integer >=1), "suggestedMetaInstruction" (optional string, 1-2 concise sentences for the main AI if it's highly stagnant or needs a new approach), and a mandatory "rationale" (1-3 sentences explaining your overall advice).
+    Valid models for 'suggestedModelName': ${SELECTABLE_MODELS.map(m => `'${m.name}' ('${m.description.split('.')[0]}')`).join(', ')}.
+    If stagnation is high (e.g., system nudge strategy is 'meta_instruct') or last validation failed critically, strongly consider suggesting a 'suggestedMetaInstruction' to guide the main AI's refinement approach.
+    If you suggest a 'suggestedMetaInstruction', make it actionable for the main content AI. Examples: "Focus on improving the logical flow and transitions between paragraphs." or "Try to simplify the complex terminology used in the last section." or "Re-evaluate the document's main argument for consistency with the original file data."
+    Suggest parameter changes sparingly and only if there's a strong reason based on stagnation or specific validation failures. Any suggested parameter change should be a *delta* or a specific value, not a general direction.
+    Ensure any suggested parameters are within these valid ranges: Temperature (0.0-2.0), TopP (0.0-1.0), TopK (integer >=1).`;
+
+    let lastConfigSummary = "N/A";
+    if (lastUsedConfig) {
+        lastConfigSummary = `Temp: ${lastUsedConfig.temperature.toFixed(2)}, TopP: ${lastUsedConfig.topP.toFixed(2)}, TopK: ${lastUsedConfig.topK}`;
+        if (lastUsedConfig.thinkingConfig && lastUsedModel === 'gemini-2.5-flash-preview-04-17') {
+            lastConfigSummary += `, ThinkingBudget: ${lastUsedConfig.thinkingConfig.thinkingBudget}`;
+        }
+    }
+
+    const iterationSummariesText = recentIterationSummaries.length > 0
+        ? `\nRecent Iteration Summaries (last ${recentIterationSummaries.length}):\n${recentIterationSummaries.map(s => `- ${s}`).join('\n')}`
+        : "\nNo recent iteration summaries available (or first few iterations).";
+
+    const strategistUserPrompt = `
+    Process State for Next Iteration (${currentIteration + 1}/${maxIterations}):
+    - Current Iteration: ${currentIteration} (completed)
+    - Max Iterations for current run: ${maxIterations}
+    - Input Complexity: ${inputComplexity}
+    - Last Model Used: ${lastUsedModel || "N/A (First iteration)"}
+    - Last Config Used: ${lastConfigSummary}
+    - Stagnation Status: ${stagnationInfo.isStagnant ? `Stagnant for ${stagnationInfo.consecutiveStagnantIterations} iterations.` : "Not stagnant."} (Similarity with prev: ${(stagnationInfo.similarityWithPrevious || 0).toFixed(3)}) (System Nudge Strategy applied by system for this turn: ${stagnationInfo.nudgeStrategyApplied})
+    - Last Iteration Validation: ${lastValidationInfo ? `${lastValidationInfo.passed ? 'Passed.' : 'Failed.'} Reason: ${lastValidationInfo.reason || 'N/A'}` : 'N/A'}
+    - Current Goal: ${currentGoal}
+    ${iterationSummariesText}
+
+    Suggest 'suggestedModelName', 'suggestedThinkingBudget', optionally 'suggestedTemperature'/'suggestedTopP'/'suggestedTopK', and optionally a 'suggestedMetaInstruction'. Provide a 'rationale'.
+    If 'stagnationInfo.nudgeStrategyApplied' is 'meta_instruct', this is a strong signal to provide a 'suggestedMetaInstruction'.
+    Prioritize 'gemini-2.5-flash-preview-04-17' or 'gemini-2.5-pro' for most tasks.
+    `;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash-preview-04-17', // Strategist itself uses Flash for efficiency
+                contents: [{ role: "user", parts: [{text: strategistUserPrompt}] }],
+                config: {
+                    responseMimeType: "application/json",
+                    temperature: 0.2, // Low temp for consistent JSON
+                    systemInstruction: strategistSystemPrompt
+                }
+            });
+
+            let jsonStr = response.text.trim();
+            const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
+            const match = jsonStr.match(fenceRegex);
+            if (match && match[2]) {
+                jsonStr = match[2].trim();
+            }
+
+            const advice = JSON.parse(jsonStr) as Partial<StrategistAdvice>;
+
+            if (typeof advice.rationale !== 'string' || advice.rationale.trim() === "") {
+                console.warn(`Strategist LLM advice (Attempt ${attempt + 1}) missing or empty rationale. Advice:`, advice);
+                if (attempt === maxRetries) return null;
+                await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+                continue;
+            }
+            if (advice.suggestedModelName && !SELECTABLE_MODELS.find(m => m.name === advice.suggestedModelName)) {
+                console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested an invalid model name: ${advice.suggestedModelName}. Ignoring suggestion.`);
+                advice.suggestedModelName = undefined;
+            }
+            if (advice.suggestedThinkingBudget !== undefined && ![0, 1].includes(advice.suggestedThinkingBudget)) {
+                console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested an invalid thinking budget: ${advice.suggestedThinkingBudget}. Ignoring suggestion.`);
+                advice.suggestedThinkingBudget = undefined;
+            }
+            if (advice.suggestedMetaInstruction && typeof advice.suggestedMetaInstruction !== 'string') {
+                console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested an invalid meta instruction type: ${typeof advice.suggestedMetaInstruction}. Ignoring suggestion.`);
+                advice.suggestedMetaInstruction = undefined;
+            }
+
+            // Validate and clamp suggested parameters
+            if (advice.suggestedTemperature !== undefined) {
+                if (typeof advice.suggestedTemperature !== 'number' || advice.suggestedTemperature < 0.0 || advice.suggestedTemperature > 2.0) {
+                    console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested invalid temperature: ${advice.suggestedTemperature}. Ignoring suggestion.`);
+                    advice.suggestedTemperature = undefined;
+                } else {
+                    advice.suggestedTemperature = parseFloat(advice.suggestedTemperature.toFixed(2));
+                }
+            }
+            if (advice.suggestedTopP !== undefined) {
+                if (typeof advice.suggestedTopP !== 'number' || advice.suggestedTopP < 0.0 || advice.suggestedTopP > 1.0) {
+                    console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested invalid TopP: ${advice.suggestedTopP}. Ignoring suggestion.`);
+                    advice.suggestedTopP = undefined;
+                } else {
+                     advice.suggestedTopP = parseFloat(advice.suggestedTopP.toFixed(2));
+                }
+            }
+            if (advice.suggestedTopK !== undefined) {
+                 if (typeof advice.suggestedTopK !== 'number' || advice.suggestedTopK < 1 || !Number.isInteger(advice.suggestedTopK)) {
+                    console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested invalid TopK: ${advice.suggestedTopK}. Ignoring suggestion.`);
+                    advice.suggestedTopK = undefined;
+                } else {
+                    advice.suggestedTopK = Math.round(advice.suggestedTopK);
+                }
+            }
+
+            return advice as StrategistAdvice;
+
+        } catch (error: any) {
+            console.error(`Strategist LLM call (Attempt ${attempt + 1}/${maxRetries + 1}) failed:`, error.message, error);
+            const apiError = error.error || error; // Adjust based on actual error structure from SDK
+            const statusCode = apiError.status || apiError.code;
+
+            let isRetriable = false;
+            if (statusCode) {
+                const numericStatusCode = Number(statusCode);
+                if ([500, 503, 504].includes(numericStatusCode)) isRetriable = true; // Standard retriable server errors
+                else if (numericStatusCode === 429) { isRetriable = false; }
+                else if (String(statusCode).startsWith('4')) isRetriable = false; // Most client errors are not retriable
+                else isRetriable = true; // Default to retriable for unknown errors unless specifically non-retriable
+            } else if (error.message && (error.message.toLowerCase().includes('network error') || error.message.toLowerCase().includes('failed to fetch'))) {
+                isRetriable = true;
+            } else if (error.name === 'GoogleGenerativeAIError' || (error.name && error.name.includes("GoogleGenerativeAIError"))) {
+                // Assume GoogleGenerativeAIError might be retriable unless a specific non-retriable code/status is present
+                 isRetriable = !(apiError && apiError.status && String(apiError.status).startsWith('4') && apiError.status !== 429);
+            }
+
+
+            if (isRetriable && attempt < maxRetries) {
+                console.warn(`Retrying Strategist LLM call (Attempt ${attempt + 2}) in ${retryDelayMs}ms due to ${error.name || 'Error'}: ${error.message}`);
+                await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+            } else {
+                console.error(`Strategist LLM call failed after all ${maxRetries + 1} attempts or due to non-retriable error. Falling back to code heuristics. Final Error: ${error.message}`);
+                return null;
+            }
+        }
+    }
+    return null;
+};
+
+
+export const generateInitialOutline = async (
+    fileManifest: string,
+    loadedFiles: LoadedFile[],
+    modelConfig: ModelConfig,
+    modelToUse: SelectableModelName
+): Promise<OutlineGenerationResult> => {
+    if (!ai || !apiKeyAvailable) {
+        return { outline: "", identifiedRedundancies: "", errorMessage: "Gemini API client not initialized or API key missing." };
+    }
+    const { systemInstruction: outlineSystemInstruction, coreUserInstructions: outlineCoreUserInstructions } = getOutlineGenerationPromptComponents(fileManifest);
+    const apiParts: Part[] = [];
+    loadedFiles.forEach(file => { apiParts.push({ inlineData: { mimeType: file.mimeType, data: file.base64Data } }); });
+    apiParts.push({ text: outlineCoreUserInstructions });
+
+    const generationConfigForApi: any = {
+        temperature: modelConfig.temperature,
+        topP: modelConfig.topP,
+        topK: modelConfig.topK,
+    };
+    if (modelConfig.thinkingConfig && modelToUse === 'gemini-2.5-flash-preview-04-17') {
+        generationConfigForApi.thinkingConfig = modelConfig.thinkingConfig;
+    }
+
+    const requestPayload: GenerateContentParameters = {
+        model: modelToUse,
+        contents: [{ role: "user", parts: apiParts }],
+        config: {
+            ...generationConfigForApi,
+            systemInstruction: outlineSystemInstruction
+        },
+    };
+
+    const apiStreamDetails: ApiStreamCallDetail[] = [];
+    let accumulatedText = "";
+    try {
+        const response: GenerateContentResponse = await ai.models.generateContent(requestPayload); // Non-streaming for outline
+        accumulatedText = response.text;
+        let outline = "";
+        let identifiedRedundancies = "";
+        const outlineMatch = accumulatedText.match(/Outline:\s*([\s\S]*?)Redundancies:/i);
+        const redundanciesMatch = accumulatedText.match(/Redundancies:\s*([\s\S]*)/i);
+
+        if (outlineMatch && outlineMatch[1]) {
+            outline = outlineMatch[1].trim();
+        } else {
+            const redIndex = accumulatedText.toLowerCase().indexOf("redundancies:");
+            if (redIndex !== -1) {
+                outline = accumulatedText.substring(0, redIndex).replace(/^outline:/i, "").trim();
+            } else {
+                outline = accumulatedText.replace(/^outline:/i, "").trim();
+            }
+        }
+        if (redundanciesMatch && redundanciesMatch[1]) {
+            identifiedRedundancies = redundanciesMatch[1].trim();
+        }
+
+        apiStreamDetails.push({
+            callCount: 1,
+            promptForThisCall: outlineCoreUserInstructions,
+            finishReason: response.candidates?.[0]?.finishReason || "UNKNOWN",
+            safetyRatings: response.candidates?.[0]?.safetyRatings || null,
+            textLengthThisCall: accumulatedText.length,
+            isContinuation: false
+        });
+        return { outline, identifiedRedundancies, apiDetails: apiStreamDetails };
+    } catch (error: any) {
+        console.error(`Error during Gemini API call for outline generation:`, error);
+        let errorMessage = `An unknown API error occurred during outline generation. Name: ${error.name || 'N/A'}, Message: ${error.message || 'No message'}.`;
+        return { outline: "", identifiedRedundancies: "", errorMessage, apiDetails: apiStreamDetails };
+    }
+};
 
 export const iterateProduct = async (
   currentProduct: string,
@@ -190,161 +328,160 @@ export const iterateProduct = async (
   outputParagraphShowHeadings: boolean,
   outputParagraphMaxHeadingDepth: number,
   outputParagraphNumberedHeadings: boolean,
-  modelConfig: ModelConfig,
+  modelConfigToUse: ModelConfig,
   isGlobalMode: boolean,
-  modelToUse: string,
+  modelToUse: SelectableModelName,
   onStreamChunk: (chunkText: string) => void,
-  isHaltSignalled: () => boolean
+  isHaltSignalled: () => boolean,
+  retryContext?: RetryContext,
+  stagnationNudgeStrategy?: NudgeStrategy,
+  initialOutlineForIter1?: OutlineGenerationResult,
+  activeMetaInstruction?: string
 ): Promise<IterateProductResult> => {
   if (!ai || !apiKeyAvailable) {
     return { product: currentProduct, status: 'ERROR', errorMessage: "Gemini API client not initialized or API key missing." };
   }
 
+  const isInitialProductActuallyEmptyAndFilesLoaded = currentIterationOverall === 1 && loadedFiles.length > 0 && !initialOutlineForIter1;
   const { systemInstruction, coreUserInstructions } = getUserPromptComponents(
     currentIterationOverall, maxIterationsOverall,
     activePlanStage,
     outputParagraphShowHeadings, outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings,
     isGlobalMode,
-    currentProduct.length === 0 && loadedFiles.length > 0
+    isInitialProductActuallyEmptyAndFilesLoaded,
+    retryContext,
+    stagnationNudgeStrategy,
+    initialOutlineForIter1,
+    loadedFiles, 
+    activeMetaInstruction
   );
 
-  const textPromptPart = buildTextualPromptPart(currentProduct, fileManifest, coreUserInstructions, currentIterationOverall);
-
-  const parts: Part[] = [];
-  if (currentIterationOverall === 1) { // Only send full file data on the first *actual processing* iteration
-    loadedFiles.forEach(file => {
-        parts.push({ inlineData: { mimeType: file.mimeType, data: file.base64Data } });
-    });
-  }
-  parts.push({ text: textPromptPart });
+  const initialTextPromptPartForIteration = buildTextualPromptPart(
+      currentProduct,
+      fileManifest,
+      coreUserInstructions,
+      currentIterationOverall,
+      initialOutlineForIter1
+  );
 
   let accumulatedText = "";
-  let fullUserPromptForLog = textPromptPart;
   const apiStreamDetails: ApiStreamCallDetail[] = [];
   let streamCallCount = 0;
   let isContinuationCall = false;
 
   try {
     let continueStreaming = true;
+    let finalChunkFromStream: GenerateContentResponse | null = null;
 
     while(continueStreaming) {
         streamCallCount++;
         if (isHaltSignalled()) {
-            return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: "Process halted by user during API call preparation.", promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails };
+          return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: "Process halted by user during API call preparation.", promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: initialTextPromptPartForIteration, apiStreamDetails };
         }
 
-        const currentPromptForThisAPICall = parts.find(p => p.text !== undefined)?.text || "Error: Text part missing";
+        let promptTextForThisApiCall: string;
+        let partsForThisApiCall: Part[];
 
-        const systemInstructionContent: Content | undefined = systemInstruction ? { role: "system", parts: [{text: systemInstruction}] } : undefined;
-        
-        const generationConfig: any = { 
-            candidateCount: 1,
-            temperature: modelConfig.temperature,
-            topP: modelConfig.topP,
-            topK: modelConfig.topK,
+        if (isContinuationCall) {
+          const continuationInstruction = `---PREVIOUSLY_GENERATED_PARTIAL_RESPONSE_THIS_ITERATION---\n${accumulatedText}\n---CONTINUATION_REQUEST---\nContinue generating the response from where you left off. Ensure you complete the thought or task. Adhere to all original instructions provided at the start of this iteration, especially regarding output format and not including conversational filler.`;
+          partsForThisApiCall = [{ text: continuationInstruction }];
+          promptTextForThisApiCall = continuationInstruction;
+        } else {
+            partsForThisApiCall = [];
+            if (currentIterationOverall === 1 && loadedFiles.length > 0 && !initialOutlineForIter1) {
+                loadedFiles.forEach(file => {
+                    partsForThisApiCall.push({ inlineData: { mimeType: file.mimeType, data: file.base64Data } });
+                });
+            }
+            partsForThisApiCall.push({ text: initialTextPromptPartForIteration });
+            promptTextForThisApiCall = initialTextPromptPartForIteration;
+        }
+
+        const generationConfigForAPI: any = {
+            temperature: modelConfigToUse.temperature,
+            topP: modelConfigToUse.topP,
+            topK: modelConfigToUse.topK,
         };
-        
+        if (systemInstruction && !isContinuationCall) {
+            generationConfigForAPI.systemInstruction = systemInstruction;
+        }
         if (activePlanStage && activePlanStage.format === 'json') {
-            generationConfig.responseMimeType = "application/json";
+            generationConfigForAPI.responseMimeType = "application/json";
+        }
+        if (modelConfigToUse.thinkingConfig && modelToUse === 'gemini-2.5-flash-preview-04-17') {
+            generationConfigForAPI.thinkingConfig = modelConfigToUse.thinkingConfig;
         }
 
-        const requestPayload = {
-            contents: [{ role: "user", parts }],
-            ...(systemInstructionContent && { systemInstruction: systemInstructionContent }),
-            generationConfig,
-        };
-
-        const stream = await ai.models.generateContentStream({
+        const requestPayloadForStream: GenerateContentParameters = {
             model: modelToUse,
-            ...requestPayload
-        });
-
+            contents: [{ role: "user", parts: partsForThisApiCall }],
+            config: generationConfigForAPI
+        };
+        
+        const streamResult = await ai.models.generateContentStream(requestPayloadForStream);
 
         let textFromThisStreamCall = "";
-        let currentFinishReason: string | null = null;
-        let currentSafetyRatings: any = null;
-
-        for await (const chunk of stream) {
-            if (isHaltSignalled()) {
-                apiStreamDetails.push({ callCount: streamCallCount, promptForThisCall: currentPromptForThisAPICall, finishReason: "HALTED_BY_USER", safetyRatings: currentSafetyRatings, textLengthThisCall: textFromThisStreamCall.length, isContinuation: isContinuationCall });
-                return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: "Process halted by user during streaming.", promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails };
-            }
+        finalChunkFromStream = null; // Reset for each stream call continuation
+        for await (const chunk of streamResult) { 
+            finalChunkFromStream = chunk; // Capture the latest chunk
             const chunkText = chunk.text;
-            if (chunkText) {
-                accumulatedText += chunkText;
-                textFromThisStreamCall += chunkText;
-                onStreamChunk(chunkText);
-            }
-            currentFinishReason = chunk.candidates?.[0]?.finishReason || null;
-            currentSafetyRatings = chunk.candidates?.[0]?.safetyRatings || null;
+            onStreamChunk(chunkText);
+            textFromThisStreamCall += chunkText;
+            if (isHaltSignalled()) break;
+         }
+        
+        const currentFinishReason = finalChunkFromStream?.candidates?.[0]?.finishReason || "UNKNOWN";
+        const currentSafetyRatings = finalChunkFromStream?.candidates?.[0]?.safetyRatings || null;
+        
+        accumulatedText += textFromThisStreamCall;
+
+        apiStreamDetails.push({ callCount: streamCallCount, promptForThisCall: promptTextForThisApiCall, finishReason: currentFinishReason, safetyRatings: currentSafetyRatings, textLengthThisCall: textFromThisStreamCall.length, isContinuation: isContinuationCall });
+
+        if (isHaltSignalled()) {
+             return { product: accumulatedText, status: 'HALTED', promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: initialTextPromptPartForIteration, apiStreamDetails };
         }
 
-        apiStreamDetails.push({ callCount: streamCallCount, promptForThisCall: currentPromptForThisAPICall, finishReason: currentFinishReason, safetyRatings: currentSafetyRatings, textLengthThisCall: textFromThisStreamCall.length, isContinuation: isContinuationCall });
-
         if (currentFinishReason === "MAX_TOKENS") {
-            parts.pop(); // Remove the last text part
-            parts.push({ text: "Continue generating the response from where you left off, ensuring completion." });
-            fullUserPromptForLog += "\n\n---CONTINUATION---\nContinue generating the response from where you left off, ensuring completion.";
-            isContinuationCall = true;
-        } else {
+            isContinuationCall = true; 
+        } else if (currentFinishReason === null || currentFinishReason === "FINISH_REASON_UNSPECIFIED" || currentFinishReason === "OTHER" || currentFinishReason === "UNKNOWN") {
+             if (accumulatedText.trim().length < 10 && currentFinishReason !== "STOP") { 
+                 return { product: accumulatedText, status: 'ERROR', errorMessage: `API stream finished inconclusively: ${currentFinishReason || 'No Reason'} with minimal output.`, promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: initialTextPromptPartForIteration, apiStreamDetails };
+             }
+             continueStreaming = false;
+        } else { 
             continueStreaming = false;
         }
     }
 
     if (accumulatedText.startsWith(CONVERGED_PREFIX)) {
-      return { product: accumulatedText, status: 'CONVERGED', promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails };
-    }
-    return { product: accumulatedText, status: 'COMPLETED', promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails };
+        return { product: accumulatedText, status: 'CONVERGED', promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: initialTextPromptPartForIteration, apiStreamDetails };
+     }
+    return { product: accumulatedText, status: 'COMPLETED', promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: initialTextPromptPartForIteration, apiStreamDetails };
 
   } catch (error: any) {
     console.error(`Error during Gemini API call for Iteration ${currentIterationOverall}, Call ${streamCallCount}:`, error);
-    
-    let errorMessage = "An unknown API error occurred. Check console for details.";
+    let errorMessage = `An unknown API error occurred. Name: ${error.name || 'N/A'}, Message: ${error.message || 'No message'}. Check console for details.`;
     let isRateLimitErrorFlag = false;
 
-    if (error.error && typeof error.error.message === 'string') { // Handles structure like { error: { code, message, status } }
-        const apiErrorDetails = error.error;
-        let originalApiMessage = apiErrorDetails.message;
+    const detailedError = error.error || error; 
+    const code = detailedError.code;
+    const status = detailedError.status;
+    let originalApiMessage = detailedError.message || error.message;
 
-        if (
-            apiErrorDetails.status === "RESOURCE_EXHAUSTED" ||
-            apiErrorDetails.code === 429 ||
-            (typeof apiErrorDetails.code === 'string' && apiErrorDetails.code.includes("429")) ||
-            // Fallback checks on the message content itself
-            originalApiMessage.toUpperCase().includes("RESOURCE_EXHAUSTED") ||
-            originalApiMessage.toUpperCase().includes("RATE LIMIT") ||
-            originalApiMessage.includes("429") ||
-            originalApiMessage.toUpperCase().includes("QUOTA")
-        ) {
-            errorMessage = `API Quota Exceeded or Rate Limit Hit. Please check your Gemini API plan, billing details, or try again later. For more info: https://ai.google.dev/gemini-api/docs/rate-limits. Original API message: "${originalApiMessage}"`;
+    if (typeof originalApiMessage === 'string') {
+        const errorPrefix = `API Error (Code: ${code || 'N/A'}, Status: ${status || 'N/A'}, Name: ${error.name || 'N/A'}): `;
+        if ( status === "RESOURCE_EXHAUSTED" || String(code).includes("429") || originalApiMessage.toUpperCase().includes("RESOURCE_EXHAUSTED") || originalApiMessage.toUpperCase().includes("RATE LIMIT") || originalApiMessage.includes("429") || originalApiMessage.toUpperCase().includes("QUOTA") ) {
+            errorMessage = `${errorPrefix}API Quota Exceeded or Rate Limit Hit. Original: "${originalApiMessage}". For more info: https://ai.google.dev/gemini-api/docs/rate-limits.`;
             isRateLimitErrorFlag = true;
-        } else {
-            errorMessage = `API Error: ${originalApiMessage}`;
-        }
-    } else if (typeof error.message === 'string') { // Handles generic error with a top-level message
-        let originalApiMessage = error.message;
-        if (
-            originalApiMessage.toUpperCase().includes("RESOURCE_EXHAUSTED") ||
-            originalApiMessage.toUpperCase().includes("RATE LIMIT") ||
-            originalApiMessage.includes("429") ||
-            originalApiMessage.toUpperCase().includes("QUOTA")
-        ) {
-            const status = (error as any).status;
-            const code = (error as any).code;
-            let detailsPart = "";
-            if (status || code) {
-                detailsPart = ` (Status: ${status || 'N/A'}, Code: ${code || 'N/A'})`;
-            }
-            errorMessage = `API Quota Exceeded or Rate Limit Hit. Please check your Gemini API plan, billing details, or try again later. For more info: https://ai.google.dev/gemini-api/docs/rate-limits. Original API message: "${originalApiMessage}"${detailsPart}`;
-            isRateLimitErrorFlag = true;
-        } else {
-             errorMessage = `API Error: ${originalApiMessage}`;
-        }
-    } else if (error.toString) { // Final fallback
-        errorMessage = error.toString();
+        } else { errorMessage = `${errorPrefix}${originalApiMessage}`; }
+    } else if (error.toString) { 
+        errorMessage = `API Call General Failure: ${error.toString()}`;
     }
-    
-    apiStreamDetails.push({ callCount: streamCallCount, promptForThisCall: "N/A (Error before/during stream start)", finishReason: "ERROR_BEFORE_STREAM", safetyRatings: null, textLengthThisCall: 0, isContinuation: isContinuationCall });
-    return { product: accumulatedText || currentProduct, status: 'ERROR', errorMessage, promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails, isRateLimitError: isRateLimitErrorFlag };
+
+    const currentPromptForErrorLog = apiStreamDetails.length > 0 ? apiStreamDetails[apiStreamDetails.length-1].promptForThisCall : (initialTextPromptPartForIteration || "N/A (Error before/during stream start or prompt capture)");
+    if (apiStreamDetails.length === 0 || apiStreamDetails[apiStreamDetails.length-1].callCount !== (streamCallCount > 0 ? streamCallCount : 1)) {
+      apiStreamDetails.push({ callCount: streamCallCount > 0 ? streamCallCount : 1, promptForThisCall: currentPromptForErrorLog, finishReason: error.name || "API_CALL_ERROR", safetyRatings: null, textLengthThisCall: accumulatedText.length, isContinuation: isContinuationCall });
+    }
+    return { product: accumulatedText || currentProduct, status: 'ERROR', errorMessage, promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: initialTextPromptPartForIteration, apiStreamDetails, isRateLimitError: isRateLimitErrorFlag };
   }
 };

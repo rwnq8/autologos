@@ -16,14 +16,13 @@ const ProjectActions: React.FC<CommonControlProps> = ({
   const [isLoadingFile, setIsLoadingFile] = useState(false);
 
   const handleUnifiedFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
+    const files = event.target.files;
+    if (files && files.length > 0) {
       setIsLoadingFile(true);
       try {
-        await appCtx.onFileSelectedForImport(file);
+        await appCtx.onFilesSelectedForImport(files); // Pass FileList
       } catch (e) {
-        // Error already handled by onFileSelectedForImport or its delegates
-        console.error("Error during file processing:", e)
+        console.error("Error during file processing:", e);
       } finally {
         setIsLoadingFile(false);
       }
@@ -52,6 +51,7 @@ const ProjectActions: React.FC<CommonControlProps> = ({
        <div className="grid grid-cols-2 gap-3">
         <input
           type="file"
+          multiple // Allow multiple file selection
           ref={unifiedFileInputRef}
           onChange={handleUnifiedFileSelected}
           className="hidden"
@@ -63,7 +63,8 @@ const ProjectActions: React.FC<CommonControlProps> = ({
           onClick={() => unifiedFileInputRef.current?.click()}
           disabled={processCtx.isProcessing || isLoadingFile}
           className={`${commonButtonClasses} w-full flex items-center justify-center`}
-          aria-label="Import project, portable diffs, or load input data file(s)"
+          aria-label="Import project or load input data file(s)"
+          title="Import an .autologos.json project file or load data files (text, images, etc.). Supports multiple file selection."
         >
           {isLoadingFile && <LoadingSpinner size="sm" color="text-slate-700 dark:text-slate-200 mr-2" />}
           {isLoadingFile ? "Processing..." : "Import / Load Data"}
@@ -78,15 +79,6 @@ const ProjectActions: React.FC<CommonControlProps> = ({
             Export Project
           </button>
       </div>
-      <button
-        onClick={appCtx.handleExportPortableDiffs}
-        disabled={processCtx.isProcessing || isLoadingFile}
-        className={`${commonButtonClasses} w-full`}
-        aria-label="Export Portable Diffs"
-        title="Export a minimal archive of line-based changes for product reconstruction, suitable for auditing or lightweight sharing."
-      >
-        Export Diffs
-      </button>
     </>
   );
 };

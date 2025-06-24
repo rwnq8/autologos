@@ -10,15 +10,18 @@ import type {
   DiffViewType,
   ApiStreamCallDetail,
   FileProcessingInfo,
-  AiResponseValidationInfo
+  AiResponseValidationInfo,
+  PlanStage,
+  SelectableModelName,
+  StagnationInfo, 
+  PlanTemplate
 } from '../types';
 
-// Simplified AddLogEntryType for context to avoid complex conditional types from useProcessState hook return
 export type AddLogEntryType = (logData: {
   iteration: number;
   currentFullProduct: string | null;
   status: string;
-  previousFullProduct?: string | null; // Make it optional for iter 0
+  previousFullProduct?: string | null;
   promptSystemInstructionSent?: string;
   promptCoreUserInstructionsSent?: string;
   promptFullUserPromptSent?: string;
@@ -27,14 +30,40 @@ export type AddLogEntryType = (logData: {
   readabilityScoreFlesch?: number;
   fileProcessingInfo: FileProcessingInfo;
   aiValidationInfo?: AiResponseValidationInfo;
+  activeMetaInstruction?: string;
+  strategyRationale?: string;
+  currentModelForIteration?: SelectableModelName;
+  attemptCount?: number;
+  directAiResponseHead?: string;
+  directAiResponseTail?: string;
+  directAiResponseLengthChars?: number;
+  processedProductHead?: string;
+  processedProductTail?: string;
+  processedProductLengthChars?: number;
 }) => void;
 
 
-export interface ProcessContextType {
+export interface ProcessContextType extends Omit<ProcessState,
+  'apiKeyStatus' | 'selectedModelName' | 'projectName' | 'projectId' | 
+  'isApiRateLimited' | 'rateLimitCooldownActiveSeconds' | 
+  'promptChangedByFileLoad' 
+> {
+  updateProcessState: (updates: Partial<ProcessState>) => void; 
+  handleLoadedFilesChange: (files: LoadedFile[], action?: 'add' | 'remove' | 'clear') => void;
+  addLogEntry: AddLogEntryType;
+  handleResetApp: () => Promise<void>; // Updated to match App.tsx's signature
+  handleStartProcess: () => Promise<void>;
+  handleHaltProcess: () => void;
+  handleRewind: (iterationNumber: number) => void;
+  handleExportIterationMarkdown: (iterationNumber: number) => void;
+  reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[], basePrompt: string) => ReconstructedProductResult;
+  handleInitialPromptChange: (newPromptText: string) => void;
+
   initialPrompt: string;
   currentProduct: string | null;
   iterationHistory: IterationLogEntry[];
   currentIteration: number;
+  maxIterations: number; 
   isProcessing: boolean;
   finalProduct: string | null;
   statusMessage: string;
@@ -45,24 +74,24 @@ export interface ProcessContextType {
   lastAutoSavedAt?: number | null;
   currentProductBeforeHalt?: string | null;
   currentIterationBeforeHalt?: number;
-  promptChangedByFileLoad?: boolean;
   outputParagraphShowHeadings: boolean;
   outputParagraphMaxHeadingDepth: number;
   outputParagraphNumberedHeadings: boolean;
   aiProcessInsight?: string;
-  currentAppliedModelConfig?: ModelConfig | null; 
-  stagnationNudgeEnabled: boolean; 
-  updateProcessState: (updates: Partial<Omit<ProcessState, 'apiKeyStatus' | 'selectedModelName' | 'projectName' | 'projectId' | 'isApiRateLimited' | 'rateLimitCooldownActiveSeconds' | 'isPlanActive' | 'planStages' | 'currentPlanStageIndex' | 'currentStageIteration' | 'savedPlanTemplates' | 'temperature' | 'topP' | 'topK' | 'maxIterations' | 'settingsSuggestionSource' | 'userManuallyAdjustedSettings'>>) => void;
-  handleLoadedFilesChange: (files: LoadedFile[]) => void;
-  addLogEntry: AddLogEntryType;
-  handleResetApp: () => Promise<void>; 
-  handleStartProcess: () => Promise<void>; 
-  handleHaltProcess: () => void; 
-  handleRewind: (iterationNumber: number) => void;
-  handleExportIterationMarkdown: (iterationNumber: number) => void;
-  reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[], basePrompt: string) => ReconstructedProductResult;
-  currentDiffViewType: DiffViewType; // Fixed to 'words'
-  // onDiffViewTypeChange removed as diff view is fixed
+  currentAppliedModelConfig?: ModelConfig | null;
+  stagnationNudgeEnabled: boolean;
+  stagnationInfo: StagnationInfo;
+  isPlanActive: boolean;
+  planStages: PlanStage[];
+  currentPlanStageIndex: number | null;
+  currentStageIteration: number;
+  savedPlanTemplates: PlanTemplate[]; 
+  currentDiffViewType: DiffViewType;
+  inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
+  currentModelForIteration?: SelectableModelName;
+  activeMetaInstructionForNextIter?: string;
+  strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
+  stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 const ProcessContext = createContext<ProcessContextType | undefined>(undefined);

@@ -1,16 +1,16 @@
 
 import React, { useState, useContext } from 'react';
-import type { CommonControlProps } from '../../types.ts';
+import type { CommonControlProps, ProcessState } from '../../types.ts';
 import { useModelConfigContext } from '../../contexts/ModelConfigContext';
 import { usePlanContext } from '../../contexts/PlanContext';
 import { useProcessContext } from '../../contexts/ProcessContext';
 
-// ModelParameterControlsProps removed
 
 const ModelParameterControls: React.FC<CommonControlProps & { children?: React.ReactNode }> = ({
   commonInputClasses,
-  commonCheckboxLabelClasses, // Added for new checkbox
-  commonCheckboxInputClasses, // Added for new checkbox
+  commonSelectClasses,
+  commonCheckboxLabelClasses,
+  commonCheckboxInputClasses,
   children,
 }) => {
   const modelConfigCtx = useModelConfigContext();
@@ -65,9 +65,23 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
       </>
     );
   };
-  
+
   const totalPlanIterationsValue = planCtx.isPlanActive ? planCtx.planStages.reduce((sum, stage) => sum + stage.stageIterations, 0) : 0;
-  const isControlsDisabled = processCtx.isProcessing || planCtx.isPlanActive;
+  const isSlidersDisabled = processCtx.isProcessing || planCtx.isPlanActive;
+  const isMaxIterationsControlDisabled = processCtx.isProcessing || planCtx.isPlanActive;
+
+
+  const strategistInfluenceTooltip = `Controls how advice from the LLM Strategist (a meta-AI suggesting model/config/meta-instruction changes) is used:
+- Off: Strategist AI is NOT called. System uses code-based rules (heuristics) only. Strategy rationale will reflect this.
+- Suggest Only: Strategist AI is called. Its advice (model, parameters, meta-instruction) is logged for your review, but code heuristics solely determine the actual strategy applied. No strategist advice is automatically applied.
+- Advise Parameters Only: Strategist AI can influence Model choice, Thinking Configuration (for Flash models), and provide dynamic Meta-Instructions (if stagnation nudge is 'meta_instruct'). However, its advice on core generation parameters (Temperature, Top-P, Top-K) is logged but explicitly ignored. These core parameters remain controlled by code heuristics (parameter sweep + aggressiveness-scaled nudges).
+- Full Override (Default): Strategist AI has maximum influence. Its advice can change the Model, Thinking Config, Meta-Instructions, AND core parameters (Temperature, Top-P, Top-K), potentially overriding code heuristics. All parameter changes are subject to predefined operational limits (e.g., Temp 0.0-2.0).`;
+
+  const nudgeAggressivenessTooltip = `Controls how quickly and intensely the system applies "nudges" when Global Mode progress appears to stall. Affects:
+1. Thresholds: The number of consecutive stagnant iterations needed to trigger different nudge types (params_light, params_heavy, meta_instruct). 'Low' requires more stagnant iterations; 'High' requires fewer.
+2. Intensity (for 'params_light' & 'params_heavy' nudges): The magnitude of code-driven parameter adjustments (e.g., how much Temperature or Top-K is changed). 'Low' uses smaller adjustments (e.g., 0.6x base nudge); 'High' uses larger adjustments (e.g., 1.4x base nudge), within safe operational bounds.
+This setting does NOT apply in Plan Mode.`;
+
 
   return (
     <div className="pt-4 border-t border-slate-300/70 dark:border-white/10">
@@ -116,7 +130,7 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
           )}
           {getSettingsNoteAndRationales()}
 
-          {modelConfigCtx.modelConfigWarnings.length > 0 && !planCtx.isPlanActive && ( 
+          {modelConfigCtx.modelConfigWarnings.length > 0 && !planCtx.isPlanActive && (
             <div className="p-3 bg-yellow-100/80 dark:bg-yellow-500/30 border border-yellow-400/80 dark:border-yellow-500/50 rounded-md mb-3 space-y-1">
               {modelConfigCtx.modelConfigWarnings.map((warning, index) => (
                 <p key={index} className="text-xs text-yellow-700 dark:text-yellow-200 flex items-start">
@@ -139,7 +153,7 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
               min="1"
               max="200"
               className={commonInputClasses + " text-sm py-2"}
-              disabled={isControlsDisabled}
+              disabled={isMaxIterationsControlDisabled || processCtx.isProcessing }
               aria-label="Maximum number of global iterations for dynamic parameter sweep"
             />
             {planCtx.isPlanActive && (
@@ -149,7 +163,7 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
             )}
             {!planCtx.isPlanActive && (
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                In Global Mode, parameters sweep from creative to focused over these iterations.
+                In Global Mode, parameters sweep from creative to focused over these iterations. Target for deterministic params: Iteration 20.
               </p>
             )}
           </div>
@@ -167,7 +181,7 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
               value={modelConfigCtx.temperature}
               onChange={(e) => modelConfigCtx.handleTemperatureChange(parseFloat(e.target.value))}
               className="w-full h-2 bg-slate-200 dark:bg-white/10 rounded-lg appearance-none cursor-pointer accent-primary-500 dark:accent-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50"
-              disabled={isControlsDisabled}
+              disabled={isSlidersDisabled || processCtx.isProcessing}
               aria-label={planCtx.isPlanActive ? "Temperature setting (fixed for plan)" : "Starting temperature for dynamic sweep"}
             />
             {modelConfigCtx.modelParameterAdvice.temperature && <p className="text-xs text-primary-600 dark:text-primary-200 mt-1">{modelConfigCtx.modelParameterAdvice.temperature}</p>}
@@ -185,7 +199,7 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
               value={modelConfigCtx.topP}
               onChange={(e) => modelConfigCtx.handleTopPChange(parseFloat(e.target.value))}
               className="w-full h-2 bg-slate-200 dark:bg-white/10 rounded-lg appearance-none cursor-pointer accent-primary-500 dark:accent-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50"
-              disabled={isControlsDisabled}
+              disabled={isSlidersDisabled || processCtx.isProcessing}
               aria-label={planCtx.isPlanActive ? "Top-P setting (fixed for plan)" : "Starting Top-P for dynamic sweep"}
             />
             {modelConfigCtx.modelParameterAdvice.topP && <p className="text-xs text-primary-600 dark:text-primary-200 mt-1">{modelConfigCtx.modelParameterAdvice.topP}</p>}
@@ -203,12 +217,12 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
               value={modelConfigCtx.topK}
               onChange={(e) => modelConfigCtx.handleTopKChange(parseInt(e.target.value, 10))}
               className="w-full h-2 bg-slate-200 dark:bg-white/10 rounded-lg appearance-none cursor-pointer accent-primary-500 dark:accent-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50"
-              disabled={isControlsDisabled}
+              disabled={isSlidersDisabled || processCtx.isProcessing}
               aria-label={planCtx.isPlanActive ? "Top-K setting (fixed for plan)" : "Starting Top-K for dynamic sweep"}
             />
             {modelConfigCtx.modelParameterAdvice.topK && <p className="text-xs text-primary-600 dark:text-primary-200 mt-1">{modelConfigCtx.modelParameterAdvice.topK}</p>}
           </div>
-          
+
           {children} {/* For OutputStructureDefaults */}
 
           <div className="pt-3 mt-3 border-t border-slate-300/70 dark:border-white/10">
@@ -218,25 +232,60 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
                 aria-expanded={isAdvancedSettingsExpanded}
                 aria-controls="advanced-model-settings-details"
             >
-                Advanced Settings
+                Advanced Autonomous Strategy Settings
                 <span>{isAdvancedSettingsExpanded ? '▲' : '▼'}</span>
             </button>
             {isAdvancedSettingsExpanded && (
-                <div id="advanced-model-settings-details" className="mt-2 space-y-3 p-3 bg-slate-100/50 dark:bg-black/10 rounded-md border border-slate-200 dark:border-white/5 animate-fadeIn">
+                <div id="advanced-model-settings-details" className="mt-2 space-y-4 p-3 bg-slate-100/50 dark:bg-black/10 rounded-md border border-slate-200 dark:border-white/5 animate-fadeIn">
                      <label className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
-                        <span className="flex-grow">Enable Stagnation Nudge (Global Mode)</span>
+                        <span className="flex-grow mr-2" title="If enabled, the system adaptively adjusts parameters or prompts the AI with meta-instructions when Global Mode progress appears to stall, aiming to break out of unproductive refinement loops.">
+                            Enable Stagnation Nudge (Global Mode)
+                        </span>
                         <input
                             type="checkbox"
                             checked={processCtx.stagnationNudgeEnabled}
                             onChange={(e) => processCtx.updateProcessState({ stagnationNudgeEnabled: e.target.checked })}
-                            disabled={processCtx.isProcessing}
+                            disabled={processCtx.isProcessing || planCtx.isPlanActive}
                             className={commonCheckboxInputClasses}
-                            aria-describedby="stagnation-nudge-tooltip"
                         />
                     </label>
-                    <p id="stagnation-nudge-tooltip" className="text-xs text-slate-500 dark:text-slate-400 -mt-1">
-                        If enabled, slightly adjusts model parameters when Global Mode progress stalls to encourage new refinement paths.
-                    </p>
+
+                    <div>
+                        <label htmlFor="strategistInfluenceLevel" className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-1" title={strategistInfluenceTooltip}>
+                            LLM Strategist Influence
+                        </label>
+                        <select
+                            id="strategistInfluenceLevel"
+                            value={processCtx.strategistInfluenceLevel}
+                            onChange={(e) => processCtx.updateProcessState({ strategistInfluenceLevel: e.target.value as ProcessState['strategistInfluenceLevel'] })}
+                            className={commonSelectClasses}
+                            disabled={processCtx.isProcessing}
+                        >
+                            <option value="OFF">Off (Code Heuristics Only)</option>
+                            <option value="SUGGEST">Suggest Only (Log AI Advice)</option>
+                            <option value="ADVISE_PARAMS_ONLY">Advise (Model/Nudge; Params by Code)</option>
+                            <option value="OVERRIDE_FULL">Full Override (Model & Params)</option>
+                        </select>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Controls how advice from the LLM Strategist (meta-AI) is used.</p>
+                    </div>
+
+                    <div>
+                        <label htmlFor="stagnationNudgeAggressiveness" className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-1" title={nudgeAggressivenessTooltip}>
+                            Stagnation Nudge Aggressiveness
+                        </label>
+                        <select
+                            id="stagnationNudgeAggressiveness"
+                            value={processCtx.stagnationNudgeAggressiveness}
+                            onChange={(e) => processCtx.updateProcessState({ stagnationNudgeAggressiveness: e.target.value as ProcessState['stagnationNudgeAggressiveness'] })}
+                            className={commonSelectClasses}
+                            disabled={processCtx.isProcessing || !processCtx.stagnationNudgeEnabled || planCtx.isPlanActive}
+                        >
+                            <option value="LOW">Low (Less Frequent/Intense)</option>
+                            <option value="MEDIUM">Medium (Balanced)</option>
+                            <option value="HIGH">High (More Frequent/Intense)</option>
+                        </select>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Adjusts how quickly and strongly the system reacts to stagnation.</p>
+                    </div>
                 </div>
             )}
           </div>

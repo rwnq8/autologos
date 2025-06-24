@@ -1,10 +1,11 @@
+
 import { useState, useCallback } from 'react';
-import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, ParameterAdvice, PlanTemplate, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType } from '../types.ts';
+import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, ParameterAdvice, PlanTemplate, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo } from '../types.ts';
 import * as geminiService from '../services/geminiService';
 import * as storageService from '../services/storageService';
 import { INITIAL_PROJECT_NAME_STATE } from '../services/utils';
 import { getProductSummary } from '../services/iterationUtils';
-import { CONVERGED_PREFIX } from '../services/promptBuilderService'; // Moved from iterationUtils
+import { CONVERGED_PREFIX } from '../services/promptBuilderService';
 import * as Diff from 'diff';
 
 
@@ -16,10 +17,10 @@ export const createInitialProcessState = (
   currentProduct: null,
   iterationHistory: [],
   currentIteration: 0,
-  maxIterations: 100,
+  maxIterations: 40, // Production default
   isProcessing: false,
   finalProduct: null,
-  statusMessage: "Load input file(s), then configure model settings to begin.",
+  statusMessage: "Load input file(s) or type prompt, then configure model settings to begin.",
   apiKeyStatus: apiKeyStatusInput,
   loadedFiles: [],
   promptSourceName: null,
@@ -28,7 +29,6 @@ export const createInitialProcessState = (
   projectId: null,
   projectName: INITIAL_PROJECT_NAME_STATE,
   projectObjective: null,
-  otherAppsData: {},
   lastAutoSavedAt: null,
   currentProductBeforeHalt: null,
   currentIterationBeforeHalt: undefined,
@@ -41,18 +41,35 @@ export const createInitialProcessState = (
   currentPlanStageIndex: null,
   currentStageIteration: 0,
   savedPlanTemplates: [],
-  currentDiffViewType: 'words', // Default to words, no longer user-selectable
-  aiProcessInsight: "System idle. Load files to begin.",
+  currentDiffViewType: 'words',
+  aiProcessInsight: "System idle. Load files or type prompt to begin.",
   isApiRateLimited: false,
   rateLimitCooldownActiveSeconds: 0,
-  stagnationNudgeEnabled: true, // Added for this phase
+  stagnationNudgeEnabled: true,
+  stagnationInfo: { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none' },
+  inputComplexity: 'SIMPLE',
+  currentModelForIteration: selectedModelNameInput,
+  currentAppliedModelConfig: null,
+  activeMetaInstructionForNextIter: undefined,
+  strategistInfluenceLevel: 'OVERRIDE_FULL',
+  stagnationNudgeAggressiveness: 'MEDIUM',
 });
+
+const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
+  const totalFilesSize = loadedFiles.reduce((sum, file) => sum + file.size, 0);
+  const promptTextLength = initialPrompt?.trim().length || 0;
+
+  if (loadedFiles.length === 0 && promptTextLength < 500) return 'SIMPLE';
+  if (loadedFiles.length === 1 && loadedFiles[0].size < 50 * 1024 && promptTextLength < 1000) return 'SIMPLE';
+  if (loadedFiles.length <= 3 && totalFilesSize < 200 * 1024 && promptTextLength < 5000) return 'MODERATE';
+  return 'COMPLEX';
+};
 
 export const useProcessState = () => {
   const [state, setState] = useState<ProcessState>(
     createInitialProcessState(
       geminiService.isApiKeyAvailable() ? 'loaded' : 'missing',
-      geminiService.DEFAULT_MODEL_NAME as SelectableModelName
+      geminiService.DEFAULT_MODEL_NAME
     )
   );
 
@@ -60,34 +77,125 @@ export const useProcessState = () => {
     setState(prev => ({ ...prev, ...updates }));
   }, []);
 
-  const handleLoadedFilesChange = useCallback((newFiles: LoadedFile[]) => {
-    let fileManifest = "";
-    if (newFiles.length > 0) {
-      fileManifest = `Input consists of ${newFiles.length} file(s): ${newFiles.map(f => `${f.name} (${f.mimeType})`).join(', ')}.`;
-    }
+  const handleLoadedFilesChange = useCallback((newlySelectedFiles: LoadedFile[], action: 'add' | 'remove' | 'clear' = 'add') => {
+    setState(prev => {
+      let updatedLoadedFiles: LoadedFile[];
+      let newInitialPrompt = "";
+      let statusMessageUpdate = "";
+      let aiInsightUpdate = "";
+      let resetProcessFields = false;
 
-    const newPromptSourceName = newFiles.length > 0
-      ? (newFiles.length === 1 ? newFiles[0].name : `${newFiles.length} files loaded`)
-      : null;
+      if (action === 'clear') {
+        updatedLoadedFiles = [];
+        resetProcessFields = true;
+        statusMessageUpdate = "All files cleared. Load new input to begin.";
+        aiInsightUpdate = "Input files cleared.";
+        newInitialPrompt = "";
+      } else if (action === 'remove') {
+        const fileToRemoveName = newlySelectedFiles[0]?.name;
+        updatedLoadedFiles = prev.loadedFiles.filter(f => f.name !== fileToRemoveName);
+        if (updatedLoadedFiles.length === 0) {
+            resetProcessFields = true;
+            statusMessageUpdate = "Last file removed. Load new input to begin.";
+            aiInsightUpdate = "Input files cleared.";
+            newInitialPrompt = "";
+        } else {
+            statusMessageUpdate = `File "${fileToRemoveName}" removed.`;
+            aiInsightUpdate = `${updatedLoadedFiles.length} file(s) remain loaded.`;
+        }
+      } else { // 'add' action
+        const existingFileNames = new Set(prev.loadedFiles.map(f => f.name));
+        const filesToAdd = newlySelectedFiles.filter(nf => !existingFileNames.has(nf.name));
+        updatedLoadedFiles = [...prev.loadedFiles, ...filesToAdd];
 
-    updateProcessState({
-      loadedFiles: newFiles,
-      initialPrompt: fileManifest,
-      promptSourceName: newPromptSourceName,
-      promptChangedByFileLoad: true,
-      currentProduct: null,
-      iterationHistory: [],
-      finalProduct: null,
-      currentIteration: 0,
-      statusMessage: newFiles.length > 0 ? "File(s) loaded. Configure model and start." : "Files cleared. Load new input.",
-      aiProcessInsight: newFiles.length > 0 ? "Files loaded. Ready for processing." : "Input files cleared.",
-      projectName: newFiles.length > 0 ? state.projectName : INITIAL_PROJECT_NAME_STATE,
+        if (filesToAdd.length < newlySelectedFiles.length) {
+            const numDuplicates = newlySelectedFiles.length - filesToAdd.length;
+            statusMessageUpdate = `${filesToAdd.length} new file(s) added. ${numDuplicates} duplicate(s) ignored. `;
+        } else {
+            statusMessageUpdate = `${filesToAdd.length} new file(s) added. `;
+        }
+
+        if (updatedLoadedFiles.length === 0) {
+            resetProcessFields = true;
+            statusMessageUpdate += "Load input to begin.";
+            aiInsightUpdate = "Input files cleared.";
+            newInitialPrompt = "";
+        } else {
+             statusMessageUpdate += "Configure model and start or continue process.";
+             aiInsightUpdate = `${updatedLoadedFiles.length} file(s) loaded. Ready for processing.`;
+        }
+      }
+
+      if (updatedLoadedFiles.length > 0) {
+        newInitialPrompt = `Input consists of ${updatedLoadedFiles.length} file(s): ${updatedLoadedFiles.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
+      } else {
+        newInitialPrompt = resetProcessFields ? "" : prev.initialPrompt;
+      }
+
+      const newComplexity = calculateInputComplexity(newInitialPrompt, updatedLoadedFiles);
+
+      const updates: Partial<ProcessState> = {
+        loadedFiles: updatedLoadedFiles,
+        initialPrompt: newInitialPrompt,
+        promptSourceName: updatedLoadedFiles.length > 0 ? (updatedLoadedFiles.length === 1 ? updatedLoadedFiles[0].name : `${updatedLoadedFiles.length} files loaded`) : (newInitialPrompt.trim() ? "direct_text" : null),
+        statusMessage: statusMessageUpdate,
+        aiProcessInsight: aiInsightUpdate,
+        promptChangedByFileLoad: action === 'add' || action === 'remove' || action === 'clear',
+        inputComplexity: newComplexity,
+      };
+
+      if (resetProcessFields || (action === 'add' && prev.loadedFiles.length === 0 && updatedLoadedFiles.length > 0) || (action === 'clear' && prev.loadedFiles.length > 0)) {
+        updates.currentProduct = null;
+        updates.iterationHistory = [];
+        updates.finalProduct = null;
+        updates.currentIteration = 0;
+        updates.projectName = INITIAL_PROJECT_NAME_STATE; // Reset project name if all files cleared or first files added
+        updates.stagnationInfo = { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none' };
+        updates.currentProductBeforeHalt = null;
+        updates.currentIterationBeforeHalt = undefined;
+        updates.configAtFinalization = null;
+        updates.isPlanActive = false;
+        updates.planStages = [];
+        updates.currentPlanStageIndex = null;
+        updates.currentStageIteration = 0;
+      }
+      return { ...prev, ...updates };
     });
-  }, [updateProcessState, state.projectName]);
+  }, []);
+
+  const handleInitialPromptChange = useCallback((newPromptText: string) => {
+      setState(prev => {
+          if (prev.loadedFiles.length > 0) { // If files are loaded, initialPrompt is manifest, not user-editable
+            return prev;
+          }
+          const newComplexity = calculateInputComplexity(newPromptText, prev.loadedFiles);
+          return {
+              ...prev,
+              initialPrompt: newPromptText,
+              inputComplexity: newComplexity,
+              promptChangedByFileLoad: true, // Treat as if a "new input" for model param suggestions
+              promptSourceName: newPromptText.trim() ? "direct_text" : null,
+              // Reset iterative state if prompt changes significantly and no files are loaded
+              currentProduct: null,
+              iterationHistory: [],
+              finalProduct: null,
+              currentIteration: 0,
+              stagnationInfo: { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none' },
+              currentProductBeforeHalt: null,
+              currentIterationBeforeHalt: undefined,
+              configAtFinalization: null,
+              isPlanActive: false,
+              planStages: [],
+              currentPlanStageIndex: null,
+              currentStageIteration: 0,
+          };
+      });
+  }, []);
+
 
   const addLogEntry = useCallback((logData: {
     iteration: number;
-    currentFullProduct: string | null; // This is iterationProductForLog
+    currentFullProduct: string | null;
     status: string;
     previousFullProduct?: string | null;
     promptSystemInstructionSent?: string;
@@ -104,25 +212,35 @@ export const useProcessState = () => {
     processedProductHead?: string;
     processedProductTail?: string;
     processedProductLengthChars?: number;
+    attemptCount?: number;
+    strategyRationale?: string;
+    currentModelForIteration?: SelectableModelName;
+    activeMetaInstruction?: string;
   }) => {
     let productDiff: string | undefined = undefined;
     let linesAdded = 0;
     let linesRemoved = 0;
 
-    const currentPForDiff = (logData.currentFullProduct ?? "").startsWith(CONVERGED_PREFIX)
-                            ? (logData.currentFullProduct ?? "").substring(CONVERGED_PREFIX.length)
-                            : (logData.currentFullProduct ?? "");
-    const previousPForDiff = (logData.previousFullProduct ?? "").startsWith(CONVERGED_PREFIX)
-                            ? (logData.previousFullProduct ?? "").substring(CONVERGED_PREFIX.length)
-                            : (logData.previousFullProduct ?? "");
+    const normalizeNewlines = (str: string | null | undefined): string => (str || "").replace(/\r\n/g, '\n');
+
+    const currentPForDiff = normalizeNewlines(
+        (logData.currentFullProduct ?? "").startsWith(CONVERGED_PREFIX)
+            ? (logData.currentFullProduct ?? "").substring(CONVERGED_PREFIX.length)
+            : (logData.currentFullProduct ?? "")
+    );
+    const previousPForDiff = normalizeNewlines(
+        (logData.previousFullProduct ?? "").startsWith(CONVERGED_PREFIX)
+            ? (logData.previousFullProduct ?? "").substring(CONVERGED_PREFIX.length)
+            : (logData.previousFullProduct ?? "")
+    );
 
     if (logData.iteration === 0 || currentPForDiff !== previousPForDiff) {
         productDiff = Diff.createTwoFilesPatch(
-            `iteration_content_prev.txt`, 
+            `iteration_content_prev.txt`,
             `iteration_content_curr.txt`,
-            previousPForDiff, 
-            currentPForDiff,  
-            undefined, undefined, { context: 3 } 
+            previousPForDiff,
+            currentPForDiff,
+            undefined, undefined, { context: 3 }
         );
         const lineChanges = Diff.diffLines(previousPForDiff, currentPForDiff, { newlineIsToken: true, ignoreWhitespace: false });
         lineChanges.forEach(part => {
@@ -139,7 +257,7 @@ export const useProcessState = () => {
       status: logData.status,
       timestamp: Date.now(),
       productDiff: productDiff,
-      linesAdded: linesAdded > 0 ? linesAdded : (logData.iteration === 0 && linesAdded === 0 ? 0 : undefined),
+      linesAdded: linesAdded > 0 ? linesAdded : (logData.iteration === 0 && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
       linesRemoved: linesRemoved > 0 ? linesRemoved : undefined,
       readabilityScoreFlesch: logData.readabilityScoreFlesch,
       fileProcessingInfo: logData.fileProcessingInfo,
@@ -155,10 +273,14 @@ export const useProcessState = () => {
       processedProductHead: logData.processedProductHead,
       processedProductTail: logData.processedProductTail,
       processedProductLengthChars: logData.processedProductLengthChars,
+      attemptCount: logData.attemptCount,
+      strategyRationale: logData.strategyRationale,
+      currentModelForIteration: logData.currentModelForIteration,
+      activeMetaInstruction: logData.activeMetaInstruction,
     };
 
     setState(prev => {
-        const existingEntryIndex = prev.iterationHistory.findIndex(entry => entry.iteration === newEntry.iteration);
+        const existingEntryIndex = prev.iterationHistory.findIndex(entry => entry.iteration === newEntry.iteration && entry.attemptCount === newEntry.attemptCount);
         let updatedHistory;
         if (existingEntryIndex !== -1) {
             updatedHistory = [...prev.iterationHistory];
@@ -166,7 +288,10 @@ export const useProcessState = () => {
         } else {
             updatedHistory = [...prev.iterationHistory, newEntry];
         }
-        updatedHistory.sort((a, b) => a.iteration - b.iteration);
+        updatedHistory.sort((a, b) => {
+            if (a.iteration === b.iteration) return (a.attemptCount || 0) - (b.attemptCount || 0);
+            return a.iteration - b.iteration;
+        });
         return { ...prev, iterationHistory: updatedHistory };
     });
   }, []);
@@ -174,29 +299,32 @@ export const useProcessState = () => {
 
   const handleReset = useCallback(async (
         baseModelConfig: ModelConfig,
-        baseModelParameterAdvice: ParameterAdvice,
-        baseModelConfigRationales: string[],
         currentSavedPlanTemplates: PlanTemplate[]
     ) => {
     const resetApiKeyStatus = geminiService.isApiKeyAvailable() ? 'loaded' : 'missing';
-    const resetSelectedModelName = geminiService.DEFAULT_MODEL_NAME as SelectableModelName;
+    const resetSelectedModelName = geminiService.DEFAULT_MODEL_NAME;
 
     const initialStateFromCreator = createInitialProcessState(resetApiKeyStatus, resetSelectedModelName);
 
+    const initialComplexity = calculateInputComplexity(initialStateFromCreator.initialPrompt, initialStateFromCreator.loadedFiles);
+
     const resetState: ProcessState = {
-        ...initialStateFromCreator,
+        ...initialStateFromCreator, // This sets defaults for strategistInfluenceLevel and stagnationNudgeAggressiveness
         apiKeyStatus: resetApiKeyStatus,
         selectedModelName: resetSelectedModelName,
-        statusMessage: "System reset. Load input file(s) to begin.",
+        currentModelForIteration: resetSelectedModelName,
+        statusMessage: "System reset. Load input file(s) or type prompt to begin.",
         aiProcessInsight: "System reset. Ready for new input.",
-        savedPlanTemplates: currentSavedPlanTemplates,
-        projectId: await storageService.hasSavedState() ? state.projectId : null,
-        stagnationNudgeEnabled: true, 
-        currentDiffViewType: 'words', 
+        savedPlanTemplates: currentSavedPlanTemplates, // Preserve user's saved templates
+        projectId: await storageService.hasSavedState() ? state.projectId : null, // Preserve existing projectId if auto-save existed
+        stagnationNudgeEnabled: true,
+        currentDiffViewType: 'words',
+        inputComplexity: initialComplexity,
+        currentAppliedModelConfig: baseModelConfig, // Use the provided base config for the initial reset state
     };
     setState(resetState);
 
-  }, [state.projectId]);
+  }, [state.projectId]); // state.projectId ensures we don't unintentionally clear a loaded project's ID
 
 
   return {
@@ -205,5 +333,6 @@ export const useProcessState = () => {
     handleLoadedFilesChange,
     addLogEntry,
     handleReset,
+    handleInitialPromptChange,
   };
 };

@@ -1,28 +1,29 @@
+
 import { useState, useEffect, useCallback } from 'react';
-import type { ModelConfig, SettingsSuggestionSource, ParameterAdvice, ModelParameterGuidance, SuggestedParamsResponse, StagnationInfo } from '../types.ts';
+import type { ModelConfig, SettingsSuggestionSource, ParameterAdvice, ModelParameterGuidance, SuggestedParamsResponse, StagnationInfo, NudgeStrategy, SelectableModelName } from '../types.ts';
 import * as geminiService from '../services/geminiService';
 
-// Stagnation Nudge constants
-const STAGNATION_TEMP_NUDGE = 0.05;
-const STAGNATION_TOPP_NUDGE = 0.02;
-const STAGNATION_TOPK_NUDGE_FACTOR = 1.1; // Multiplicative, e.g., 1.1 for 10% wider
-const STAGNATION_NUDGE_IGNORE_AFTER_ITERATION_PERCENT = 0.80; // Don't nudge if 80% or more iterations are done
+export const STAGNATION_TEMP_NUDGE_LIGHT = 0.05;
+export const STAGNATION_TOPP_NUDGE_LIGHT = 0.02;
+export const STAGNATION_TOPK_NUDGE_FACTOR_LIGHT = 1.05; // Multiplicative factor
 
-const DETERMINISTIC_TARGET_ITERATION = 40; // Target iteration for parameters to become highly deterministic
+export const STAGNATION_TEMP_NUDGE_HEAVY = 0.10;
+export const STAGNATION_TOPP_NUDGE_HEAVY = 0.05;
+export const STAGNATION_TOPK_NUDGE_FACTOR_HEAVY = 1.15; // Multiplicative factor
+
+export const DETERMINISTIC_TARGET_ITERATION = 20; // Iteration by which Global Mode aims for deterministic params
+
+// STAGNATION_NUDGE_IGNORE_AFTER_ITERATION_PERCENT is now in useIterativeLogic
 
 export const useModelParameters = (
-    initialPrompt: string,
+    initialPromptText: string,
     loadedFilesCount: number,
     isPlanActive: boolean,
-    currentIterationFromState: number,
-    maxIterationsFromState: number,
-    stagnationInfo: StagnationInfo,
     promptChangedByFileLoad: boolean,
     onPromptChangedByFileLoadHandled: () => void,
     initialTemp: number = geminiService.CREATIVE_DEFAULTS.temperature,
     initialTopP: number = geminiService.CREATIVE_DEFAULTS.topP,
-    initialTopK: number = geminiService.CREATIVE_DEFAULTS.topK,
-    stagnationNudgeEnabled: boolean // Added for this phase
+    initialTopK: number = geminiService.CREATIVE_DEFAULTS.topK
 ) => {
   const [temperature, setTemperature] = useState(initialTemp);
   const [topP, setTopP] = useState(initialTopP);
@@ -51,7 +52,7 @@ export const useModelParameters = (
   useEffect(() => {
     if (userManuallyAdjustedSettings && !promptChangedByFileLoad) return;
 
-    const basisForSuggestion = initialPrompt;
+    const basisForSuggestion = initialPromptText;
     let baseConfigToUse: ModelConfig = isPlanActive ? { ...geminiService.GENERAL_BALANCED_DEFAULTS } : { ...geminiService.CREATIVE_DEFAULTS };
     let defaultRationales = isPlanActive ? [`Using general purpose defaults for plan stages.`] : [`Using creative starting defaults for Global Mode.`];
 
@@ -63,7 +64,7 @@ export const useModelParameters = (
         setTopK(suggestion.config.topK);
         setSettingsSuggestionSource(isPlanActive ? 'plan_stage' : (loadedFilesCount > 0 ? 'input' : 'mode'));
         setModelConfigRationales(suggestion.rationales);
-        setUserManuallyAdjustedSettings(false);
+        setUserManuallyAdjustedSettings(false); // This is a suggestion, not manual override yet
       } else {
         setTemperature(baseConfigToUse.temperature);
         setTopP(baseConfigToUse.topP);
@@ -84,12 +85,13 @@ export const useModelParameters = (
       setModelConfigRationales(["Error getting suggestions; using mode defaults."]);
       setUserManuallyAdjustedSettings(false);
     }
-  }, [initialPrompt, loadedFilesCount, isPlanActive, userManuallyAdjustedSettings, promptChangedByFileLoad, onPromptChangedByFileLoadHandled]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPromptText, loadedFilesCount, isPlanActive, promptChangedByFileLoad, onPromptChangedByFileLoadHandled]); // userManuallyAdjustedSettings intentionally omitted to allow suggestions after manual change IF prompt/files change
 
   useEffect(() => {
     try {
       if (geminiService && typeof geminiService.getModelParameterGuidance === 'function') {
-        const guidance: ModelParameterGuidance = geminiService.getModelParameterGuidance({ temperature, topP, topK }, !isPlanActive);
+        const guidance: ModelParameterGuidance = geminiService.getModelParameterGuidance({ temperature, topP, topK, modelName: geminiService.DEFAULT_MODEL_NAME }, !isPlanActive);
         setModelConfigWarnings(guidance.warnings);
         setModelParameterAdvice(guidance.advice);
       } else {
@@ -104,46 +106,9 @@ export const useModelParameters = (
   }, [temperature, topP, topK, isPlanActive]);
 
 
-  const getCalculatedModelConfigForIteration = useCallback((iterNum: number, maxIterScope: number): ModelConfig => {
-    if (isPlanActive) {
-      return { temperature, topP, topK };
-    }
-
-    const startCreativeConfig: ModelConfig = { temperature, topP, topK };
-    const focusedEndConfig: ModelConfig = geminiService.FOCUSED_END_DEFAULTS;
-
-    const safeCurrentIteration = Math.max(1, iterNum);
-    const sweepEffectiveDuration = Math.min(maxIterScope, DETERMINISTIC_TARGET_ITERATION);
-    const effectiveMaxSweepIter = Math.max(1, sweepEffectiveDuration);
-
-    let interpolationFactor: number;
-    if (safeCurrentIteration >= effectiveMaxSweepIter) {
-        interpolationFactor = 1.0;
-    } else if (effectiveMaxSweepIter === 1) {
-        interpolationFactor = 1.0;
-    } else {
-        interpolationFactor = (safeCurrentIteration - 1) / (effectiveMaxSweepIter - 1);
-    }
-
-    let iterTemp = startCreativeConfig.temperature - interpolationFactor * (startCreativeConfig.temperature - focusedEndConfig.temperature);
-    let iterTopP = startCreativeConfig.topP - interpolationFactor * (startCreativeConfig.topP - focusedEndConfig.topP);
-    let iterTopK = Math.max(1, Math.round(startCreativeConfig.topK - interpolationFactor * (startCreativeConfig.topK - focusedEndConfig.topK)));
-
-    const iterationProgressPercentInScope = maxIterScope > 0 ? safeCurrentIteration / maxIterScope : 0;
-
-    if (stagnationInfo.isStagnant && stagnationNudgeEnabled && iterationProgressPercentInScope < STAGNATION_NUDGE_IGNORE_AFTER_ITERATION_PERCENT) {
-        console.log(`Applying stagnation nudge for iteration ${safeCurrentIteration} in scope of ${maxIterScope}. Consecutive stagnant: ${stagnationInfo.consecutiveStagnantIterations}`);
-        iterTemp = Math.min(startCreativeConfig.temperature, iterTemp + STAGNATION_TEMP_NUDGE);
-        iterTopP = Math.min(startCreativeConfig.topP, iterTopP + STAGNATION_TOPP_NUDGE);
-        iterTopK = Math.min(startCreativeConfig.topK, Math.max(1, Math.round(iterTopK * STAGNATION_TOPK_NUDGE_FACTOR)));
-    }
-
-    return {
-      temperature: Math.max(0, Math.min(2.0, iterTemp)),
-      topP: Math.max(0, Math.min(1.0, iterTopP)),
-      topK: Math.max(1, iterTopK),
-    };
-  }, [isPlanActive, temperature, topP, topK, stagnationInfo, stagnationNudgeEnabled]);
+  const getUserSetBaseConfig = useCallback((): ModelConfig => {
+    return { temperature, topP, topK };
+  }, [temperature, topP, topK]);
 
   return {
     temperature,
@@ -157,7 +122,7 @@ export const useModelParameters = (
     handleTemperatureChange,
     handleTopPChange,
     handleTopKChange,
-    getCalculatedModelConfigForIteration,
+    getUserSetBaseConfig,
     resetModelParametersToDefaults: (baseConfig?: ModelConfig) => {
         const configToUse = baseConfig || (isPlanActive ? geminiService.GENERAL_BALANCED_DEFAULTS : geminiService.CREATIVE_DEFAULTS);
         const rationales = isPlanActive ? [`Settings reset to general defaults for plan stages.`] : [`Settings reset to creative starting defaults for Global Mode.`];

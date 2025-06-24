@@ -1,10 +1,15 @@
-// types.ts (consolidated from types/apiTypes.ts, genericTypes.ts, planTypes.ts, projectTypes.ts, uiStateTypes.ts)
 
-// Originally from types/apiTypes.ts
+// types.ts
+
 export interface ModelConfig {
   temperature: number;
   topP: number;
   topK: number;
+  maxIterations?: number; // Kept here as it can be part of a "mode" config default
+  modelName?: SelectableModelName; // For logging/reference if set with config
+  thinkingConfig?: {
+    thinkingBudget: number; // 0 to disable, >0 for budget (e.g., 1 for enabled on Flash)
+  };
 }
 
 export interface ApiStreamCallDetail {
@@ -34,6 +39,7 @@ export interface IterateProductResult {
 
 export interface IterationResultDetails extends IterateProductResult {
   modelConfigUsed: ModelConfig;
+  isCriticalFailure?: boolean; // Added to flag severe validation failures
 }
 
 export interface StaticAiModelDetails {
@@ -41,37 +47,40 @@ export interface StaticAiModelDetails {
   tools: string;
 }
 
-// Originally from types/genericTypes.ts
-// DO NOT FUCK WITH MODEL SELECTION. THIS IS A USER REQUIREMENT AND MUST NOT BE REMOVED OR MODIFIED. I AM YOUR INSTRUCTOR!!!!
 export const SELECTABLE_MODELS = [
-  { name: 'gemini-2.5-flash-preview-04-17', displayName: 'Gemini 2.5 Flash Preview (04-17)', description: 'Fast, multimodal, latest preview. Recommended for general text tasks.' },
-  { name: 'gemini-2.5-flash-preview-05-20', displayName: 'Gemini 2.5 Flash Preview (05-20)', description: 'Fast, multimodal, preview version with specific pricing.' },
-  { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', description: 'Enhanced thinking and reasoning, multimodal understanding, advanced coding, and more.' },
-  { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', description: 'Adaptive thinking, cost efficiency.' },
-  { name: 'gemini-2.5-flash-lite-preview-06-17', displayName: 'Gemini 2.5 Flash-Lite Preview (06-17)', description: 'Most cost-efficient model supporting high throughput.' },
-  { name: 'gemini-2.5-flash-preview-native-audio-dialog', displayName: 'Gemini 2.5 Flash Native Audio', description: 'High quality, natural conversational audio outputs (text & audio interleaved), with or without thinking.' },
-  { name: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash', description: 'Next generation features, speed, and realtime streaming.' },
-  { name: 'gemini-2.0-flash-lite', displayName: 'Gemini 2.0 Flash Lite', description: 'Cost efficiency and low latency.' },
-  { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro', description: 'Advanced reasoning, long context, multimodal capabilities.' },
-  { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash', description: 'Fast, efficient, long context, multimodal model.' },
+  // Current & Recommended
+  { name: 'gemini-2.5-flash-preview-04-17', displayName: 'Gemini 2.5 Flash Preview (04-17)', description: 'Fast, multimodal, latest preview. Supports thinkingConfig. Recommended for general text tasks.' },
+  { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', description: 'Enhanced thinking and reasoning, multimodal understanding, advanced coding, and more. (No thinkingConfig)' },
+  
+  // All other models as requested by user, including those previously marked deprecated
+  { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro (Legacy)', description: 'Advanced reasoning, long context, multimodal capabilities. (No thinkingConfig)' },
+  { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash (Legacy)', description: 'Fast, efficient, long context, multimodal model. (No thinkingConfig)' },
+  { name: 'gemini-pro', displayName: 'Gemini Pro (Legacy)', description: 'General purpose model for text generation, chat, and code. (No thinkingConfig)'},
+  
+  // Older models, included per user request (functionality may vary, thinkingConfig likely not supported)
+  { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash (User Requested)', description: 'Adaptive thinking, cost efficiency. (Check API for thinkingConfig support)' },
+  { name: 'gemini-2.5-flash-lite-preview-06-17', displayName: 'Gemini 2.5 Flash-Lite Preview (06-17, User Requested)', description: 'Most cost-efficient model supporting high throughput. (Likely no thinkingConfig)' },
+  { name: 'gemini-2.5-flash-preview-05-20', displayName: 'Gemini 2.5 Flash Preview (05-20, User Requested)', description: 'Fast, multimodal, preview version. (Check API for thinkingConfig support)' },
+  { name: 'gemini-2.5-flash-preview-native-audio-dialog', displayName: 'Gemini 2.5 Flash Native Audio (User Requested)', description: 'High quality conversational audio outputs. (May have implicit thinking)' },
+  { name: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash (User Requested)', description: 'Next generation features, speed. (Likely no thinkingConfig)' },
+  { name: 'gemini-2.0-flash-lite', displayName: 'Gemini 2.0 Flash Lite (User Requested)', description: 'Cost efficiency and low latency. (Likely no thinkingConfig)' },
 ] as const;
 
+
 export type SelectableModelName = typeof SELECTABLE_MODELS[number]['name'];
-export type SettingsSuggestionSource = 'mode' | 'input' | 'manual' | 'plan_stage';
-// DiffViewType is simplified as 'words' will be the only view.
-export type DiffViewType = 'words'; // Simplified, effectively 'words' only now
+export type SettingsSuggestionSource = 'mode' | 'input' | 'manual' | 'plan_stage' | 'strategy_service';
+export type DiffViewType = 'words';
 export const THIS_APP_ID = "com.autologos.iterativeengine";
 export const APP_VERSION = "1.0.0";
+
 export interface ReconstructedProductResult {
   product: string;
   error?: string;
 }
 
-// Originally from types/planTypes.ts
 export type OutputLength = 'shorter' | 'same' | 'longer' | 'much_longer' | 'auto';
 export type OutputFormat = 'paragraph' | 'key_points' | 'outline' | 'json' | 'auto';
 export type OutputComplexity = 'simplify' | 'maintain' | 'enrich' | 'auto';
-export type RefinementFocus = 'improve_clarity' | 'expand_elaborate' | 'condense_summarize' | 'restructure_auto_format' | 'maintain_polish';
 
 export interface PlanStage {
   id: string;
@@ -82,7 +91,7 @@ export interface PlanStage {
   outputParagraphShowHeadings?: boolean;
   outputParagraphMaxHeadingDepth?: number;
   outputParagraphNumberedHeadings?: boolean;
-  customInstruction?: string; 
+  customInstruction?: string;
 }
 
 export interface PlanTemplate {
@@ -90,10 +99,7 @@ export interface PlanTemplate {
   stages: PlanStage[];
 }
 
-// Originally from types/projectTypes.ts
 export const AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION = "AutologosProjectFile/1.0";
-export const PORTABLE_DIFFS_FILE_FORMAT_VERSION = "AutologosPortableDiffs/1.0";
-
 
 export interface ThemeHints {
   primaryColor?: string;
@@ -122,6 +128,34 @@ export interface ProjectFileHeader {
   appManifest?: AppManifestEntry[];
 }
 
+export interface IterationLogEntry {
+  iteration: number;
+  productSummary: string;
+  status: string;
+  timestamp: number;
+  productDiff?: string;
+  linesAdded?: number;
+  linesRemoved?: number;
+  readabilityScoreFlesch?: number;
+  fileProcessingInfo: FileProcessingInfo;
+  promptSystemInstructionSent?: string;
+  promptCoreUserInstructionsSent?: string;
+  promptFullUserPromptSent?: string;
+  apiStreamDetails?: ApiStreamCallDetail[];
+  modelConfigUsed?: ModelConfig;
+  aiValidationInfo?: AiResponseValidationInfo;
+  directAiResponseHead?: string;
+  directAiResponseTail?: string;
+  directAiResponseLengthChars?: number;
+  processedProductHead?: string;
+  processedProductTail?: string;
+  processedProductLengthChars?: number;
+  attemptCount?: number;
+  strategyRationale?: string;
+  currentModelForIteration?: SelectableModelName;
+  activeMetaInstruction?: string;
+}
+
 export interface AutologosIterativeEngineData {
   initialPrompt: string;
   iterationHistory: IterationLogEntry[];
@@ -146,12 +180,15 @@ export interface AutologosIterativeEngineData {
   planStages?: PlanStage[];
   currentPlanStageIndex?: number | null;
   savedPlanTemplates?: PlanTemplate[];
-  currentDiffViewType?: DiffViewType; // Will be fixed to 'words'
+  currentDiffViewType?: DiffViewType;
   projectName?: string | null;
   projectId?: string | null;
   isApiRateLimited?: boolean;
   rateLimitCooldownActiveSeconds?: number;
-  stagnationNudgeEnabled?: boolean; 
+  stagnationNudgeEnabled?: boolean;
+  inputComplexity?: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
+  strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
+  stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 export interface AutologosProjectFile {
@@ -161,24 +198,6 @@ export interface AutologosProjectFile {
   };
 }
 
-// New types for Portable Diffs File
-export interface PortableDiffEntry {
-  iteration: number;
-  productDiff: string | null; // Line-based patch string
-}
-
-export interface PortableDiffsFile {
-  portableDiffsVersion: typeof PORTABLE_DIFFS_FILE_FORMAT_VERSION;
-  projectId: string | null;
-  projectName: string | null;
-  exportedAt: string; // ISO date string
-  appVersion: string;
-  initialPromptManifest: string;
-  diffs: PortableDiffEntry[];
-}
-
-
-// Originally from types/uiStateTypes.ts
 export interface LoadedFile {
   name: string;
   mimeType: string;
@@ -190,6 +209,7 @@ export interface ParameterAdvice {
   temperature?: string;
   topP?: string;
   topK?: string;
+  thinkingConfig?: string;
 }
 
 export interface ModelParameterGuidance {
@@ -202,6 +222,7 @@ export interface FileProcessingInfo {
   numberOfFilesActuallySent: number;
   totalFilesSizeBytesSent: number;
   fileManifestProvidedCharacterCount: number;
+  loadedFilesForIterationContext?: LoadedFile[];
 }
 
 export type ReductionDetailValue = {
@@ -211,58 +232,53 @@ export type ReductionDetailValue = {
   newWordCount: number;
   percentageCharChange: number;
   percentageWordChange: number;
-  thresholdUsed: string; // e.g., "EXTREME_REDUCTION_PERCENT_LT_0.20" or "DRASTIC_REDUCTION_ABSOLUTE_WORDS_GT_500"
-  additionalInfo?: string; // For things like found error phrase during reduction, or new product very short
+  thresholdUsed: string;
+  additionalInfo?: string;
 };
+
+export interface PromptLeakageDetailValue {
+  marker: string;
+  snippet: string;
+}
 
 export interface AiResponseValidationInfo {
   checkName: string;
   passed: boolean;
   reason?: string;
   details?: {
-    type: 
-      | 'error_phrase' 
-      | 'empty_json' 
-      | 'invalid_json' 
+    type:
+      | 'error_phrase'
+      | 'empty_json'
+      | 'invalid_json'
       | 'passed'
-      | 'extreme_reduction_error' 
-      | 'drastic_reduction_error_plan_mode' 
-      | 'drastic_reduction_tolerated_global_mode'
+      | 'extreme_reduction_error' // Uninstructed extreme reduction
+      | 'drastic_reduction_error_plan_mode' // Uninstructed drastic reduction in plan mode
+      | 'drastic_reduction_tolerated_global_mode' // Uninstructed drastic reduction tolerated in global mode
       | 'prompt_leakage'
-      | 'extreme_reduction_tolerated_global_mode'; // New type for adapted extreme reduction
-    value?: string | ReductionDetailValue | Record<string, any>; 
+      | 'extreme_reduction_tolerated_global_mode' // Instructed extreme reduction tolerated
+      | 'error_phrase_with_significant_reduction' // Error phrase + significant reduction (>20%)
+      | 'extreme_reduction_instructed_but_with_error_phrase' // Instructed to shorten, but also has error phrase
+      | 'drastic_reduction_with_error_phrase' // Drastic reduction + error phrase
+      | 'initial_synthesis_failed_large_output'; // Iteration 1 output is excessively large relative to input
+    value?: string | ReductionDetailValue | PromptLeakageDetailValue | { [key: string]: any };
   };
 }
 
-export interface IterationLogEntry {
-  iteration: number;
-  productSummary: string;
-  status: string;
-  timestamp: number;
-  productDiff?: string; // Diff will always be word-based if generated
-  linesAdded?: number;
-  linesRemoved?: number;
-  readabilityScoreFlesch?: number;
-  fileProcessingInfo?: FileProcessingInfo;
-  promptSystemInstructionSent?: string;
-  promptCoreUserInstructionsSent?: string;
-  promptFullUserPromptSent?: string;
-  apiStreamDetails?: ApiStreamCallDetail[];
-  modelConfigUsed?: ModelConfig;
-  aiValidationInfo?: AiResponseValidationInfo;
-  // Renamed and new fields for product details
-  directAiResponseHead?: string; // Head of the direct AI output stream
-  directAiResponseTail?: string; // Tail of the direct AI output stream
-  directAiResponseLengthChars?: number; // Length of the direct AI output stream
-  processedProductHead?: string; // Head of the product after cleaning/parsing (used for next iter)
-  processedProductTail?: string; // Tail of the product after cleaning/parsing
-  processedProductLengthChars?: number; // Length of the product after cleaning/parsing
+export interface CommonControlProps {
+  commonInputClasses: string;
+  commonSelectClasses: string;
+  commonCheckboxLabelClasses: string;
+  commonCheckboxInputClasses: string;
+  commonButtonClasses: string;
 }
+
+export type NudgeStrategy = 'none' | 'params_light' | 'params_heavy' | 'meta_instruct';
 
 export interface StagnationInfo {
   isStagnant: boolean;
   consecutiveStagnantIterations: number;
   similarityWithPrevious?: number;
+  nudgeStrategyApplied: NudgeStrategy;
 }
 
 export interface ProcessState {
@@ -270,7 +286,7 @@ export interface ProcessState {
   currentProduct: string | null;
   iterationHistory: IterationLogEntry[];
   currentIteration: number;
-  maxIterations: number; 
+  maxIterations: number;
   isProcessing: boolean;
   finalProduct: string | null;
   statusMessage: string;
@@ -282,125 +298,62 @@ export interface ProcessState {
   projectId: string | null;
   projectName: string | null;
   projectObjective: string | null;
-  otherAppsData: { [appId: string]: any };
   lastAutoSavedAt?: number | null;
   currentProductBeforeHalt?: string | null;
   currentIterationBeforeHalt?: number;
-  promptChangedByFileLoad?: boolean;
+  promptChangedByFileLoad: boolean;
   outputParagraphShowHeadings: boolean;
   outputParagraphMaxHeadingDepth: number;
   outputParagraphNumberedHeadings: boolean;
+  aiProcessInsight?: string;
+  currentAppliedModelConfig?: ModelConfig | null;
+  stagnationNudgeEnabled: boolean;
+  stagnationInfo: StagnationInfo;
   isPlanActive: boolean;
   planStages: PlanStage[];
   currentPlanStageIndex: number | null;
   currentStageIteration: number;
   savedPlanTemplates: PlanTemplate[];
-  currentDiffViewType: DiffViewType; // Will be fixed to 'words'
-  aiProcessInsight?: string;
+  currentDiffViewType: DiffViewType;
   isApiRateLimited?: boolean;
   rateLimitCooldownActiveSeconds?: number;
-  currentAppliedModelConfig?: ModelConfig | null; 
-  stagnationNudgeEnabled: boolean; 
+  inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
+  currentModelForIteration?: SelectableModelName;
+  activeMetaInstructionForNextIter?: string;
+  strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL'; // Non-optional
+  stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH'; // Non-optional
 }
 
-
-// Context Types
-export interface ApplicationContextType {
-  apiKeyStatus: 'loaded' | 'missing';
-  selectedModelName: SelectableModelName;
-  projectName: string | null;
-  projectId: string | null;
-  isApiRateLimited: boolean;
-  rateLimitCooldownActiveSeconds: number;
-  updateProcessState: (updates: Partial<Pick<ProcessState, 'apiKeyStatus' | 'selectedModelName' | 'projectName' | 'projectId' | 'isApiRateLimited' | 'rateLimitCooldownActiveSeconds' >>) => void; 
-  handleImportProjectData: (projectFile: AutologosProjectFile) => void; // Changed from handleImportProject(file:File)
-  handleExportProject: () => void;
-  handleExportPortableDiffs: () => void;
-  handleRateLimitErrorEncountered: () => void;
-  staticAiModelDetails: StaticAiModelDetails | null;
-  onSelectedModelChange: (modelName: SelectableModelName) => void;
-  // New handler for unified file input, to be implemented in App.tsx
-  onFileSelectedForImport: (file: File) => Promise<void>;
-}
-
-export interface ProcessContextType {
-  initialPrompt: string;
-  currentProduct: string | null;
-  iterationHistory: IterationLogEntry[];
-  currentIteration: number;
-  isProcessing: boolean;
-  finalProduct: string | null;
-  statusMessage: string;
-  loadedFiles: LoadedFile[];
-  promptSourceName: string | null;
-  configAtFinalization: ModelConfig | null;
-  projectObjective: string | null; 
-  lastAutoSavedAt?: number | null; 
-  currentProductBeforeHalt?: string | null;
-  currentIterationBeforeHalt?: number;
-  promptChangedByFileLoad?: boolean;
-  outputParagraphShowHeadings: boolean;
-  outputParagraphMaxHeadingDepth: number;
-  outputParagraphNumberedHeadings: boolean;
-  aiProcessInsight?: string;
-  currentAppliedModelConfig?: ModelConfig | null; 
-  stagnationNudgeEnabled: boolean; 
-  updateProcessState: (updates: Partial<Omit<ProcessState, 'apiKeyStatus' | 'selectedModelName' | 'projectName' | 'projectId' | 'isApiRateLimited' | 'rateLimitCooldownActiveSeconds' | 'isPlanActive' | 'planStages' | 'currentPlanStageIndex' | 'currentStageIteration' | 'savedPlanTemplates' | 'temperature' | 'topP' | 'topK' | 'maxIterations' | 'settingsSuggestionSource' | 'userManuallyAdjustedSettings'>>) => void;
-  handleLoadedFilesChange: (files: LoadedFile[]) => void;
-  addLogEntry: (logData: Omit<Parameters<typeof import('../hooks/useProcessState')['useProcessState'] extends () => any ? ReturnType<typeof import('../hooks/useProcessState')['useProcessState']>['addLogEntry'] : never>[0], 'previousFullProduct'> & { previousFullProduct?: string | null }) => void;
-  handleResetApp: () => Promise<void>; 
-  handleStartProcess: () => Promise<void>; 
-  handleHaltProcess: () => void; 
-  handleRewind: (iterationNumber: number) => void;
-  handleExportIterationMarkdown: (iterationNumber: number) => void;
-  reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[], basePrompt: string) => ReconstructedProductResult;
-  currentDiffViewType: DiffViewType; // Will be fixed to 'words'
-}
-
-export interface ModelConfigContextType {
-  temperature: number;
-  topP: number;
-  topK: number;
-  maxIterations: number; 
-  settingsSuggestionSource: SettingsSuggestionSource;
-  userManuallyAdjustedSettings: boolean;
-  modelConfigRationales: string[];
-  modelParameterAdvice: ParameterAdvice;
-  modelConfigWarnings: string[];
-  handleTemperatureChange: (value: number) => void;
-  handleTopPChange: (value: number) => void;
-  handleTopKChange: (value: number) => void;
-  onMaxIterationsChange: (value: number) => void;
-  setUserManuallyAdjustedSettings: (value: boolean) => void;
-}
-
-export interface PlanContextType {
-  isPlanActive: boolean;
-  planStages: PlanStage[];
-  currentPlanStageIndex: number | null;
-  currentStageIteration: number;
-  savedPlanTemplates: PlanTemplate[];
-  planTemplateStatus: string;
-  updateProcessState: (updates: Partial<Pick<ProcessState, 'isPlanActive' | 'planStages' | 'currentPlanStageIndex' | 'currentStageIteration' | 'savedPlanTemplates'>>) => void; 
-  onIsPlanActiveChange: (isActive: boolean) => void;
-  onPlanStagesChange: (stages: PlanStage[]) => void;
-  handleSavePlanAsTemplate: (templateName: string, stages: PlanStage[]) => void;
-  handleDeletePlanTemplate: (templateName: string) => void;
-  clearPlanTemplateStatus: () => void;
-  onLoadPlanTemplate: (template: PlanTemplate) => void;
-}
-
-export interface CommonControlProps {
-    commonInputClasses: string;
-    commonSelectClasses?: string;
-    commonButtonClasses?: string;
-    commonCheckboxLabelClasses?: string;
-    commonCheckboxInputClasses?: string;
-}
-
-// Added for services/iterationUtils.ts
 export interface IsLikelyAiErrorResponseResult {
   isError: boolean;
   reason: string;
-  checkDetails?: AiResponseValidationInfo['details'];
+  checkDetails: AiResponseValidationInfo['details'];
+}
+
+export interface RetryContext {
+    previousErrorReason: string;
+    originalCoreInstructions: string;
+}
+export interface OutlineGenerationResult {
+    outline: string;
+    identifiedRedundancies: string;
+    errorMessage?: string;
+    apiDetails?: ApiStreamCallDetail[];
+}
+
+export interface ModelStrategy {
+    modelName: SelectableModelName;
+    config: ModelConfig;
+    rationale: string;
+    activeMetaInstruction?: string;
+}
+
+export interface StrategistAdvice {
+    suggestedModelName?: SelectableModelName;
+    suggestedThinkingBudget?: 0 | 1;
+    suggestedMetaInstruction?: string;
+    rationale: string;
+    suggestedTemperature?: number;
+    suggestedTopP?: number;
+    suggestedTopK?: number;
 }

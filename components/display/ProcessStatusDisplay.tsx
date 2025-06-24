@@ -1,26 +1,24 @@
 
+
 import React, { useState, useContext } from 'react';
 import { useProcessContext } from '../../contexts/ProcessContext';
 import { useApplicationContext } from '../../contexts/ApplicationContext';
-import { usePlanContext } from '../../contexts/PlanContext'; 
-import { useModelConfigContext } from '../../contexts/ModelConfigContext'; 
-
-// Props interface removed as all data comes from context or is local
-// interface ProcessStatusDisplayProps {}
+import { usePlanContext } from '../../contexts/PlanContext';
+import { useModelConfigContext } from '../../contexts/ModelConfigContext';
+import { SELECTABLE_MODELS, type ProcessState } from '../../types';
+import * as ModelStrategyService from '../../services/ModelStrategyService';
 
 const ProcessStatusDisplay: React.FC = () => {
   const processCtx = useProcessContext();
   const appCtx = useApplicationContext();
-  const planCtx = usePlanContext(); 
+  const planCtx = usePlanContext();
   const modelConfigCtx = useModelConfigContext();
-
 
   const [showConvergenceInfo, setShowConvergenceInfo] = useState(false);
   const convergenceTooltipText = `The AI signals convergence by prefixing its output with "CONVERGED:":
 - It believes the current Plan Stage goals or Global Mode refinement is maximally achieved.
 - OR the output is identical to the previous iteration.
 - Further changes would be trivial, purely stylistic, or detrimental.`;
-
 
   let progressPercentValue = 0;
   let progressText = "";
@@ -33,48 +31,42 @@ const ProcessStatusDisplay: React.FC = () => {
       for (let i = 0; i < planCtx.currentPlanStageIndex; i++) {
         completedIterationsInPreviousStages += planCtx.planStages[i].stageIterations;
       }
-      const overallCompletedIterations = completedIterationsInPreviousStages + planCtx.currentStageIteration;
+      const overallCompletedIterations = completedIterationsInPreviousStages + processCtx.currentStageIteration;
       progressPercentValue = totalPlanIterations > 0 ? (overallCompletedIterations / totalPlanIterations) * 100 : 0;
-      progressText = `Stage ${planCtx.currentPlanStageIndex + 1}/${planCtx.planStages.length} (Iter. ${planCtx.currentStageIteration}/${currentStage.stageIterations}) | Overall ${Math.round(progressPercentValue)}%`;
+      progressText = `Stage ${planCtx.currentPlanStageIndex + 1}/${planCtx.planStages.length} (Iter. ${processCtx.currentStageIteration}/${currentStage.stageIterations}) | Overall ${Math.round(progressPercentValue)}%`;
     } else {
       progressPercentValue = modelConfigCtx.maxIterations > 0 ? (processCtx.currentIteration / modelConfigCtx.maxIterations) * 100 : 0;
-      progressText = `Iteration ${processCtx.currentIteration > 0 ? processCtx.currentIteration : (processCtx.isProcessing ? 1 : 0)} / ${modelConfigCtx.maxIterations}`;
+      progressText = `Global Iter. ${processCtx.currentIteration > 0 ? processCtx.currentIteration : (processCtx.isProcessing ? 1 : 0)} / ${modelConfigCtx.maxIterations}`;
     }
   }
   const clampedProgressPercent = Math.min(100, Math.max(0, progressPercentValue));
 
   const checkAndRenderQuotaError = () => {
     if (!processCtx.aiProcessInsight && !appCtx.isApiRateLimited) return null;
-
     const lowerInsight = (processCtx.aiProcessInsight || "").toLowerCase();
-    // Check if the insight indicates a quota/rate limit issue, or if the app context flags it.
-    const isQuotaErrorIndicatedByInsight = 
-        lowerInsight.includes("api quota exceeded") || 
-        lowerInsight.includes("rate limit hit") || // Matches new message from geminiService
-        lowerInsight.includes("error 429") || 
+    const isQuotaErrorIndicatedByInsight =
+        lowerInsight.includes("api quota exceeded") ||
+        lowerInsight.includes("rate limit hit") ||
+        lowerInsight.includes("error 429") ||
         lowerInsight.includes("resource_exhausted");
 
     if (appCtx.isApiRateLimited || isQuotaErrorIndicatedByInsight) {
       const rateLimitUrl = "https://ai.google.dev/gemini-api/docs/rate-limits";
-      const modelName = appCtx.selectedModelName || "the selected model";
+      const modelNameInUse = processCtx.currentModelForIteration || appCtx.selectedModelName || "the selected model";
+      const modelDisplayName = SELECTABLE_MODELS.find(m => m.name === modelNameInUse)?.displayName || modelNameInUse;
       let originalApiMessage = "";
+      const originalMsgMatch = (processCtx.aiProcessInsight || "").match(/Original(?: API Message)?:\s*"(.*?)"/i);
 
-      // Try to extract the specific "Original API message: "..." part
-      const originalMsgMatch = (processCtx.aiProcessInsight || "").match(/Original API message:\s*"(.*?)"$/i);
       if (originalMsgMatch && originalMsgMatch[1]) {
         originalApiMessage = originalMsgMatch[1].trim();
-      } else if (appCtx.isApiRateLimited) { 
-        // Fallback if the specific format isn't found but we know it's a rate limit from app context
+      } else if (appCtx.isApiRateLimited) {
         originalApiMessage = `The API rate limit is currently active. Please wait for the cooldown (${appCtx.rateLimitCooldownActiveSeconds}s).`;
         if (processCtx.aiProcessInsight && !isQuotaErrorIndicatedByInsight) {
-           // If aiProcessInsight doesn't seem to be about quota but rate limit is active, append it.
            originalApiMessage += ` General AI Insight: ${processCtx.aiProcessInsight}`;
         } else if (processCtx.aiProcessInsight) {
-           // If aiProcessInsight also indicated quota, but wasn't parsed, it might be the only detail.
            originalApiMessage = processCtx.aiProcessInsight;
         }
       } else if (processCtx.aiProcessInsight) {
-        // If not caught by specific regex and not appCtx.isApiRateLimited, but insight *still* indicates quota
         originalApiMessage = processCtx.aiProcessInsight;
       }
 
@@ -86,13 +78,13 @@ const ProcessStatusDisplay: React.FC = () => {
             <div>
               <h3 className="text-md font-semibold mb-1">API Quota Limit Reached or Cooldown Active</h3>
               <p className="text-sm mb-2">
-                The process may be halted or delayed due to API quota limits for model <strong className="font-semibold">{modelName}</strong> or an active cooldown period.
+                The process may be halted or delayed due to API quota limits for model <strong className="font-semibold">{modelDisplayName}</strong> or an active cooldown period.
               </p>
               <p className="text-sm mb-2">
                 <strong>Suggestions:</strong>
                 <ul className="list-disc list-inside ml-4 mt-1 space-y-0.5">
                   <li>Check your Gemini API plan and billing details.</li>
-                  <li>Try selecting a different model from the dropdown (if available and not processing).</li>
+                  <li>Try selecting a different model preference from the dropdown (if available and not processing). The system will consider this for future strategy.</li>
                   <li>Wait for your quota to reset or the cooldown period ({appCtx.rateLimitCooldownActiveSeconds > 0 ? `${appCtx.rateLimitCooldownActiveSeconds}s` : 'to end'}).</li>
                 </ul>
               </p>
@@ -101,7 +93,7 @@ const ProcessStatusDisplay: React.FC = () => {
               </p>
               {originalApiMessage && (
                 <details className="text-xs mt-2">
-                  <summary className="cursor-pointer hover:underline">Details / Original API Message</summary>
+                  <summary className="cursor-pointer hover:underline">Details / Original Message</summary>
                   <p className="mt-1 p-2 bg-yellow-100/50 dark:bg-yellow-600/30 rounded break-words">{originalApiMessage}</p>
                 </details>
               )}
@@ -114,11 +106,60 @@ const ProcessStatusDisplay: React.FC = () => {
   };
 
   const quotaErrorDisplay = checkAndRenderQuotaError();
-  
-  let dynamicInsightText = processCtx.aiProcessInsight;
-  if (processCtx.isProcessing && !planCtx.isPlanActive && processCtx.currentAppliedModelConfig) {
-    const { temperature, topP, topK } = processCtx.currentAppliedModelConfig;
-    dynamicInsightText = `Global Mode: AI refining (Iter ${processCtx.currentIteration}/${modelConfigCtx.maxIterations}). Current Params: T:${temperature.toFixed(2)}, P:${topP.toFixed(2)}, K:${topK}. ${processCtx.aiProcessInsight || ''}`;
+
+  let dynamicInsightText = "";
+  const modelNameInUse = processCtx.currentModelForIteration || appCtx.selectedModelName || "N/A";
+  const modelDisplayName = SELECTABLE_MODELS.find(m => m.name === modelNameInUse)?.displayName || modelNameInUse;
+
+  let strategyRationaleText = processCtx.aiProcessInsight || 'System Idle. Ready for input.';
+  const lastLogEntry = processCtx.iterationHistory.length > 0 ? processCtx.iterationHistory[processCtx.iterationHistory.length - 1] : null;
+
+  if (processCtx.isProcessing) {
+    if (lastLogEntry && lastLogEntry.iteration === processCtx.currentIteration) { // For the iteration *just completed* or currently being logged
+        strategyRationaleText = lastLogEntry.strategyRationale || processCtx.aiProcessInsight || 'Evaluating strategy...';
+    } else if (lastLogEntry && lastLogEntry.iteration === processCtx.currentIteration -1) { // For the *next* iteration about to run, use current aiProcessInsight
+        strategyRationaleText = processCtx.aiProcessInsight || 'Preparing next strategy...';
+    }
+
+
+    const modelConfig = processCtx.currentAppliedModelConfig;
+    let modelDetails = `Using: ${modelDisplayName}`;
+    if (modelConfig) {
+        modelDetails += ` (T:${modelConfig.temperature.toFixed(2)}, P:${modelConfig.topP.toFixed(2)}, K:${modelConfig.topK}${modelConfig.thinkingConfig !== undefined ? `, Budget:${modelConfig.thinkingConfig.thinkingBudget}` : ''})`;
+    }
+
+    let nudgeInfo = "";
+    if (processCtx.stagnationInfo.nudgeStrategyApplied !== 'none') {
+      switch (processCtx.stagnationInfo.nudgeStrategyApplied) {
+        case 'params_light': nudgeInfo = "(Nudge: Light Parameter Adjustment)"; break;
+        case 'params_heavy': nudgeInfo = "(Nudge: Heavy Parameter Adjustment)"; break;
+        case 'meta_instruct':
+          nudgeInfo = "(Nudge: AI Meta-Guidance";
+          if (processCtx.activeMetaInstructionForNextIter) {
+            const snippet = processCtx.activeMetaInstructionForNextIter.length > 30
+                            ? processCtx.activeMetaInstructionForNextIter.substring(0, 27) + "..."
+                            : processCtx.activeMetaInstructionForNextIter;
+            nudgeInfo += `: '${snippet}'`;
+          }
+          nudgeInfo += ")";
+          break;
+      }
+    }
+    const iterationNumberForDisplay = processCtx.currentIteration + 1;
+    const modeText = planCtx.isPlanActive ? `Plan Mode (Next: Stage ${ (processCtx.currentPlanStageIndex ?? -1) +1}, Iter ${processCtx.currentStageIteration + 1}).` 
+                                        : `Global Mode (Next: Iter ${iterationNumberForDisplay}/${modelConfigCtx.maxIterations}).`;
+    dynamicInsightText = `${modeText} ${modelDetails}${nudgeInfo ? ' ' + nudgeInfo : ''}. Strategy: ${strategyRationaleText}`;
+
+  } else if (processCtx.finalProduct) {
+      dynamicInsightText = `Process completed. Final product generated. Input Complexity: ${processCtx.inputComplexity || 'N/A'}. ${strategyRationaleText}`;
+  } else if (processCtx.currentProductBeforeHalt) {
+      dynamicInsightText = `Process Halted. Input Complexity: ${processCtx.inputComplexity || 'N/A'}. ${strategyRationaleText}`;
+  } else { // Idle state
+      const initialStrategyArgs: Pick<ProcessState, 'inputComplexity' | 'initialPrompt' | 'loadedFiles' | 'selectedModelName' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness'> = {
+        inputComplexity: processCtx.inputComplexity, initialPrompt: processCtx.initialPrompt, loadedFiles: processCtx.loadedFiles, selectedModelName: appCtx.selectedModelName, strategistInfluenceLevel: processCtx.strategistInfluenceLevel, stagnationNudgeAggressiveness: processCtx.stagnationNudgeAggressiveness
+      };
+      const initialStrategy = ModelStrategyService.determineInitialStrategy(initialStrategyArgs, modelConfigCtx);
+      dynamicInsightText = `Input Complexity: ${processCtx.inputComplexity || 'N/A'}. Initial Strategy: ${initialStrategy.rationale}`;
   }
 
 

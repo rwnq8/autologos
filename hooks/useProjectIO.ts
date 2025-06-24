@@ -1,14 +1,12 @@
 
-
 import { useCallback } from 'react';
-import type { ProcessState, AutologosProjectFile, AutologosIterativeEngineData, ProjectFileHeader, ModelConfig, LoadedFile, PlanTemplate, SettingsSuggestionSource, SelectableModelName, PortableDiffsFile, PortableDiffEntry, IterationLogEntry } from '../types.ts';
-import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION, PORTABLE_DIFFS_FILE_FORMAT_VERSION } from '../types.ts';
+import type { ProcessState, AutologosProjectFile, AutologosIterativeEngineData, ProjectFileHeader, ModelConfig, LoadedFile, PlanTemplate, SettingsSuggestionSource, SelectableModelName, IterationLogEntry } from '../types.ts';
+import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION, SELECTABLE_MODELS } from '../types.ts';
 import { generateFileName, DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils';
-import { reconstructProduct } from '../services/diffService'; 
-import { getProductSummary } from '../services/iterationUtils.ts';
-import { calculateFleschReadingEase } from '../services/textAnalysisService.ts';
+import { reconstructProduct } from '../services/diffService';
+import * as GeminaiService from '../services/geminiService';
 
-// Basic UUID v4 generator
+
 function uuidv4() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
@@ -17,26 +15,25 @@ function uuidv4() {
 }
 
 export const useProjectIO = (
-  stateRef: React.MutableRefObject<ProcessState>, 
-  modelParamsRef: React.MutableRefObject<{temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean}>, 
+  stateRef: React.MutableRefObject<ProcessState>,
+  modelParamsRef: React.MutableRefObject<{temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean}>,
   updateProcessState: (updates: Partial<ProcessState>) => void,
-  overwriteUserPlanTemplates: (templates: PlanTemplate[]) => void, 
-  initialProcessStateValues: ProcessState, 
-  initialModelParamValues: {temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean}, 
-  setLoadedModelParams: (params: {temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean}) => void 
+  overwriteUserPlanTemplates: (templates: PlanTemplate[]) => void,
+  initialProcessStateValues: ProcessState,
+  initialModelParamValues: {temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean},
+  setLoadedModelParams: (params: {temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean}) => void
 
 ) => {
   const handleExportProject = useCallback(async () => {
     const currentState = stateRef.current;
     const currentModelParams = modelParamsRef.current;
 
-    if (currentState.iterationHistory.length === 0 && currentState.loadedFiles.length === 0) {
+    if (currentState.iterationHistory.length === 0 && currentState.loadedFiles.length === 0 && !currentState.initialPrompt.trim()) {
       updateProcessState({ statusMessage: "Nothing to export yet." });
       return;
     }
 
     const currentProjectId = currentState.projectId || uuidv4();
-    // No direct update to projectId here to avoid re-renders during export. It'll be set if imported or on next save.
 
     const header: ProjectFileHeader = {
       fileFormatVersion: AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION,
@@ -59,7 +56,7 @@ export const useProjectIO = (
       topK: currentModelParams.topK,
       settingsSuggestionSource: currentModelParams.settingsSuggestionSource,
       userManuallyAdjustedSettings: currentModelParams.userManuallyAdjustedSettings,
-      selectedModelName: currentState.selectedModelName, 
+      selectedModelName: currentState.selectedModelName,
       finalProduct: currentState.finalProduct,
       currentProductBeforeHalt: currentState.currentProductBeforeHalt,
       currentIterationBeforeHalt: currentState.currentIterationBeforeHalt,
@@ -73,11 +70,16 @@ export const useProjectIO = (
       isPlanActive: currentState.isPlanActive,
       planStages: currentState.planStages,
       currentPlanStageIndex: currentState.currentPlanStageIndex,
-      savedPlanTemplates: currentState.savedPlanTemplates, 
+      savedPlanTemplates: currentState.savedPlanTemplates,
       currentDiffViewType: currentState.currentDiffViewType,
-      projectName: currentState.projectName, 
+      projectName: currentState.projectName,
       projectId: currentProjectId,
+      isApiRateLimited: currentState.isApiRateLimited,
+      rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
       stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,
+      inputComplexity: currentState.inputComplexity,
+      strategistInfluenceLevel: currentState.strategistInfluenceLevel, // Added
+      stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, // Added
     };
 
     const projectFile: AutologosProjectFile = {
@@ -97,11 +99,10 @@ export const useProjectIO = (
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    updateProcessState({ statusMessage: "Project exported successfully.", projectId: currentProjectId }); 
+    updateProcessState({ statusMessage: "Project exported successfully.", projectId: currentProjectId });
   }, [stateRef, modelParamsRef, updateProcessState]);
 
   const handleImportProjectData = useCallback((projectFile: AutologosProjectFile) => {
-    // This function now expects parsed projectFile data
     if (!projectFile.header || projectFile.header.fileFormatVersion !== AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION) {
       updateProcessState({ statusMessage: `Error: Invalid or unsupported project file format. Expected ${AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION}.` });
       return;
@@ -118,37 +119,39 @@ export const useProjectIO = (
     } else {
       overwriteUserPlanTemplates([]);
     }
-    
+
     const lastIter = engineData.iterationHistory && engineData.iterationHistory.length > 0 ? engineData.iterationHistory[engineData.iterationHistory.length -1].iteration : 0;
     const productAtLastIter = engineData.finalProduct || (engineData.iterationHistory && engineData.iterationHistory.length > 0 ? reconstructProduct(lastIter, engineData.iterationHistory, engineData.initialPrompt).product : engineData.initialPrompt);
 
     const importedProcessStateBase: Partial<ProcessState> = {
-      ...engineData, 
+      ...engineData,
       projectId: projectFile.header.projectId,
       projectName: projectFile.header.projectName || DEFAULT_PROJECT_NAME_FALLBACK,
       projectObjective: projectFile.header.projectObjective || null,
     };
-    
+
     const fullNewState: ProcessState = {
-      ...initialProcessStateValues, 
-      ...importedProcessStateBase,  
-      apiKeyStatus: initialProcessStateValues.apiKeyStatus, // Keep current API key status
-      isProcessing: false, 
+      ...initialProcessStateValues,
+      ...importedProcessStateBase,
+      apiKeyStatus: initialProcessStateValues.apiKeyStatus,
+      isProcessing: false,
       statusMessage: `Project "${projectFile.header.projectName || 'Imported Project'}" imported successfully.`,
       currentProduct: engineData.currentProductBeforeHalt || productAtLastIter,
       currentIteration: engineData.currentIterationBeforeHalt ?? lastIter,
       selectedModelName: engineData.selectedModelName || initialProcessStateValues.selectedModelName,
       loadedFiles: engineData.loadedFiles || [],
       planStages: engineData.planStages || [],
-      savedPlanTemplates: engineData.savedPlanTemplates || [], // Already handled by overwriteUserPlanTemplates
+      savedPlanTemplates: engineData.savedPlanTemplates || [], // ensure this is from engineData if present
       iterationHistory: engineData.iterationHistory || [],
       outputParagraphShowHeadings: engineData.outputParagraphShowHeadings ?? initialProcessStateValues.outputParagraphShowHeadings,
       outputParagraphMaxHeadingDepth: engineData.outputParagraphMaxHeadingDepth ?? initialProcessStateValues.outputParagraphMaxHeadingDepth,
       outputParagraphNumberedHeadings: engineData.outputParagraphNumberedHeadings ?? initialProcessStateValues.outputParagraphNumberedHeadings,
       isPlanActive: engineData.isPlanActive ?? false,
       currentDiffViewType: engineData.currentDiffViewType || 'words',
-      aiProcessInsight: "Project loaded. Review state and resume or start new process.", 
+      aiProcessInsight: "Project loaded. Review state and resume or start new process.",
       stagnationNudgeEnabled: engineData.stagnationNudgeEnabled ?? initialProcessStateValues.stagnationNudgeEnabled,
+      strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, // Added
+      stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness, // Added
     };
     updateProcessState(fullNewState);
 
@@ -163,139 +166,125 @@ export const useProjectIO = (
 
   }, [updateProcessState, overwriteUserPlanTemplates, initialProcessStateValues, initialModelParamValues, setLoadedModelParams]);
 
-  const handleImportPortableDiffsData = useCallback((diffsFile: PortableDiffsFile) => {
-    updateProcessState({ statusMessage: `Importing portable diffs for "${diffsFile.projectName || 'project'}"...` });
-
-    if (diffsFile.portableDiffsVersion !== PORTABLE_DIFFS_FILE_FORMAT_VERSION) {
-        updateProcessState({ statusMessage: `Error: Unsupported portable diffs file version. Expected ${PORTABLE_DIFFS_FILE_FORMAT_VERSION}.` });
-        return;
+  const handleImportIterationLogData = useCallback((
+    logData: IterationLogEntry[],
+    originalFilename: string
+  ) => {
+    if (!logData || logData.length === 0) {
+      updateProcessState({ statusMessage: "Error: Imported log data is empty or invalid." });
+      return;
     }
 
-    const newIterationHistory: IterationLogEntry[] = [];
-    let currentProductFromDiffs = diffsFile.initialPromptManifest;
+    const restoredState: Partial<ProcessState> = {
+        ...initialProcessStateValues,
+        apiKeyStatus: stateRef.current.apiKeyStatus,
+        savedPlanTemplates: stateRef.current.savedPlanTemplates, // Keep current user's templates
+    };
 
-    // Create Iteration 0 (Initial State)
-    newIterationHistory.push({
-        iteration: 0,
-        productSummary: getProductSummary(diffsFile.initialPromptManifest),
-        status: "Initial state from diffs file.",
-        timestamp: Date.parse(diffsFile.exportedAt) || Date.now(), // Use exportedAt or current time
-        productDiff: undefined, // No diff for iteration 0 relative to itself
-        linesAdded: 0, // Assuming initial state is the "addition"
-        linesRemoved: 0,
-        readabilityScoreFlesch: calculateFleschReadingEase(diffsFile.initialPromptManifest),
-        fileProcessingInfo: { // Minimal file info
-            filesSentToApiIteration: null,
-            numberOfFilesActuallySent: 0, // Cannot determine from diffs file
-            totalFilesSizeBytesSent: 0,
-            fileManifestProvidedCharacterCount: diffsFile.initialPromptManifest.length,
-        },
-        // Other diagnostic fields will be undefined
-    });
+    restoredState.iterationHistory = logData;
+    const lastLogEntry = logData[logData.length - 1];
+    restoredState.currentIteration = lastLogEntry.iteration;
     
-    // Process subsequent diffs
-    if (diffsFile.diffs && diffsFile.diffs.length > 0) {
-        // Sort diffs by iteration just in case they are not in order
-        const sortedDiffs = [...diffsFile.diffs].sort((a, b) => a.iteration - b.iteration);
-
-        for (const diffEntry of sortedDiffs) {
-            if (diffEntry.iteration === 0) continue; // Iteration 0 handled above
-
-            const reconstructed = reconstructProduct(diffEntry.iteration, newIterationHistory, diffsFile.initialPromptManifest);
-            if (reconstructed.error) {
-                 console.error(`Error reconstructing product at iteration ${diffEntry.iteration} from diffs: ${reconstructed.error}`);
-                 // Potentially stop or add an error log entry
-            }
-            currentProductFromDiffs = reconstructed.product;
-
-            newIterationHistory.push({
-                iteration: diffEntry.iteration,
-                productSummary: getProductSummary(currentProductFromDiffs),
-                status: `Reconstructed from diff (Iter. ${diffEntry.iteration})`,
-                timestamp: Date.parse(diffsFile.exportedAt) + diffEntry.iteration, // Stagger timestamps
-                productDiff: diffEntry.productDiff,
-                // linesAdded/Removed would need to be re-calculated if desired, or left undefined
-                readabilityScoreFlesch: calculateFleschReadingEase(currentProductFromDiffs),
-                // Other fields minimal or undefined
-                 fileProcessingInfo: {
-                    filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0,
-                    fileManifestProvidedCharacterCount: 0, // Not applicable per-iteration from this file type
-                },
-            });
+    // Try to find the initial prompt from Iteration 0 if it exists and no files were used for it.
+    const iterZeroEntry = logData.find(entry => entry.iteration === 0);
+    let basePromptForReconstruction = "";
+    if (iterZeroEntry) {
+        if (iterZeroEntry.fileProcessingInfo && iterZeroEntry.fileProcessingInfo.numberOfFilesActuallySent === 0 && iterZeroEntry.promptFullUserPromptSent) {
+           // If iter 0 had no files but had a full user prompt, use that as the base
+           basePromptForReconstruction = iterZeroEntry.promptFullUserPromptSent;
+           restoredState.initialPrompt = basePromptForReconstruction;
+           restoredState.loadedFiles = [];
+           restoredState.promptSourceName = "Restored from Log (Direct Prompt)";
+        } else if (iterZeroEntry.fileProcessingInfo && iterZeroEntry.fileProcessingInfo.fileManifestProvidedCharacterCount > 0 && iterZeroEntry.promptFullUserPromptSent) {
+            // If iter 0 had files, the manifest from its full prompt is the "initialPrompt" for consistency
+            basePromptForReconstruction = iterZeroEntry.promptFullUserPromptSent.substring(0, iterZeroEntry.fileProcessingInfo.fileManifestProvidedCharacterCount);
+            restoredState.initialPrompt = basePromptForReconstruction;
+            // We don't have the actual file content here, so loadedFiles remains empty. The process relied on the manifest.
+            restoredState.loadedFiles = []; 
+            restoredState.promptSourceName = "Restored from Log (Files Manifest Only)";
+        } else {
+            restoredState.initialPrompt = "Initial prompt not available in log for Iteration 0.";
+            restoredState.loadedFiles = [];
+            restoredState.promptSourceName = "Restored from Log (Prompt Unavailable)";
         }
     }
 
 
-    const finalProductName = diffsFile.diffs.length > 0 ? currentProductFromDiffs : diffsFile.initialPromptManifest;
-    const lastIterationNumber = diffsFile.diffs.length > 0 ? newIterationHistory[newIterationHistory.length - 1].iteration : 0;
+    const { product: reconstructedLastProduct, error: reconstructionError } = reconstructProduct(
+      lastLogEntry.iteration, logData, basePromptForReconstruction
+    );
 
-    updateProcessState({
-        ...initialProcessStateValues, // Reset to a clean slate before applying diffs data
-        initialPrompt: diffsFile.initialPromptManifest,
-        iterationHistory: newIterationHistory,
-        currentProduct: finalProductName,
-        finalProduct: finalProductName, // Assume diffs represent a completed process
-        currentIteration: lastIterationNumber,
-        projectName: diffsFile.projectName || "Imported Diffs Project",
-        projectId: diffsFile.projectId || uuidv4(),
-        statusMessage: `Portable diffs for "${diffsFile.projectName || 'project'}" imported. ${newIterationHistory.length -1} iterations reconstructed.`,
-        isProcessing: false,
-        loadedFiles: [], // Diffs file doesn't contain original loaded files data
-        aiProcessInsight: "State reconstructed from portable diffs file.",
-        selectedModelName: initialProcessStateValues.selectedModelName,
-        maxIterations: lastIterationNumber > initialProcessStateValues.maxIterations ? lastIterationNumber : initialProcessStateValues.maxIterations,
-    });
-    // Also reset actual model parameters in useModelParameters hook
-    setLoadedModelParams({
-        temperature: initialModelParamValues.temperature,
-        topP: initialModelParamValues.topP,
-        topK: initialModelParamValues.topK,
-        settingsSuggestionSource: 'mode',
-        userManuallyAdjustedSettings: false,
-    });
-
-
-  }, [updateProcessState, initialProcessStateValues, initialModelParamValues, setLoadedModelParams, reconstructProduct]);
-
-
-  const handleExportPortableDiffs = useCallback(() => {
-    const currentState = stateRef.current;
-    if (!currentState.iterationHistory || currentState.iterationHistory.length === 0) {
-      updateProcessState({ statusMessage: "No diffs to export yet." });
+    if (reconstructionError) {
+      updateProcessState({ statusMessage: `Error reconstructing product from log: ${reconstructionError}` });
       return;
     }
+    restoredState.currentProduct = reconstructedLastProduct;
 
-    const portableDiffsData: PortableDiffsFile = {
-      portableDiffsVersion: PORTABLE_DIFFS_FILE_FORMAT_VERSION,
-      projectId: currentState.projectId || null,
-      projectName: currentState.projectName || DEFAULT_PROJECT_NAME_FALLBACK,
-      exportedAt: new Date().toISOString(),
-      appVersion: APP_VERSION,
-      initialPromptManifest: currentState.initialPrompt, 
-      diffs: currentState.iterationHistory
-        .filter(entry => entry.iteration > 0 || (entry.iteration === 0 && currentState.initialPrompt)) // Include iter 0 only if initialPrompt exists
-        .map(entry => ({
-          iteration: entry.iteration,
-          // For iter 0, productDiff is conceptually the initialPrompt itself if we diff from ""
-          // However, typical diff files start from iter 1 changes against iter 0 product.
-          // The stored productDiff for iter 0 is usually from "" to initial product.
-          // Let's ensure we store the diff that led to this iteration's state.
-          productDiff: entry.productDiff || null 
-      }))
-    };
+    let importedMaxIterations = initialProcessStateValues.maxIterations;
+    if (lastLogEntry.promptCoreUserInstructionsSent) {
+        const match = lastLogEntry.promptCoreUserInstructionsSent.match(/Iteration \d+ of (\d+)/);
+        if (match && match[1]) importedMaxIterations = parseInt(match[1], 10);
+    } else if (lastLogEntry.promptSystemInstructionSent) {
+        const match = lastLogEntry.promptSystemInstructionSent.match(/over (\d+) iterations/);
+         if (match && match[1]) importedMaxIterations = parseInt(match[1], 10);
+    }
+    restoredState.maxIterations = importedMaxIterations > 0 ? importedMaxIterations : 100;
 
-    const fileName = generateFileName(currentState.projectName, "diffs_portable", "json");
-    const blob = new Blob([JSON.stringify(portableDiffsData, null, 2)], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    updateProcessState({ statusMessage: "Portable diffs exported successfully." });
-  }, [stateRef, updateProcessState]);
+    const importedModelConfig = lastLogEntry.modelConfigUsed || initialModelParamValues;
+    setLoadedModelParams({
+      temperature: importedModelConfig.temperature,
+      topP: importedModelConfig.topP,
+      topK: importedModelConfig.topK,
+      settingsSuggestionSource: 'manual',
+      userManuallyAdjustedSettings: true,
+    });
 
-  return { handleExportProject, handleImportProjectData, handleExportPortableDiffs, handleImportPortableDiffsData };
+    let modelNameFromLog: SelectableModelName | undefined = lastLogEntry.currentModelForIteration;
+    if (!modelNameFromLog && lastLogEntry.modelConfigUsed?.modelName) {
+        modelNameFromLog = lastLogEntry.modelConfigUsed.modelName;
+    }
+    if (!modelNameFromLog) { // Fallback further if still not found
+        const modelMatch = lastLogEntry.status.match(/model ['"](.*?)['"]/i) ||
+                           (lastLogEntry.promptSystemInstructionSent || "").match(/model:\s*['"]?(.*?)['"\s]/i);
+        if (modelMatch && modelMatch[1]) {
+            const foundModel = SELECTABLE_MODELS.find(m => m.name.includes(modelMatch[1]) || m.displayName.includes(modelMatch[1]));
+            if (foundModel) modelNameFromLog = foundModel.name;
+        }
+    }
+    restoredState.selectedModelName = modelNameFromLog || stateRef.current.selectedModelName || GeminaiService.DEFAULT_MODEL_NAME;
+
+
+    let pName = "Restored Log Project";
+    const nameMatch = originalFilename.match(/^(.*?)(_project|_log)?(_\d{8}_\d{6})?\.json$/i);
+    if (nameMatch && nameMatch[1] && nameMatch[1].toLowerCase() !== "untitled project") {
+      pName = nameMatch[1].replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim();
+      pName = pName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    }
+    restoredState.projectName = pName;
+    restoredState.projectId = uuidv4();
+
+    restoredState.finalProduct = null;
+    restoredState.isProcessing = false;
+    restoredState.configAtFinalization = null;
+    restoredState.currentProductBeforeHalt = null;
+    restoredState.currentIterationBeforeHalt = undefined;
+    restoredState.isPlanActive = false; // Logs don't store full plan state easily
+    restoredState.planStages = [];
+    restoredState.currentPlanStageIndex = null;
+    restoredState.currentStageIteration = 0;
+    restoredState.statusMessage = `State restored from log: ${originalFilename}. Last Iteration: ${lastLogEntry.iteration}.`;
+    restoredState.aiProcessInsight = "Review restored state. You can resume, rewind, or reset.";
+    restoredState.stagnationNudgeEnabled = initialProcessStateValues.stagnationNudgeEnabled;
+    restoredState.currentDiffViewType = 'words';
+    restoredState.strategistInfluenceLevel = initialProcessStateValues.strategistInfluenceLevel;
+    restoredState.stagnationNudgeAggressiveness = initialProcessStateValues.stagnationNudgeAggressiveness;
+    restoredState.inputComplexity = initialProcessStateValues.inputComplexity; // Or re-calculate based on reconstructed product
+
+
+    updateProcessState(restoredState as ProcessState);
+
+  }, [updateProcessState, setLoadedModelParams, initialProcessStateValues, initialModelParamValues, stateRef]);
+
+
+  return { handleExportProject, handleImportProjectData, handleImportIterationLogData };
 };

@@ -1,10 +1,9 @@
 
 
-
 import React, { useEffect, useCallback, useRef, useState } from 'react';
-import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, DiffViewType, AutologosProjectFile, PortableDiffsFile } from './types.ts';
-import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, PORTABLE_DIFFS_FILE_FORMAT_VERSION } from './types.ts';
-import * as GeminaiService from './services/geminiService'; // Corrected import alias
+import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile } from './types.ts';
+import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION } from './types.ts';
+import * as GeminaiService from './services/geminiService';
 import { DEFAULT_PROJECT_NAME_FALLBACK, INITIAL_PROJECT_NAME_STATE, generateFileName } from './services/utils';
 import Controls from './components/Controls';
 import DisplayArea from './components/DisplayArea';
@@ -18,18 +17,21 @@ import { reconstructProduct } from './services/diffService';
 import { inferProjectNameFromInput } from './services/projectUtils';
 import { useDebounce } from './hooks/useDebounce';
 
-import { ApplicationProvider } from './contexts/ApplicationContext';
-import { ProcessProvider, type AddLogEntryType } from './contexts/ProcessContext';
-import { ModelConfigProvider } from './contexts/ModelConfigContext';
-import { PlanProvider } from './contexts/PlanContext';
+import { ApplicationProvider, type ApplicationContextType } from './contexts/ApplicationContext';
+import type { AddLogEntryType, ProcessContextType } from './contexts/ProcessContext';
+import { ProcessProvider } from './contexts/ProcessContext';
+import { ModelConfigProvider, type ModelConfigContextType } from './contexts/ModelConfigContext';
+import { PlanProvider, type PlanContextType } from './contexts/PlanContext';
 import ErrorBoundary from './components/shared/ErrorBoundary';
 
 
 const App: React.FC = () => {
-  const { state: processState, updateProcessState, handleLoadedFilesChange, addLogEntry: addLogEntryFromHook, handleReset: processStateResetHook } = useProcessState();
+  const { state: processState, updateProcessState, handleLoadedFilesChange, addLogEntry: addLogEntryFromHook, handleReset: processStateResetHook, handleInitialPromptChange } = useProcessState();
   const { savedPlanTemplates, handleSavePlanAsTemplate, handleDeletePlanTemplate, planTemplateStatusMessage, clearPlanTemplateStatusMessage, loadUserTemplates, overwriteUserTemplates } = usePlanTemplates();
 
   const debouncedLoadedFilesCount = useDebounce(processState.loadedFiles.length, 750);
+  const debouncedInitialPromptText = useDebounce(processState.initialPrompt, 750);
+
 
   const processStateRef = useRef(processState);
   useEffect(() => {
@@ -50,22 +52,19 @@ const App: React.FC = () => {
     temperature, topP, topK, settingsSuggestionSource, userManuallyAdjustedSettings,
     modelConfigRationales, modelParameterAdvice, modelConfigWarnings,
     handleTemperatureChange, handleTopPChange, handleTopKChange,
-    getCalculatedModelConfigForIteration, resetModelParametersToDefaults, setUserManuallyAdjustedSettings
+    getUserSetBaseConfig,
+    resetModelParametersToDefaults, setUserManuallyAdjustedSettings
   } = useModelParameters(
-    processState.initialPrompt,
+    debouncedInitialPromptText,
     debouncedLoadedFilesCount,
     processState.isPlanActive,
-    processState.currentIteration,
-    processState.maxIterations,
-    { isStagnant: false, consecutiveStagnantIterations: 0 }, // Simplified for now, real stagnation logic is complex
     processState.promptChangedByFileLoad,
     () => updateProcessState({ promptChangedByFileLoad: false }),
     appInitialModelParams.temperature,
     appInitialModelParams.topP,
     appInitialModelParams.topK,
-    processState.stagnationNudgeEnabled 
   );
-  
+
   const maxIterationsForContext = processState.maxIterations;
   const onMaxIterationsChangeForContext = (value: number) => updateProcessState({ maxIterations: value });
 
@@ -113,7 +112,7 @@ const App: React.FC = () => {
     setIsApiRateLimitedLocal(true);
     setRateLimitCooldownActiveSecondsLocal(rateLimitCooldownDuration);
 
-    cooldownTimerRef.current = setInterval(() => {
+    cooldownTimerRef.current = window.setInterval(() => { 
       setRateLimitCooldownActiveSecondsLocal(prev => {
         const newTime = prev - 1;
         updateProcessState({ rateLimitCooldownActiveSeconds: newTime });
@@ -125,7 +124,7 @@ const App: React.FC = () => {
         }
         return newTime;
       });
-    }, 1000) as unknown as number; // Cast to number for browser compatibility
+    }, 1000);
   }, [clearCooldownTimer, updateProcessState, rateLimitCooldownDuration]);
 
   useEffect(() => {
@@ -134,21 +133,23 @@ const App: React.FC = () => {
 
   const autoSaveHook = useAutoSave(
     processStateRef, modelParamsRef, updateProcessState, overwriteUserTemplates,
-    createInitialProcessState(GeminaiService.isApiKeyAvailable() ? 'loaded' : 'missing', GeminaiService.DEFAULT_MODEL_NAME as SelectableModelName),
+    createInitialProcessState(GeminaiService.isApiKeyAvailable() ? 'loaded' : 'missing', GeminaiService.DEFAULT_MODEL_NAME),
     appInitialModelParams, setLoadedModelParametersCallback
   );
   const { performAutoSave } = autoSaveHook;
-  
-  const addLogEntryForContext: AddLogEntryType = addLogEntryFromHook as AddLogEntryType;
+
+  const addLogEntryForContext: AddLogEntryType = addLogEntryFromHook as any;
 
   const iterativeLogicInstance = useIterativeLogic(
-    processState, updateProcessState, addLogEntryForContext, getCalculatedModelConfigForIteration, performAutoSave,
-    processState.selectedModelName, handleRateLimitErrorEncountered
+    processState, updateProcessState, addLogEntryForContext,
+    getUserSetBaseConfig, 
+    performAutoSave,
+    handleRateLimitErrorEncountered
   );
 
   const projectIO = useProjectIO(
     processStateRef, modelParamsRef, updateProcessState, overwriteUserTemplates,
-    createInitialProcessState(GeminaiService.isApiKeyAvailable() ? 'loaded' : 'missing', GeminaiService.DEFAULT_MODEL_NAME as SelectableModelName),
+    createInitialProcessState(GeminaiService.isApiKeyAvailable() ? 'loaded' : 'missing', GeminaiService.DEFAULT_MODEL_NAME),
     appInitialModelParams, setLoadedModelParametersCallback
   );
 
@@ -158,37 +159,45 @@ const App: React.FC = () => {
 
   useEffect(() => {
     loadUserTemplates();
+  }, [loadUserTemplates]);
+
+  useEffect(() => {
     setCurrentModelUIDetails(GeminaiService.getAiModelDetails(processState.selectedModelName || GeminaiService.DEFAULT_MODEL_NAME));
-  }, [loadUserTemplates, processState.selectedModelName]);
+  }, [processState.selectedModelName]);
 
 
   useEffect(() => {
     if (processState.isProcessing) return;
     const shouldInfer = (processState.projectName === INITIAL_PROJECT_NAME_STATE) ||
                        (processState.loadedFiles.length === 0 && processState.projectName !== DEFAULT_PROJECT_NAME_FALLBACK && processState.projectName !== INITIAL_PROJECT_NAME_STATE);
-    if (shouldInfer) {
+
+    if (shouldInfer || (processState.loadedFiles.length > 0 && processState.projectName === INITIAL_PROJECT_NAME_STATE)) {
       const newInferredName = inferProjectNameFromInput(processState.initialPrompt, processState.loadedFiles);
       updateProcessState({ projectName: newInferredName || (processState.loadedFiles.length === 0 ? INITIAL_PROJECT_NAME_STATE : DEFAULT_PROJECT_NAME_FALLBACK) });
     }
-  }, [processState.loadedFiles, processState.isProcessing, processState.projectName, processState.initialPrompt, updateProcessState]);
+  }, [processState.initialPrompt, processState.loadedFiles, processState.isProcessing, processState.projectName, updateProcessState]);
 
   const handleResetApp = useCallback(async () => {
-    const baseConfig = GeminaiService.CREATIVE_DEFAULTS;
+    const baseConfigForReset = GeminaiService.CREATIVE_DEFAULTS; 
     await processStateResetHook(
-        baseConfig,
-        GeminaiService.getModelParameterGuidance(baseConfig, true).advice,
-        ["Settings reset to creative starting defaults for Global Mode."],
-        savedPlanTemplates
+        baseConfigForReset, 
+        savedPlanTemplates 
     );
-    resetModelParametersToDefaults(baseConfig);
+    resetModelParametersToDefaults(baseConfigForReset); 
     if (autoSaveHook.showRestorePrompt) {
         await autoSaveHook.handleClearAutoSaveAndDismiss();
     }
-    updateProcessState({promptChangedByFileLoad: false, selectedModelName: GeminaiService.DEFAULT_MODEL_NAME as SelectableModelName, stagnationNudgeEnabled: true});
+    updateProcessState({
+        promptChangedByFileLoad: false,
+        selectedModelName: GeminaiService.DEFAULT_MODEL_NAME,
+        currentModelForIteration: GeminaiService.DEFAULT_MODEL_NAME,
+        currentAppliedModelConfig: baseConfigForReset, 
+    });
     clearCooldownTimer();
     setIsApiRateLimitedLocal(false);
     setRateLimitCooldownActiveSecondsLocal(0);
   }, [processStateResetHook, resetModelParametersToDefaults, savedPlanTemplates, autoSaveHook.showRestorePrompt, autoSaveHook.handleClearAutoSaveAndDismiss, updateProcessState, clearCooldownTimer]);
+
 
   const handleRewind = useCallback(async (iterationNumber: number) => {
     if (processState.isProcessing) {
@@ -202,15 +211,33 @@ const App: React.FC = () => {
     if (reconstructionError) {
       updateProcessState({ statusMessage: `Error rewinding to iteration ${iterationNumber}: ${reconstructionError}` }); return;
     }
+
+    const targetLogEntry = targetHistory.find(entry => entry.iteration === iterationNumber);
+    const modelForRewind = targetLogEntry?.currentModelForIteration || processState.selectedModelName;
+    const configForRewind = targetLogEntry?.modelConfigUsed || getUserSetBaseConfig();
+
     updateProcessState({
       currentProduct: reconstructedProductValue, iterationHistory: targetHistory, currentIteration: iterationNumber,
       finalProduct: null, isProcessing: false, currentPlanStageIndex: null, currentStageIteration: 0,
       statusMessage: `Rewound to Iteration ${iterationNumber}. Resume or start new process.`,
       isApiRateLimited: false, rateLimitCooldownActiveSeconds: 0,
+      currentModelForIteration: modelForRewind,
+      currentAppliedModelConfig: configForRewind,
+      stagnationInfo: { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none' } 
     });
+    if (configForRewind) {
+        setLoadedModelParametersCallback({
+            temperature: configForRewind.temperature,
+            topP: configForRewind.topP,
+            topK: configForRewind.topK,
+            settingsSuggestionSource: 'manual',
+            userManuallyAdjustedSettings: true,
+        });
+    }
+
     clearCooldownTimer();
     await performAutoSave();
-  }, [processState.isProcessing, processState.iterationHistory, processState.initialPrompt, updateProcessState, performAutoSave, clearCooldownTimer]);
+  }, [processState.isProcessing, processState.iterationHistory, processState.initialPrompt, processState.selectedModelName, updateProcessState, performAutoSave, clearCooldownTimer, getUserSetBaseConfig, setLoadedModelParametersCallback]);
 
   const handleExportIterationMarkdown = useCallback((iterationNumber: number) => {
     const logEntry = processState.iterationHistory.find(entry => entry.iteration === iterationNumber);
@@ -229,58 +256,76 @@ const App: React.FC = () => {
     updateProcessState({ selectedModelName: modelName });
     setIsModelDropdownOpen(false);
   };
-  
-  const onFileSelectedForImport = async (file: File) => {
-    updateProcessState({ statusMessage: `Processing ${file.name}...` });
-    try {
-      const fileNameLower = file.name.toLowerCase();
-      const fileContent = await file.text();
 
-      if (fileNameLower.endsWith('.autologos.json')) {
-        const projectFile = JSON.parse(fileContent) as AutologosProjectFile;
-        if (projectFile.header && projectFile.header.fileFormatVersion === AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION) {
-          projectIO.handleImportProjectData(projectFile);
-          return;
+  const onFilesSelectedForImport = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    updateProcessState({ statusMessage: `Processing ${files.length} file(s)...` });
+    try {
+      const loadedFilesArray: LoadedFile[] = [];
+      const filePromises = Array.from(files).map(async (file) => {
+        const fileNameLower = file.name.toLowerCase();
+
+        if (files.length === 1 && fileNameLower.endsWith('.autologos.json')) {
+            const fileContent = await file.text();
+            try {
+                const parsedJson = JSON.parse(fileContent);
+                if (parsedJson.header && parsedJson.header.fileFormatVersion === AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION) {
+                    projectIO.handleImportProjectData(parsedJson as AutologosProjectFile);
+                    return null; 
+                }
+            } catch (e) { /* Fall through */ }
         }
-      } else if (fileNameLower.endsWith('.json')) {
-        const jsonData = JSON.parse(fileContent);
-        if (jsonData.portableDiffsVersion && jsonData.portableDiffsVersion === PORTABLE_DIFFS_FILE_FORMAT_VERSION && jsonData.initialPromptManifest !== undefined && Array.isArray(jsonData.diffs)) {
-          projectIO.handleImportPortableDiffsData(jsonData as PortableDiffsFile);
-          return;
+
+        if (fileNameLower.endsWith('.json')) {
+          const fileContent = await file.text();
+          try {
+            const parsedJson = JSON.parse(fileContent);
+            if (Array.isArray(parsedJson) && parsedJson.length > 0 && 'iteration' in parsedJson[0] && 'productSummary' in parsedJson[0] && 'timestamp' in parsedJson[0]) {
+              projectIO.handleImportIterationLogData(parsedJson as IterationLogEntry[], file.name);
+              return null; // Indicate this file was handled as a log import
+            }
+          } catch(e) { /* Fall through */ }
         }
-        // If not a portable diffs file, treat as generic JSON data file
-        const base64Data = btoa(unescape(encodeURIComponent(fileContent)));
-        handleLoadedFilesChange([{
-          name: file.name,
-          mimeType: file.type || 'application/json',
-          base64Data,
-          size: file.size,
-        }]);
-        return;
-      }
-      
-      // Default: treat as other data file (txt, md, image, etc.)
-      // For images/binary, need to re-read as DataURL. For text, can use fileContent.
-      if (file.type.startsWith("image/") || file.type === "application/pdf" || !file.type.startsWith("text/")) {
-         const reader = new FileReader();
-         reader.onload = (e_reader) => {
-             const dataUrl = e_reader.target?.result as string;
-             const base64Data = dataUrl.substring(dataUrl.indexOf(',') + 1);
-             handleLoadedFilesChange([{ name: file.name, mimeType: file.type || 'application/octet-stream', base64Data, size: file.size }]);
-         };
-         reader.onerror = () => updateProcessState({ statusMessage: `Error reading file ${file.name}` });
-         reader.readAsDataURL(file);
-      } else { // Text-based files
+
+        if (file.type.startsWith("image/") || file.type === "application/pdf" || !file.type.startsWith("text/")) {
+          return new Promise<LoadedFile>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e_reader) => {
+              const dataUrl = e_reader.target?.result as string;
+              const base64Data = dataUrl.substring(dataUrl.indexOf(',') + 1);
+              resolve({ name: file.name, mimeType: file.type || 'application/octet-stream', base64Data, size: file.size });
+            };
+            reader.onerror = () => reject(new Error(`Error reading file ${file.name}`));
+            reader.readAsDataURL(file);
+          });
+        } else {
+          const fileContent = await file.text();
           const base64Data = btoa(unescape(encodeURIComponent(fileContent)));
-          handleLoadedFilesChange([{ name: file.name, mimeType: file.type || 'text/plain', base64Data, size: file.size }]);
+          return { name: file.name, mimeType: file.type || 'text/plain', base64Data, size: file.size };
+        }
+      });
+
+      const results = await Promise.all(filePromises);
+      const newValidLoadedFiles = results.filter(result => result !== null) as LoadedFile[];
+
+      if (newValidLoadedFiles.length > 0) {
+        handleLoadedFilesChange(newValidLoadedFiles, 'add'); // Explicitly 'add'
+      } else if (files.length === 1 && results[0] === null) {
+        // Project file or log file loaded and handled
+      } else {
+         updateProcessState({ statusMessage: "No new data files were added."});
       }
 
     } catch (error: any) {
-      console.error("Error importing/loading file:", error);
-      updateProcessState({ statusMessage: `Error processing file ${file.name}: ${error.message}` });
+      console.error("Error importing/loading files:", error);
+      updateProcessState({ statusMessage: `Error processing files: ${error.message}` });
     }
   };
 
+  const handleExportPortableDiffs = useCallback(() => {
+    updateProcessState({ statusMessage: "Exporting portable diffs has been removed. Download the main log file (.json) for iteration diffs."});
+  }, [updateProcessState]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -290,40 +335,43 @@ const App: React.FC = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const applicationContextValue = {
+  const applicationContextValue: ApplicationContextType = {
     apiKeyStatus: processState.apiKeyStatus, selectedModelName: processState.selectedModelName,
     projectName: processState.projectName, projectId: processState.projectId,
     isApiRateLimited: isApiRateLimitedLocal, rateLimitCooldownActiveSeconds: rateLimitCooldownActiveSecondsLocal,
-    updateProcessState: updateProcessState as any, 
-    handleImportProjectData: projectIO.handleImportProjectData, // Pass the correct handler
-    handleExportProject: projectIO.handleExportProject, 
-    handleExportPortableDiffs: projectIO.handleExportPortableDiffs, 
+    updateProcessState: updateProcessState as any, // Cast for broader partial updates from this context
+    handleImportProjectData: projectIO.handleImportProjectData,
+    handleImportIterationLogData: projectIO.handleImportIterationLogData,
+    handleExportProject: projectIO.handleExportProject,
+    handleExportPortableDiffs,
     handleRateLimitErrorEncountered,
     staticAiModelDetails: currentModelUIDetails, onSelectedModelChange: handleSelectedModelChange,
-    onFileSelectedForImport, // Provide the new unified handler
+    onFilesSelectedForImport,
   };
 
-  const processContextValue = {
-    ...processState, 
-    updateProcessState: updateProcessState as any, 
-    handleLoadedFilesChange, addLogEntry: addLogEntryForContext, handleResetApp,
+  const processContextValue: ProcessContextType = {
+    ...processState,
+    updateProcessState: updateProcessState as any,
+    handleLoadedFilesChange,
+    handleInitialPromptChange,
+    addLogEntry: addLogEntryForContext, handleResetApp,
     handleStartProcess: iterativeLogicInstance.handleStart, handleHaltProcess: iterativeLogicInstance.handleHalt,
     handleRewind, handleExportIterationMarkdown,
     reconstructProductCallback: (iter: number, hist: IterationLogEntry[], base: string) => reconstructProduct(iter, hist, base),
   };
 
-  const modelConfigContextValue = {
+  const modelConfigContextValue: ModelConfigContextType = {
     temperature, topP, topK, maxIterations: maxIterationsForContext, settingsSuggestionSource, userManuallyAdjustedSettings,
     modelConfigRationales, modelParameterAdvice, modelConfigWarnings,
     handleTemperatureChange, handleTopPChange, handleTopKChange, onMaxIterationsChange: onMaxIterationsChangeForContext,
     setUserManuallyAdjustedSettings,
   };
 
-  const planContextValue = {
+  const planContextValue: PlanContextType = {
     isPlanActive: processState.isPlanActive, planStages: processState.planStages,
     currentPlanStageIndex: processState.currentPlanStageIndex, currentStageIteration: processState.currentStageIteration,
     savedPlanTemplates, planTemplateStatus: planTemplateStatusMessage,
-    updateProcessState: updateProcessState as any, 
+    updateProcessState: updateProcessState as any,
     onIsPlanActiveChange: (isActive: boolean) => updateProcessState({ isPlanActive: isActive }),
     onPlanStagesChange: (stages: PlanStage[]) => updateProcessState({ planStages: stages }),
     handleSavePlanAsTemplate, handleDeletePlanTemplate, clearPlanTemplateStatus: clearPlanTemplateStatusMessage,
@@ -332,7 +380,7 @@ const App: React.FC = () => {
       if(planTemplateStatusMessage) clearPlanTemplateStatusMessage();
     },
   };
-  
+
   const commonControlProps: CommonControlProps = {
     commonInputClasses: "w-full p-3 bg-slate-50/80 dark:bg-white/5 border border-slate-300 dark:border-white/10 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 placeholder-slate-500 dark:placeholder-slate-400 text-slate-700 dark:text-slate-100",
     commonSelectClasses: "w-full p-2.5 bg-slate-50/80 dark:bg-white/5 border border-slate-300 dark:border-white/10 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 text-slate-700 dark:text-slate-100 text-sm",
@@ -352,7 +400,7 @@ const App: React.FC = () => {
                 <header className="bg-slate-800 dark:bg-black/50 text-white p-4 shadow-md flex justify-between items-center">
                   <h1 className="text-2xl font-semibold text-primary-300">Autologos Iterative Engine</h1>
                   <div className="flex items-center text-xs text-slate-400">
-                    <span className="mr-2">Model:</span>
+                    <span className="mr-2">Model Pref:</span>
                     <div className="relative" ref={modelDropdownRef}>
                       <button
                         onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
@@ -361,11 +409,11 @@ const App: React.FC = () => {
                         aria-expanded={isModelDropdownOpen}
                         disabled={processState.isProcessing || isApiRateLimitedLocal}
                       >
-                        {currentModelUIDetails?.modelName || 'Select Model'}
+                        {SELECTABLE_MODELS.find(m => m.name === processState.selectedModelName)?.displayName || processState.selectedModelName || 'Select Model'}
                         <span className="ml-1.5 text-xs">{isModelDropdownOpen ? '▲' : '▼'}</span>
                       </button>
                       {isModelDropdownOpen && (
-                        <div className="absolute right-0 mt-1.5 w-60 bg-slate-700 rounded-md shadow-lg z-20 border border-slate-600">
+                        <div className="absolute right-0 mt-1.5 w-80 bg-slate-700 rounded-md shadow-lg z-20 border border-slate-600 max-h-96 overflow-y-auto">
                           {SELECTABLE_MODELS.map((model) => (
                             <button
                               key={model.name}
@@ -373,7 +421,7 @@ const App: React.FC = () => {
                               className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-600
                                           ${processState.selectedModelName === model.name ? 'text-primary-300 font-semibold' : 'text-slate-300'}`}
                             >
-                              {model.displayName} {processState.selectedModelName === model.name ? ' (Current)' : ''}
+                              {model.displayName} {processState.selectedModelName === model.name ? ' (Current Pref.)' : ''}
                               <span className="block text-xxs text-slate-400">{model.description}</span>
                             </button>
                           ))}
