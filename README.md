@@ -1,3 +1,6 @@
+---
+modified: 2025-06-03T02:36:40Z
+---
 ## Autologos AI Core Directives
 
 This repository serves as the master code base for the **Autologos AI Process Manager’s Core Directives**. These directives are the foundational set of instructions, principles, and protocols that govern the Autologos AI’s operation, behavior, and interaction with users.
@@ -22,16 +25,16 @@ To enable your Large Language Model (LLM) to understand and interact effectively
 
     This will create a local copy of the entire codebase on your machine.
 
--   **Alternative (for quick start, no updates): Download the [Autologos_Core_Directives](Autologos_Core_Directives.md) file.**
-    You can directly download the [Autologos_Core_Directives](Autologos_Core_Directives.md) file from this repository. Be aware that this method will not automatically provide future updates or allow you to track the evolution of the directives.
+-   **Alternative (for quick start, no updates): Download the [Autologos_Core_Directives 3.6.0](Autologos_Core_Directives%203.6.0.md) file.**
+    You can directly download the [Autologos_Core_Directives 3.6.0](Autologos_Core_Directives%203.6.0.md) file from this repository. Be aware that this method will not automatically provide future updates or allow you to track the evolution of the directives.
 
 **Step 2: Prepare Your LLM Environment**
 
 1.  **Start a new chat session** with your chosen LLM (note: Autologos was developed and tested exclusively in Google AI Studio).
 2.  **Ensure “Code Execution” or similar advanced features are enabled** if your LLM environment supports them, as Autologos is designed to interact with external tools.
-3.  **Provide the *entire content* of the [Autologos_Core_Directives](Autologos_Core_Directives.md) file to your LLM.**
+3.  **Provide the *entire content* of the [Autologos_Core_Directives 3.6.0](Autologos_Core_Directives%203.6.0.md) file to your LLM.**
     -   **Option A (Recommended for large files): Upload the file.** Most LLM chat interfaces allow you to upload files as initial context.
-    -   **Option B (Fallback): Copy and Paste.** Open [Autologos_Core_Directives](Autologos_Core_Directives.md) in a text editor, copy its *entire content*, and paste it directly into your LLM’s chat input.
+    -   **Option B (Fallback): Copy and Paste.** Open [Autologos_Core_Directives 3.6.0](Autologos_Core_Directives%203.6.0.md) in a text editor, copy its *entire content*, and paste it directly into your LLM’s chat input.
     -   *Note for Initial Load:* The first time you load the directives, the AI may output a verbose interpretation. This is normal. Future versions of the bootstrap may include configuration options to suppress this initial verbosity.
 
 **Step 3: Confirm Autologos Activation**
@@ -47,13 +50,13 @@ Once confirmed, your LLM is now “primed” to collaborate with you using the A
 
 This repository is the authoritative source for the Autologos AI’s operational “code.”
 
--   **[Autologos_Core_Directives](Autologos_Core_Directives.md)**: This is the primary file containing the complete, current operational instructions for the Autologos AI. It is the “code” that defines Autologos’s behavior. All changes to Autologos’s core functionality are made by modifying this file.
--   **Version Control:** This repository uses Git for version control. The version number (e.g., `v3.0.1`) is embedded *within* the [Autologos_Core_Directives](Autologos_Core_Directives.md) file itself. Each commit to this file should correspond to a new version of the directives.
+-   **[Autologos_Core_Directives 3.6.0](Autologos_Core_Directives%203.6.0.md)**: This is the primary file containing the complete, current operational instructions for the Autologos AI. It is the “code” that defines Autologos’s behavior. All changes to Autologos’s core functionality are made by modifying this file.
+-   **Version Control:** This repository uses Git for version control. The version number (e.g., `v3.0.1`) is embedded *within* the [Autologos_Core_Directives 3.6.0](Autologos_Core_Directives%203.6.0.md) file itself. Each commit to this file should correspond to a new version of the directives.
 -   **Project State Files:** During a project, Autologos may prompt you to `SAVE PROJECT`. This will output the current project’s internal state (e.g., `[Project_Title]_Project_State.json`). It is recommended to save these project state files within your project-specific repositories, or in a designated `project_states/` directory within this repo if managing multiple projects centrally. These files are crucial for resuming work on a project.
 
 ### Key Files
 
--   **[Autologos_Core_Directives](Autologos_Core_Directives.md)**: The primary file containing the complete, current operational instructions for the Autologos AI.
+-   **[Autologos_Core_Directives 3.6.0](Autologos_Core_Directives%203.6.0.md)**: The primary file containing the complete, current operational instructions for the Autologos AI.
 -   **`[Project_Title]_Project_State.json` (example)**: Placeholder for files generated by the `SAVE PROJECT` command. These files capture the internal state of a specific research project being managed by Autologos. They are typically JSON formatted for structured data.
 -   **[README](README.md)**: This file, providing an overview and instructions for the repository.
 -   **[LICENSE](LICENSE.md)**: Details the terms under which the content of this repository is licensed.
