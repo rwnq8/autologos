@@ -98,7 +98,8 @@ export const getStrategicAdviceFromLLM = async (
     stagnationInfo: StagnationInfo,
     lastValidationInfo: AiResponseValidationInfo | undefined,
     currentGoal: string,
-    recentIterationSummaries: string[]
+    recentIterationSummaries: string[],
+    currentProductLengthChars?: number
 ): Promise<StrategistAdvice | null> => {
     if (!ai || !apiKeyAvailable) {
         console.warn("Strategist LLM call skipped: API key or client not available.");
@@ -108,13 +109,28 @@ export const getStrategicAdviceFromLLM = async (
     const maxRetries = 1;
     const retryDelayMs = 1000;
 
+    const validModelsString = SELECTABLE_MODELS.map(m => `'${m.name}' ('${m.description.split('.')[0]}')`).join(', ');
+
     const strategistSystemPrompt = `You are an AI Process Strategist. Your task is to analyze the current state of an iterative content generation process and suggest the optimal Gemini model, its thinking configuration (if applicable for 'gemini-2.5-flash-preview-04-17'), optionally minor adjustments to temperature/TopP/TopK, and optionally a meta-instruction for the *next* iteration of the main content generation AI.
     Provide your response strictly in JSON format with the following fields: "suggestedModelName" (optional string from valid list), "suggestedThinkingBudget" (optional, 0 or 1 for 'gemini-2.5-flash-preview-04-17' only), "suggestedTemperature" (optional number 0.0-2.0), "suggestedTopP" (optional number 0.0-1.0), "suggestedTopK" (optional integer >=1), "suggestedMetaInstruction" (optional string, 1-2 concise sentences for the main AI if it's highly stagnant or needs a new approach), and a mandatory "rationale" (1-3 sentences explaining your overall advice).
-    Valid models for 'suggestedModelName': ${SELECTABLE_MODELS.map(m => `'${m.name}' ('${m.description.split('.')[0]}')`).join(', ')}.
-    If stagnation is high (e.g., system nudge strategy is 'meta_instruct') or last validation failed critically, strongly consider suggesting a 'suggestedMetaInstruction' to guide the main AI's refinement approach.
-    If you suggest a 'suggestedMetaInstruction', make it actionable for the main content AI. Examples: "Focus on improving the logical flow and transitions between paragraphs." or "Try to simplify the complex terminology used in the last section." or "Re-evaluate the document's main argument for consistency with the original file data."
-    Suggest parameter changes sparingly and only if there's a strong reason based on stagnation or specific validation failures. Any suggested parameter change should be a *delta* or a specific value, not a general direction.
+    Valid models for 'suggestedModelName': ${validModelsString}.
+    
+    Value is not just refinement; for underdeveloped products, value lies in substantial conceptual expansion, addition of new details, examples, or arguments. Distinguish between a product needing polish and one needing growth.
+
+    PRIORITIZE EXPANSION FOR UNDERDEVELOPED KERNELS: If the 'Current Goal' or 'Content Stage Assessment' implies a need for more detailed output, but recent iteration summaries (and product length, if provided) show a very short product with consistently minor changes (wordsmithing), this strongly indicates an underdeveloped kernel. In such cases:
+    1. Your **primary goal** is to suggest a 'suggestedMetaInstruction' that explicitly directs the main AI to **substantially expand** the content (e.g., "The current product is a good starting point but needs significant expansion. Elaborate on [key concept identified by strategist], provide concrete examples, and explore related arguments to substantially increase its depth and breadth." or "Elaborate on the core thesis, add 2-3 supporting examples for key points, and explore counter-arguments or future implications to significantly increase depth and breadth.").
+    2. If ` + "`strategistInfluenceLevel`" + ` allows parameter overrides (assume 'OVERRIDE_FULL' is a possibility), and the main AI is in a hyper-deterministic state (e.g., Temperature near 0), **strongly consider suggesting a temporary, controlled increase in 'suggestedTemperature' (e.g., to 0.3-0.6) for 1-2 iterations** to facilitate this expansion, even if late in the overall iteration count. Clearly state this is a temporary measure for expansion and should revert to the global sweep or plan settings afterward.
+
+    CRITICAL ASSESSMENT (General):
+    - If stagnation is high (e.g., system nudge strategy is 'meta_instruct') or last validation failed critically, strongly consider suggesting a 'suggestedMetaInstruction' to guide the main AI's refinement approach.
+    - Critically assess if the current product, despite surface polish, is conceptually shallow or requires significant expansion versus minor refinement. If stagnation appears to be due to hyper-focus on minor edits of an underdeveloped idea (especially if the content is short or the 'Current Goal' implies more depth is needed), prioritize suggesting:
+        1. A **specific and actionable** EXPANSIONARY 'suggestedMetaInstruction'.
+        2. If influence level permits parameter overrides AND the main AI is in a hyper-deterministic state (e.g., low temperature), and parameters are very deterministic, **recommend** a TEMPORARY, CONTROLLED increase in 'suggestedTemperature' (e.g., to 0.3-0.5) to foster more diverse output for expansion.
+    
+    If you suggest a 'suggestedMetaInstruction', make it actionable for the main content AI. Examples: "Focus on improving the logical flow and transitions between paragraphs." or "Try to simplify the complex terminology used in the last section." or "Re-evaluate the document's main argument for consistency with the original file data." or "Substantially expand on the topic of X, adding more detail and examples."
+    Suggest parameter changes sparingly and only if there's a strong reason based on stagnation, specific validation failures, or a clear need for expansion from an overly deterministic state. Any suggested parameter change should be a specific value, not a general direction.
     Ensure any suggested parameters are within these valid ranges: Temperature (0.0-2.0), TopP (0.0-1.0), TopK (integer >=1).`;
+
 
     let lastConfigSummary = "N/A";
     if (lastUsedConfig) {
@@ -133,15 +149,19 @@ export const getStrategicAdviceFromLLM = async (
     - Current Iteration: ${currentIteration} (completed)
     - Max Iterations for current run: ${maxIterations}
     - Input Complexity: ${inputComplexity}
+    - Current Product Length: ${currentProductLengthChars || 'N/A'} chars.
     - Last Model Used: ${lastUsedModel || "N/A (First iteration)"}
     - Last Config Used: ${lastConfigSummary}
     - Stagnation Status: ${stagnationInfo.isStagnant ? `Stagnant for ${stagnationInfo.consecutiveStagnantIterations} iterations.` : "Not stagnant."} (Similarity with prev: ${(stagnationInfo.similarityWithPrevious || 0).toFixed(3)}) (System Nudge Strategy applied by system for this turn: ${stagnationInfo.nudgeStrategyApplied})
     - Last Iteration Validation: ${lastValidationInfo ? `${lastValidationInfo.passed ? 'Passed.' : 'Failed.'} Reason: ${lastValidationInfo.reason || 'N/A'}` : 'N/A'}
     - Current Goal: ${currentGoal}
+    - Content Stage Assessment: Is the current product a nascent idea needing expansion, a developed draft needing refinement, or a near-final piece needing polish? Is stagnation due to minor repetitive edits on an idea that actually needs to grow rather than just be polished?
+    - Expansion Potential: Given the product length and recent changes (see summaries), does this appear to be an underdeveloped kernel that needs expansion more than polish? If so, what specific aspects should be expanded?
     ${iterationSummariesText}
 
     Suggest 'suggestedModelName', 'suggestedThinkingBudget', optionally 'suggestedTemperature'/'suggestedTopP'/'suggestedTopK', and optionally a 'suggestedMetaInstruction'. Provide a 'rationale'.
     If 'stagnationInfo.nudgeStrategyApplied' is 'meta_instruct', this is a strong signal to provide a 'suggestedMetaInstruction'.
+    If 'Content Stage Assessment' or 'Expansion Potential' indicates an underdeveloped kernel, strongly consider expansionary tactics (expansionary meta-instruction, potentially temporary parameter adjustment for creativity if applicable and allowed).
     Prioritize 'gemini-2.5-flash-preview-04-17' or 'gemini-2.5-pro' for most tasks.
     `;
 

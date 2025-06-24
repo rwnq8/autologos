@@ -73,10 +73,10 @@ export const determineInitialStrategy = (
 };
 
 export const reevaluateStrategy = async (
-    processState: Pick<ProcessState, 'currentIteration' | 'maxIterations' | 'inputComplexity' | 'stagnationInfo' | 'iterationHistory' | 'currentModelForIteration' | 'currentAppliedModelConfig' | 'isPlanActive' | 'planStages'| 'currentPlanStageIndex' | 'selectedModelName' | 'stagnationNudgeEnabled' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness'>,
+    processState: Pick<ProcessState, 'currentIteration' | 'maxIterations' | 'inputComplexity' | 'stagnationInfo' | 'iterationHistory' | 'currentModelForIteration' | 'currentAppliedModelConfig' | 'isPlanActive' | 'planStages'| 'currentPlanStageIndex' | 'selectedModelName' | 'stagnationNudgeEnabled' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness' | 'currentProduct'>,
     baseUserConfig: ModelConfig // User's current slider settings
 ): Promise<ModelStrategy> => {
-    const { currentIteration, maxIterations, inputComplexity, stagnationInfo, iterationHistory, currentModelForIteration, currentAppliedModelConfig, isPlanActive, planStages, currentPlanStageIndex, selectedModelName, stagnationNudgeEnabled, strategistInfluenceLevel, stagnationNudgeAggressiveness } = processState;
+    const { currentIteration, maxIterations, inputComplexity, stagnationInfo, iterationHistory, currentModelForIteration, currentAppliedModelConfig, isPlanActive, planStages, currentPlanStageIndex, selectedModelName, stagnationNudgeEnabled, strategistInfluenceLevel, stagnationNudgeAggressiveness, currentProduct } = processState;
 
     let nextModelName: SelectableModelName = currentModelForIteration || selectedModelName || DEFAULT_MODEL_NAME;
     let nextConfig: ModelConfig;
@@ -168,8 +168,15 @@ export const reevaluateStrategy = async (
             .slice(-recentSummariesCount)
             .map(entry => `Iter ${entry.iteration} (Status: ${entry.status}, Valid: ${entry.aiValidationInfo?.passed ?? 'N/A'} - Reason: ${entry.aiValidationInfo?.reason || 'OK'}, Changes: +${entry.linesAdded || 0}/-${entry.linesRemoved || 0}): ${entry.productSummary || 'N/A'}`)
             .filter(summary => summary.length > 0);
+        
+        const currentProductLength = currentProduct ? currentProduct.length : 0;
 
-        strategistAdvice = await getStrategicAdviceFromLLM(currentIteration, maxIterations, inputComplexity, currentModelForIteration, currentAppliedModelConfig, stagnationInfo, lastLogEntry?.aiValidationInfo, currentGoal, recentIterationSummaries);
+        strategistAdvice = await getStrategicAdviceFromLLM(
+            currentIteration, maxIterations, inputComplexity, 
+            currentModelForIteration, currentAppliedModelConfig, 
+            stagnationInfo, lastLogEntry?.aiValidationInfo, 
+            currentGoal, recentIterationSummaries, currentProductLength
+        );
     } else {
         rationales.push("Strategist LLM consultation skipped: Influence level set to 'OFF'. Using code heuristics only.");
     }
