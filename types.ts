@@ -1,4 +1,3 @@
-
 // types.ts
 
 export interface ModelConfig {
@@ -259,7 +258,8 @@ export interface AiResponseValidationInfo {
       | 'error_phrase_with_significant_reduction' // Error phrase + significant reduction (>20%)
       | 'extreme_reduction_instructed_but_with_error_phrase' // Instructed to shorten, but also has error phrase
       | 'drastic_reduction_with_error_phrase' // Drastic reduction + error phrase
-      | 'initial_synthesis_failed_large_output'; // Iteration 1 output is excessively large relative to input
+      | 'initial_synthesis_failed_large_output' // Iteration 1 output is excessively large relative to input
+      | 'catastrophic_collapse'; 
     value?: string | ReductionDetailValue | PromptLeakageDetailValue | { [key: string]: any };
   };
 }
@@ -279,6 +279,8 @@ export interface StagnationInfo {
   consecutiveStagnantIterations: number;
   similarityWithPrevious?: number;
   nudgeStrategyApplied: NudgeStrategy;
+  consecutiveLowValueIterations: number;     
+  lastProductLengthForStagnation?: number; 
 }
 
 export interface ProcessState {
@@ -286,7 +288,7 @@ export interface ProcessState {
   currentProduct: string | null;
   iterationHistory: IterationLogEntry[];
   currentIteration: number;
-  maxIterations: number;
+  maxIterations: number; 
   isProcessing: boolean;
   finalProduct: string | null;
   statusMessage: string;
@@ -313,15 +315,15 @@ export interface ProcessState {
   planStages: PlanStage[];
   currentPlanStageIndex: number | null;
   currentStageIteration: number;
-  savedPlanTemplates: PlanTemplate[];
+  savedPlanTemplates: PlanTemplate[]; 
   currentDiffViewType: DiffViewType;
   isApiRateLimited?: boolean;
   rateLimitCooldownActiveSeconds?: number;
   inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
   currentModelForIteration?: SelectableModelName;
   activeMetaInstructionForNextIter?: string;
-  strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL'; // Non-optional
-  stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH'; // Non-optional
+  strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
+  stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 export interface IsLikelyAiErrorResponseResult {

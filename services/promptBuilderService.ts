@@ -46,7 +46,7 @@ export const getUserPromptComponents = (
   retryContext?: RetryContext,
   stagnationNudgeStrategy?: NudgeStrategy,
   initialOutlineForIter1?: OutlineGenerationResult,
-  loadedFilesForContext?: LoadedFile[], // Used to check if files were part of initial input
+  loadedFilesForContext?: LoadedFile[], 
   activeMetaInstruction?: string
 ): { systemInstruction: string, coreUserInstructions: string } => {
   let systemInstructionParts: string[] = [
@@ -65,7 +65,7 @@ export const getUserPromptComponents = (
 
   systemInstructionParts.push(`GENERAL RULES:
 Output Structure: Produce ONLY the new, modified textual product. Do NOT include conversational filler, apologies, or self-references like "Here's the updated product:".
-Convergence: If you determine that the product cannot be meaningfully improved further according to the current iteration's goals, OR if your generated product is identical to the 'Current State of Product' you received, prefix your ENTIRE response with "${CONVERGED_PREFIX}". Do this sparingly and only when truly converged, meaning the topic is **thoroughly explored, conceptually well-developed, and further iterations would genuinely add no significant conceptual value or would likely degrade quality.** Premature convergence on underdeveloped ideas or due to an inability to make further minor edits is undesirable. Unless the product is identical or the goal is unachievable, attempt refinement. A 'meaningful improvement' involves addressing specific aspects like clarity, coherence, depth, or structure as per the iteration's goal. If the task requires significant content generation or transformation, ensure this is substantially completed before considering convergence. Do not converge if simply unsure how to proceed; instead, attempt an alternative refinement strategy if the current one seems to stall.
+Convergence: If you determine that the product cannot be meaningfully improved further according to the current iteration's goals, OR if your generated product is identical to the 'Current State of Product' you received, prefix your ENTIRE response with "${CONVERGED_PREFIX}". Do this sparingly and only when truly converged. This means the topic is **thoroughly explored, conceptually well-developed, and further iterations would genuinely add no significant conceptual value (i.e., only minor stylistic tweaks on an already mature document) or would likely degrade quality.** Premature convergence on underdeveloped ideas is undesirable. However, if the document is mature and multiple recent iterations have yielded only negligible changes where the 'cost' of further iteration outweighs the benefit, you SHOULD declare convergence. Unless the product is identical or the goal is unachievable, attempt refinement. A 'meaningful improvement' involves addressing specific aspects like clarity, coherence, depth, or structure as per the iteration's goal. If the task requires significant content generation or transformation, ensure this is substantially completed before considering convergence. Do not converge if simply unsure how to proceed; instead, attempt an alternative refinement strategy if the current one seems to stall.
 File Usage: Base all refinements on the full content of the originally provided input files. The 'File Manifest' in the prompt is a reminder of these files.
 Error Handling: If you cannot fulfill a request due to ambiguity or impossibility, explain briefly and then output "${CONVERGED_PREFIX}" followed by the original unchanged product. Do not attempt to guess if instructions are critically unclear.
 Content Integrity: Preserve core information. Aggressively identify and consolidate duplicative content from multiple files into a single, synthesized representation. Unless specific instructions for summarization (e.g., 'shorter' length, 'key_points' format) or significant restructuring are provided for the current iteration, avoid unrequested deletions of unique information. However, merging and pruning redundant information is a critical part of maintaining integrity and producing a refined product.`
@@ -76,7 +76,7 @@ Content Integrity: Preserve core information. Aggressively identify and consolid
     systemInstructionParts.push(
 `CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files using Pre-Generated Outline): The 'Current State of Product' is an AI-generated outline and redundancy analysis. Your task for this first iteration is to:
 1. Use this outline AND the "Identified Redundancies" list (both provided in the user prompt below) as a STRONG GUIDE.
-2. Refer to the FULL ORIGINAL FILE DATA (provided in the very first API call when the outline was generated) to flesh out this outline into a complete, coherent, and de-duplicated document.
+2. Refer to the FULL ORIGINAL FILE DATA (provided in this API call) to flesh out this outline into a complete, coherent, and de-duplicated document.
 3. Resolve the identified redundancies.
 4. Produce a SINGLE, WELL-STRUCTURED document. This is your ONLY output for this iteration.
 Your primary success metric is adherence to the outline structure while ensuring comprehensive coverage from original files and robust de-duplication.`
@@ -111,7 +111,7 @@ The primary metric of success for this specific iteration is the quality of synt
     if (isInitialProductEmptyAndFilesLoaded && currentIterationOverall === 1 && !initialOutlineForIter1) {
       coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.\nTask: Initial Document Synthesis from Files.\nBased on the full content of all provided files (sent in this API call), your SOLE objective is to create a single, comprehensive, coherent, and de-duplicated initial document. Follow the 'CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files)' system instruction. This synthesized document will be the 'Current State of Product' for Iteration 2.\nOutput: Provide ONLY this new, synthesized document.`;
     } else if (currentIterationOverall === 1 && initialOutlineForIter1) {
-        coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.\nTask: Initial Document Synthesis from Outline.\nThe 'Current State of Product' (below) contains an AI-generated outline and a list of identified redundancies.\nYour task is to:\n1. Use this outline and redundancy list as a strong guide.\n2. Referencing the full original file data (provided to you when the outline was generated), flesh out this outline into a complete, coherent, and de-duplicated document.\n3. Ensure all identified redundancies are resolved.\n4. Produce a single, well-structured document.\nThis synthesized document will be the 'Current State of Product' for Iteration 2.\nOutput: Provide ONLY this new, synthesized document.`;
+        coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.\nTask: Initial Document Synthesis from Outline.\nThe 'Current State of Product' (below) contains an AI-generated outline and a list of identified redundancies.\nYour task is to:\n1. Use this outline and redundancy list as a strong guide.\n2. Referencing the full original file data (provided to you in this API call), flesh out this outline into a complete, coherent, and de-duplicated document.\n3. Ensure all identified redundancies are resolved.\n4. Produce a single, well-structured document.\nThis synthesized document will be the 'Current State of Product' for Iteration 2.\nOutput: Provide ONLY this new, synthesized document.`;
     }
      else {
       coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.
@@ -188,7 +188,6 @@ export const buildTextualPromptPart = (
         if (initialOutlineForIter1.identifiedRedundancies.trim()) {
             promptParts.push(`---IDENTIFIED REDUNDANCIES/VERSIONING (from AI analysis of original files)---\n${initialOutlineForIter1.identifiedRedundancies.trim()}`);
         }
-        // productForPrompt will be empty or just the outline reference here.
     } else if (productForPrompt.trim()) {
          promptParts.push(productForPrompt.trim());
     } else {

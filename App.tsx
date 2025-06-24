@@ -222,7 +222,14 @@ const App: React.FC = () => {
       isApiRateLimited: false, rateLimitCooldownActiveSeconds: 0,
       currentModelForIteration: modelForRewind,
       currentAppliedModelConfig: configForRewind,
-      stagnationInfo: { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none' } 
+      stagnationInfo: { 
+        isStagnant: false, 
+        consecutiveStagnantIterations: 0, 
+        similarityWithPrevious: undefined, 
+        nudgeStrategyApplied: 'none',
+        consecutiveLowValueIterations: 0,
+        lastProductLengthForStagnation: (reconstructedProductValue || "").length
+      } 
     });
     if (configForRewind) {
         setLoadedModelParametersCallback({

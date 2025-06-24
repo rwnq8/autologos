@@ -42,11 +42,18 @@ export const createInitialProcessState = (
   currentStageIteration: 0,
   savedPlanTemplates: [],
   currentDiffViewType: 'words',
-  aiProcessInsight: "System idle. Load files or type prompt to begin.",
+  aiProcessInsight: "System idle. Load input to begin.",
   isApiRateLimited: false,
   rateLimitCooldownActiveSeconds: 0,
   stagnationNudgeEnabled: true,
-  stagnationInfo: { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none' },
+  stagnationInfo: { 
+    isStagnant: false, 
+    consecutiveStagnantIterations: 0, 
+    similarityWithPrevious: undefined, 
+    nudgeStrategyApplied: 'none',
+    consecutiveLowValueIterations: 0, 
+    lastProductLengthForStagnation: undefined 
+  },
   inputComplexity: 'SIMPLE',
   currentModelForIteration: selectedModelNameInput,
   currentAppliedModelConfig: null,
@@ -150,7 +157,7 @@ export const useProcessState = () => {
         updates.finalProduct = null;
         updates.currentIteration = 0;
         updates.projectName = INITIAL_PROJECT_NAME_STATE; // Reset project name if all files cleared or first files added
-        updates.stagnationInfo = { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none' };
+        updates.stagnationInfo = { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none', consecutiveLowValueIterations: 0, lastProductLengthForStagnation: undefined };
         updates.currentProductBeforeHalt = null;
         updates.currentIterationBeforeHalt = undefined;
         updates.configAtFinalization = null;
@@ -180,7 +187,7 @@ export const useProcessState = () => {
               iterationHistory: [],
               finalProduct: null,
               currentIteration: 0,
-              stagnationInfo: { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none' },
+              stagnationInfo: { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none', consecutiveLowValueIterations: 0, lastProductLengthForStagnation: undefined },
               currentProductBeforeHalt: null,
               currentIterationBeforeHalt: undefined,
               configAtFinalization: null,
@@ -207,10 +214,10 @@ export const useProcessState = () => {
     fileProcessingInfo: FileProcessingInfo;
     aiValidationInfo?: AiResponseValidationInfo;
     directAiResponseHead?: string;
-    directAiResponseTail?: string;
+    directAiResponseTail?: string; 
     directAiResponseLengthChars?: number;
     processedProductHead?: string;
-    processedProductTail?: string;
+    processedProductTail?: string; 
     processedProductLengthChars?: number;
     attemptCount?: number;
     strategyRationale?: string;
@@ -309,22 +316,30 @@ export const useProcessState = () => {
     const initialComplexity = calculateInputComplexity(initialStateFromCreator.initialPrompt, initialStateFromCreator.loadedFiles);
 
     const resetState: ProcessState = {
-        ...initialStateFromCreator, // This sets defaults for strategistInfluenceLevel and stagnationNudgeAggressiveness
+        ...initialStateFromCreator, 
         apiKeyStatus: resetApiKeyStatus,
         selectedModelName: resetSelectedModelName,
         currentModelForIteration: resetSelectedModelName,
         statusMessage: "System reset. Load input file(s) or type prompt to begin.",
         aiProcessInsight: "System reset. Ready for new input.",
-        savedPlanTemplates: currentSavedPlanTemplates, // Preserve user's saved templates
-        projectId: await storageService.hasSavedState() ? state.projectId : null, // Preserve existing projectId if auto-save existed
+        savedPlanTemplates: currentSavedPlanTemplates, 
+        projectId: await storageService.hasSavedState() ? state.projectId : null, 
         stagnationNudgeEnabled: true,
         currentDiffViewType: 'words',
         inputComplexity: initialComplexity,
-        currentAppliedModelConfig: baseModelConfig, // Use the provided base config for the initial reset state
+        currentAppliedModelConfig: baseModelConfig, 
+        stagnationInfo: { 
+            isStagnant: false, 
+            consecutiveStagnantIterations: 0, 
+            similarityWithPrevious: undefined, 
+            nudgeStrategyApplied: 'none',
+            consecutiveLowValueIterations: 0,
+            lastProductLengthForStagnation: undefined 
+        },
     };
     setState(resetState);
 
-  }, [state.projectId]); // state.projectId ensures we don't unintentionally clear a loaded project's ID
+  }, [state.projectId]); 
 
 
   return {

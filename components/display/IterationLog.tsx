@@ -16,7 +16,7 @@ const IterationLog: React.FC<IterationLogProps> = ({
 }) => {
   const processCtx = useProcessContext();
   const [expandedLogItem, setExpandedLogItem] = useState<number | null>(null);
-  const [individualCopyStatus, setIndividualCopyStatus] = useState<{ [key: number]: string }>({}); // For individual items
+  // individualCopyStatus is no longer needed here if LogEntryItem handles its own status
   const [globalCopyStatus, setGlobalCopyStatus] = useState<string>(''); // For "Copy All" button
 
 
@@ -76,10 +76,8 @@ const IterationLog: React.FC<IterationLogProps> = ({
             logEntry={log}
             isExpanded={expandedLogItem === log.iteration}
             onToggleExpand={toggleLogItem}
-            // handleCopyDiagnostics is now internal to LogEntryItem using the formatter
             reconstructProductCallback={(iter, hist) => processCtx.reconstructProductCallback(iter, hist, processCtx.initialPrompt)}
-            iterationHistory={processCtx.iterationHistory} // Still needed for diff reconstruction in LogEntryItem
-            copyStatusForThisItem={individualCopyStatus[log.iteration]} // Use individualCopyStatus
+            iterationHistory={processCtx.iterationHistory} 
             onRewind={processCtx.handleRewind}
             onExportIterationMarkdown={processCtx.handleExportIterationMarkdown}
             isProcessing={processCtx.isProcessing}

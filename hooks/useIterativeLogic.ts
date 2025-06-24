@@ -6,16 +6,24 @@ import * as GeminaiService from '../services/geminiService';
 import { determineInitialStrategy, reevaluateStrategy } from '../services/ModelStrategyService';
 import { isLikelyAiErrorResponse, getProductSummary, parseAndCleanJsonOutput, CONVERGED_PREFIX } from '../services/iterationUtils';
 import { calculateFleschReadingEase, calculateJaccardSimilarity } from '../services/textAnalysisService';
+import { DETERMINISTIC_TARGET_ITERATION } from '../hooks/useModelParameters';
+import * as Diff from 'diff';
+
 
 const SELF_CORRECTION_MAX_ATTEMPTS = 2;
 
-// Base thresholds for nudge strategy determination
 const BASE_THRESHOLD_PARAMS_LIGHT = 1; 
 const BASE_THRESHOLD_PARAMS_HEAVY = 2; 
 const BASE_THRESHOLD_META_INSTRUCT = 3;
 
-const STAGNATION_SIMILARITY_THRESHOLD = 0.95; // If Jaccard > this, it's considered similar
-const STAGNATION_MIN_CHANGE_THRESHOLD = 5; // If net lines added/removed < this, considered low change
+const STAGNATION_SIMILARITY_THRESHOLD = 0.95; 
+const STAGNATION_MIN_CHANGE_THRESHOLD = 5; 
+
+// Refined thresholds for system-forced convergence
+const FORCED_CONVERGENCE_SIMILARITY_THRESHOLD_STRICT = 0.985; 
+const FORCED_CONVERGENCE_LINE_CHANGE_THRESHOLD_STRICT = 1; 
+const FORCED_CONVERGENCE_CHAR_DELTA_STRICT = 50;
+
 
 const STAGNATION_NUDGE_IGNORE_AFTER_ITERATION_PERCENT = 0.85; 
 
@@ -87,15 +95,15 @@ export const useIterativeLogic = (
 
     addLogEntryFromHook({
       iteration: iterationNumber,
-      currentFullProduct: finalProductForSummary,
+      currentFullProduct: finalProductForSummary, 
       status: statusMessage,
-      previousFullProduct: previousProductForLog,
+      previousFullProduct: previousProductForLog, 
       promptSystemInstructionSent: apiResult?.promptSystemInstructionSent,
       promptCoreUserInstructionsSent: apiResult?.promptCoreUserInstructionsSent,
       promptFullUserPromptSent: apiResult?.promptFullUserPromptSent,
       apiStreamDetails: apiResult?.apiStreamDetails,
       modelConfigUsed: modelConfigUsed,
-      readabilityScoreFlesch: calculateFleschReadingEase(finalProductForSummary),
+      readabilityScoreFlesch: calculateFleschReadingEase(finalProductForSummary), 
       fileProcessingInfo: fileProcessingInfoForLog || { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0, loadedFilesForIterationContext: [] },
       aiValidationInfo,
       directAiResponseHead: directResponseHead,
@@ -114,7 +122,7 @@ export const useIterativeLogic = (
 
   const handleHalt = () => {
     haltSignalRef.current = true;
-    isProcessingRef.current = false; // Ensure this is set immediately
+    isProcessingRef.current = false; 
   };
 
   const onStreamChunk = (chunkText: string) => {
@@ -143,17 +151,14 @@ export const useIterativeLogic = (
     } else if (aggressiveness === 'HIGH') {
         thresholdLight = 1; 
         thresholdHeavy = 2; 
-        thresholdMeta  = 2; // Meta can trigger faster on high aggression
+        thresholdMeta  = 2; 
     }
-    // Ensure thresholds are ordered logically after adjustment
     thresholdHeavy = Math.max(thresholdLight, thresholdHeavy);
     thresholdMeta = Math.max(thresholdHeavy, thresholdMeta);
-
 
     if (consecutiveStagnantIterations >= thresholdMeta) return 'meta_instruct';
     if (consecutiveStagnantIterations >= thresholdHeavy) return 'params_heavy';
     if (consecutiveStagnantIterations >= thresholdLight) return 'params_light';
-
     return 'none';
   };
 
@@ -194,7 +199,7 @@ export const useIterativeLogic = (
     updateProcessState({
       isProcessing: true, finalProduct: null,
       statusMessage: "Starting process...", aiProcessInsight: "Initializing strategy for Iteration 1...",
-      currentProductBeforeHalt: null, currentIterationBeforeHalt: undefined, // Clear these on new start
+      currentProductBeforeHalt: null, currentIterationBeforeHalt: undefined, 
       currentModelForIteration: iterationStrategy.modelName,
       currentAppliedModelConfig: iterationStrategy.config,
       activeMetaInstructionForNextIter: iterationStrategy.activeMetaInstruction,
@@ -223,7 +228,17 @@ export const useIterativeLogic = (
         iterationStrategy.modelName, 
         iterationStrategy.activeMetaInstruction 
       );
-      updateProcessState({ currentProduct: iterZeroProduct, currentIteration: 0 });
+      updateProcessState({ 
+        currentProduct: iterZeroProduct, 
+        currentIteration: 0,
+        stagnationInfo: { 
+            ...processState.stagnationInfo, 
+            consecutiveStagnantIterations: 0, // Reset broad stagnation counter
+            similarityWithPrevious: undefined,
+            consecutiveLowValueIterations: 0, 
+            lastProductLengthForStagnation: iterZeroProduct.length 
+        }
+      });
       await performAutoSave();
     }
 
@@ -260,7 +275,7 @@ export const useIterativeLogic = (
              break;
           }
         }
-      } else { // Global Mode
+      } else { 
         if (currentIter >= maxOverallIterations) {
           updateProcessState({ isProcessing: false, finalProduct: currentProd, statusMessage: "Maximum global iterations reached.", aiProcessInsight: "Global iterations complete.", configAtFinalization: iterationStrategy.config });
           break;
@@ -280,18 +295,14 @@ export const useIterativeLogic = (
       const stagnationInfoForStrategyCall = { ...processState.stagnationInfo, nudgeStrategyApplied: nudgeStrategyForThisIteration };
       
       const stateForCurrentStrategyEval: Pick<ProcessState, 'currentProduct' | 'currentIteration' | 'maxIterations' | 'inputComplexity' | 'stagnationInfo' | 'iterationHistory' | 'currentModelForIteration' | 'currentAppliedModelConfig' | 'isPlanActive' | 'planStages'| 'currentPlanStageIndex' | 'selectedModelName' | 'stagnationNudgeEnabled' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness' | 'initialPrompt' | 'loadedFiles'> = {
-        currentProduct: currentProd,
-        currentIteration: currentIter, 
-        maxIterations: processState.maxIterations,
-        inputComplexity: processState.inputComplexity,
-        stagnationInfo: stagnationInfoForStrategyCall,
-        iterationHistory: processState.iterationHistory, 
-        currentModelForIteration: processState.currentModelForIteration, 
+        currentProduct: currentProd, currentIteration: currentIter, maxIterations: processState.maxIterations,
+        inputComplexity: processState.inputComplexity, stagnationInfo: stagnationInfoForStrategyCall,
+        iterationHistory: processState.iterationHistory, currentModelForIteration: processState.currentModelForIteration, 
         currentAppliedModelConfig: processState.currentAppliedModelConfig,
         isPlanActive: processState.isPlanActive, planStages: processState.planStages, currentPlanStageIndex: currentPlanStageIdx,
         selectedModelName: processState.selectedModelName, stagnationNudgeEnabled: processState.stagnationNudgeEnabled,
         strategistInfluenceLevel: processState.strategistInfluenceLevel, stagnationNudgeAggressiveness: processState.stagnationNudgeAggressiveness,
-        initialPrompt: processState.initialPrompt, loadedFiles: processState.loadedFiles, 
+        initialPrompt: processState.initialPrompt, loadedFiles: processState.loadedFiles,
       };
       iterationStrategy = await reevaluateStrategy(stateForCurrentStrategyEval, userBaseConfig);
       
@@ -357,13 +368,13 @@ export const useIterativeLogic = (
               }
           }
           
-          const filesSentToThisIterateCall = (currentIter + 1) === 1 && processState.loadedFiles.length > 0 && !outlineResultForIter1;
+          const filesActuallySentInIterateProductCall = (currentIter + 1) === 1 && processState.loadedFiles.length > 0;
           fileProcessingInfoForApi = { 
-              filesSentToApiIteration: filesSentToThisIterateCall ? (currentIter + 1) : null,
-              numberOfFilesActuallySent: filesSentToThisIterateCall ? processState.loadedFiles.length : 0,
-              totalFilesSizeBytesSent: filesSentToThisIterateCall ? processState.loadedFiles.reduce((sum, f) => sum + f.size, 0) : 0,
-              fileManifestProvidedCharacterCount: processState.initialPrompt.length,
-              loadedFilesForIterationContext: (currentIter + 1) === 1 && processState.loadedFiles.length > 0 ? processState.loadedFiles : undefined,
+              filesSentToApiIteration: filesActuallySentInIterateProductCall ? (currentIter + 1) : null,
+              numberOfFilesActuallySent: filesActuallySentInIterateProductCall ? processState.loadedFiles.length : 0,
+              totalFilesSizeBytesSent: filesActuallySentInIterateProductCall ? processState.loadedFiles.reduce((sum, f) => sum + f.size, 0) : 0,
+              fileManifestProvidedCharacterCount: processState.initialPrompt.length, 
+              loadedFilesForIterationContext: filesActuallySentInIterateProductCall ? processState.loadedFiles : undefined,
           };
           const productInputForApi = (currentIter === 0 && outlineResultForIter1) ? (outlineResultForIter1.outline || "") : (currentProd || "");
 
@@ -406,11 +417,11 @@ export const useIterativeLogic = (
           
           const tempLogEntryForValidation: IterationLogEntry = {
             iteration: currentIter + 1,
-            productSummary: getProductSummary(iterationProductFromApi), // Provide summary for context if needed
+            productSummary: getProductSummary(iterationProductFromApi), 
             status: apiResultForLog?.status || "VALIDATING",
             timestamp: Date.now(),
             fileProcessingInfo: fileProcessingInfoForApi,
-            apiStreamDetails: apiResultForLog?.apiStreamDetails, // Crucial for checking finishReason
+            apiStreamDetails: apiResultForLog?.apiStreamDetails, 
             linesAdded: 0, linesRemoved: 0, 
           };
           const aiValidationResult: IsLikelyAiErrorResponseResult = isLikelyAiErrorResponse( iterationProductFromApi, previousProductSnapshot || "", tempLogEntryForValidation, activePlanStage?.length, activePlanStage?.format );
@@ -418,7 +429,7 @@ export const useIterativeLogic = (
           
           let isCritFailureFromValidation = false;
           if (aiValidationResult.isError && validationInfoForLog?.details?.type) {
-              const criticalErrorTypes: AiResponseValidationInfo['details']['type'][] = [ 'prompt_leakage', 'error_phrase_with_significant_reduction', 'extreme_reduction_error', 'extreme_reduction_instructed_but_with_error_phrase', 'initial_synthesis_failed_large_output' ];
+              const criticalErrorTypes: AiResponseValidationInfo['details']['type'][] = [ 'prompt_leakage', 'error_phrase_with_significant_reduction', 'extreme_reduction_error', 'extreme_reduction_instructed_but_with_error_phrase', 'initial_synthesis_failed_large_output', 'catastrophic_collapse' ];
               if (criticalErrorTypes.includes(validationInfoForLog.details.type)) isCritFailureFromValidation = true;
               if (validationInfoForLog.details.type === 'error_phrase' && typeof validationInfoForLog.details.value === 'string' && validationInfoForLog.details.value.startsWith('API Finish Reason: UNKNOWN')) {
                 isCritFailureFromValidation = true;
@@ -448,32 +459,71 @@ export const useIterativeLogic = (
           isProcessingRef.current = false; break; 
       }
 
+      let finalStrategyRationale = iterationStrategy.rationale;
+      let systemForcedConvergence = false;
       let newStagnationInfo: StagnationInfo = { ...processState.stagnationInfo, nudgeStrategyApplied: 'none' }; 
+      let currentSimilarity = 0;
+      let netLineChange = 0;
+      let charLengthChange = 0;
+
+      if (apiResultForLog?.status !== 'CONVERGED' && currentIter >= 0) { 
+        currentSimilarity = calculateJaccardSimilarity(previousProductSnapshot, currentProd);
+        
+        // Get line changes for this specific attempt, as logging for current iter might not be complete yet.
+        const iterLogDiffLines = Diff.diffLines(previousProductSnapshot || "", currentProd || "", { newlineIsToken: true, ignoreWhitespace: false });
+        netLineChange = iterLogDiffLines.reduce((acc, part) => acc + (part.added ? (part.count || 0) : (part.removed ? -(part.count || 0) : 0)), 0);
+        
+        charLengthChange = Math.abs((currentProd?.length || 0) - (processState.stagnationInfo.lastProductLengthForStagnation ?? (currentProd?.length || 0)));
+
+        if (currentIter > 0 && // Only count low-value iterations after the first actual refinement (Iter 1)
+            currentSimilarity >= FORCED_CONVERGENCE_SIMILARITY_THRESHOLD_STRICT && 
+            Math.abs(netLineChange) <= FORCED_CONVERGENCE_LINE_CHANGE_THRESHOLD_STRICT &&
+            charLengthChange <= FORCED_CONVERGENCE_CHAR_DELTA_STRICT) {
+            newStagnationInfo.consecutiveLowValueIterations = (processState.stagnationInfo.consecutiveLowValueIterations || 0) + 1;
+        } else if (currentIter > 0) { 
+            newStagnationInfo.consecutiveLowValueIterations = 0;
+        }
+        
+        const currentModelConfigIsHighlyDeterministic = iterationStrategy.config.temperature <= 0.1 && iterationStrategy.config.topK <= 3;
+        const forceConvergenceCondition1 = newStagnationInfo.consecutiveLowValueIterations >= 2;
+        const forceConvergenceCondition2 = newStagnationInfo.consecutiveLowValueIterations >= 1 && isGlobalMode && (currentIter + 1) > DETERMINISTIC_TARGET_ITERATION && currentModelConfigIsHighlyDeterministic;
+        
+        if (forceConvergenceCondition1 || forceConvergenceCondition2) {
+            systemForcedConvergence = true;
+            apiResultForLog = { ...apiResultForLog, status: 'CONVERGED' }; 
+            const forcedReason = `System-forced convergence: ${newStagnationInfo.consecutiveLowValueIterations} consecutive iter(s) with minimal substantive change (High Similarity: ${currentSimilarity.toFixed(3)}, Line Δ: ${netLineChange}, Char Δ: ${charLengthChange}). ${forceConvergenceCondition2 && !forceConvergenceCondition1 ? "In late-stage deterministic global mode with restrictive params." : ""}`;
+            validationInfoForLog = { checkName: "SystemConvergence", passed: true, reason: forcedReason, details: { type: 'passed' }}; 
+            finalStrategyRationale = `${finalStrategyRationale} | ${forcedReason}`;
+        }
+      }
+
       if (isGlobalMode) {
           const similarity = calculateJaccardSimilarity(previousProductSnapshot, currentProd);
-          const prevLogEntry = processState.iterationHistory.find(e => e.iteration === currentIter);
-          const netLineChange = (prevLogEntry?.linesAdded || 0) - (prevLogEntry?.linesRemoved || 0);
+          const prevLogEntryForStagnation = processState.iterationHistory.find(e => e.iteration === currentIter); // Use overall history for comparison with *previous* iteration's diff
+          const netLineChangeForStagnation = (prevLogEntryForStagnation?.linesAdded || 0) - (prevLogEntryForStagnation?.linesRemoved || 0);
+          
           let isNowStagnant = false;
-          if ( (similarity > STAGNATION_SIMILARITY_THRESHOLD || Math.abs(netLineChange) < STAGNATION_MIN_CHANGE_THRESHOLD) && (currentProd || "").length > 0 && (previousProductSnapshot || "").length > 0 ) {
+          if (currentIter > 0 && ( (similarity > STAGNATION_SIMILARITY_THRESHOLD || Math.abs(netLineChangeForStagnation) < STAGNATION_MIN_CHANGE_THRESHOLD) && (currentProd || "").length > 0 && (previousProductSnapshot || "").length > 0) ) {
               isNowStagnant = true;
-              newStagnationInfo.consecutiveStagnantIterations++;
-          } else {
+              newStagnationInfo.consecutiveStagnantIterations = (processState.stagnationInfo.consecutiveStagnantIterations || 0) + 1;
+          } else if (currentIter > 0) { // Reset only if not the very first iteration (Iter 0->1 comparison)
               newStagnationInfo.consecutiveStagnantIterations = 0;
           }
           newStagnationInfo.isStagnant = isNowStagnant;
           newStagnationInfo.similarityWithPrevious = similarity;
-          updateProcessState({ stagnationInfo: { ...newStagnationInfo } }); 
       }
+      newStagnationInfo.lastProductLengthForStagnation = currentProd?.length || 0; 
+      updateProcessState({ stagnationInfo: { ...newStagnationInfo } }); 
 
       currentIter++;
       if (activePlanStage) currentStageIterCount++;
 
-      logIterationData(currentIter, iterationProductFromApi, apiResultForLog?.status === 'CONVERGED' ? "Converged" : "Completed", previousProductSnapshot, apiResultForLog, iterationStrategy.config, fileProcessingInfoForApi, validationInfoForLog, iterationProductFromApi.length, currentProd?.length || 0, iterationAttemptCount, iterationStrategy.rationale, iterationStrategy.modelName, iterationStrategy.activeMetaInstruction);
-      updateProcessState({ currentProduct: currentProd, currentIteration: currentIter, currentStageIteration: currentStageIterCount, currentPlanStageIndex: currentPlanStageIdx, statusMessage: `Iteration ${currentIter} ${apiResultForLog?.status}.`, aiProcessInsight: `AI refinement complete for iter ${currentIter}. ${newStagnationInfo.isStagnant && isGlobalMode ? `Stagnation detected (${newStagnationInfo.consecutiveStagnantIterations}x).` : 'Progress good.'}` });
+      logIterationData(currentIter, iterationProductFromApi, systemForcedConvergence ? "System Forced Convergence" : (apiResultForLog?.status === 'CONVERGED' ? "AI Converged" : "Completed"), previousProductSnapshot, apiResultForLog, iterationStrategy.config, fileProcessingInfoForApi, validationInfoForLog, iterationProductFromApi.length, currentProd?.length || 0, iterationAttemptCount, finalStrategyRationale, iterationStrategy.modelName, iterationStrategy.activeMetaInstruction);
+      updateProcessState({ currentProduct: currentProd, currentIteration: currentIter, currentStageIteration: currentStageIterCount, currentPlanStageIndex: currentPlanStageIdx, statusMessage: `Iteration ${currentIter} ${systemForcedConvergence ? "System Forced Convergence" : (apiResultForLog?.status === 'CONVERGED' ? 'AI Converged' : 'Completed')}.`, aiProcessInsight: `AI refinement complete for iter ${currentIter}. ${newStagnationInfo.isStagnant && isGlobalMode ? `Stagnation detected (${newStagnationInfo.consecutiveStagnantIterations}x). Low-value iters: ${newStagnationInfo.consecutiveLowValueIterations}.` : 'Progress good.'}` });
       await performAutoSave();
 
-      if (apiResultForLog?.status === 'CONVERGED') {
-        updateProcessState({ isProcessing: false, finalProduct: currentProd, statusMessage: `Process converged at Iteration ${currentIter}.`, aiProcessInsight: "AI indicated convergence.", configAtFinalization: iterationStrategy.config });
+      if (apiResultForLog?.status === 'CONVERGED') { // Handles both AI and system-forced convergence
+        updateProcessState({ isProcessing: false, finalProduct: currentProd, statusMessage: `Process converged at Iteration ${currentIter}.`, aiProcessInsight: systemForcedConvergence ? `System-forced convergence: ${newStagnationInfo.consecutiveLowValueIterations} consecutive iter(s) with minimal substantive change (Similarity: ${currentSimilarity.toFixed(3)}, Line Δ: ${netLineChange}, Char Δ: ${charLengthChange}).` : "AI indicated convergence.", configAtFinalization: iterationStrategy.config });
         isProcessingRef.current = false; break;
       }
     } 
