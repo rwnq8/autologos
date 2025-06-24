@@ -1,5 +1,4 @@
 
-
 import React, { useEffect, useCallback, useRef, useState } from 'react';
 import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile } from './types.ts';
 import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION } from './types.ts';
@@ -89,7 +88,7 @@ const App: React.FC = () => {
   const [isApiRateLimitedLocal, setIsApiRateLimitedLocal] = useState(processState.isApiRateLimited || false);
   const [rateLimitCooldownActiveSecondsLocal, setRateLimitCooldownActiveSecondsLocal] = useState(processState.rateLimitCooldownActiveSeconds || 0);
   const cooldownTimerRef = useRef<number | null>(null);
-  const rateLimitCooldownDuration = 60;
+  const rateLimitCooldownDuration:number = 60;
 
   const clearCooldownTimer = useCallback(() => {
     if (cooldownTimerRef.current) {
@@ -262,7 +261,7 @@ const App: React.FC = () => {
 
     updateProcessState({ statusMessage: `Processing ${files.length} file(s)...` });
     try {
-      const loadedFilesArray: LoadedFile[] = [];
+      // const loadedFilesArray: LoadedFile[] = []; // This line seems unused
       const filePromises = Array.from(files).map(async (file) => {
         const fileNameLower = file.name.toLowerCase();
 

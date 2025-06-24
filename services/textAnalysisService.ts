@@ -1,5 +1,4 @@
 
-
 // Basic word count based on splitting by space.
 export const countWords = (text: string): number => {
   if (!text || !text.trim()) {

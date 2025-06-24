@@ -1,3 +1,4 @@
+
 {
   "name": "Autologos Iterative Process Engine",
   "description": "An application that accepts a user's initial prompt and iteratively refines it using AI to converge on a final 'product'. The process is unsupervised and automated after initiation.",

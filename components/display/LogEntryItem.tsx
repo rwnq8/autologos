@@ -5,6 +5,7 @@ import * as GeminaiDiff from 'diff';
 import { useProcessContext } from '../../contexts/ProcessContext';
 import { countWords } from '../../services/textAnalysisService';
 import { SELECTABLE_MODELS } from '../../types';
+import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter'; // Import the new formatter
 
 
 interface LogEntryItemProps {
@@ -13,9 +14,8 @@ interface LogEntryItemProps {
   onToggleExpand: (iteration: number) => void;
   onRewind: (iterationNumber: number) => void;
   onExportIterationMarkdown: (iterationNumber: number) => void;
-  onCopyDiagnostics: (logEntry: IterationLogEntry) => Promise<void>;
-  reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[]) => ReconstructedProductResult;
-  iterationHistory: IterationLogEntry[];
+  reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[]) => ReconstructedProductResult; // baseInitialPrompt is now handled by ProcessContext
+  iterationHistory: IterationLogEntry[]; // Keep this for local diff reconstruction logic
   copyStatusForThisItem: string | undefined;
   isProcessing: boolean;
 }
@@ -26,18 +26,33 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
   onToggleExpand,
   onRewind,
   onExportIterationMarkdown,
-  onCopyDiagnostics,
-  reconstructProductCallback,
-  iterationHistory,
+  reconstructProductCallback, // Used for local diff display
+  iterationHistory, // Used for local diff display
   copyStatusForThisItem,
   isProcessing,
 }) => {
-  const { initialPrompt } = useProcessContext();
+  const { initialPrompt: baseInitialPrompt } = useProcessContext(); // Get baseInitialPrompt from context
   const [expandedDiagnostics, setExpandedDiagnostics] = useState<{ [key: string]: boolean }>({});
 
   const toggleDiagnosticSection = (key: string) => {
     setExpandedDiagnostics(prev => ({ ...prev, [key]: !prev[key] }));
   };
+
+  const handleCopySingleDiagnostic = async () => {
+    setLocalCopyStatus("Copying...");
+    try {
+      // Pass the full history and baseInitialPrompt for context if the formatter needs it
+      // for things like reconstructing products for diffs within the diagnostic string.
+      const diagString = formatLogEntryDiagnostics(logEntry, iterationHistory, baseInitialPrompt);
+      await navigator.clipboard.writeText(diagString);
+      setLocalCopyStatus("Copied!");
+    } catch (err) {
+      console.error('Failed to copy diagnostics for iter ' + logEntry.iteration + ':', err);
+      setLocalCopyStatus("Copy Failed");
+    }
+    setTimeout(() => setLocalCopyStatus(undefined), 2000);
+  };
+
 
   const getProductSummaryForDisplay = (entry: IterationLogEntry): string => {
     return entry.productSummary || "Summary N/A";
@@ -74,6 +89,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
       let newTextResult: ReconstructedProductResult;
       let overallReconstructionError: string | undefined;
 
+      // reconstructProductCallback implicitly uses baseInitialPrompt from context now
       newTextResult = reconstructProductCallback(logEntry.iteration, iterationHistory);
 
       if (logEntry.iteration === 0) {
@@ -107,6 +123,9 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
       diffDisplayComponent = [<span key="diff_error" className="text-red-500 dark:text-red-400 block">Error displaying diff: {e.message}</span>];
     }
   }
+  // Ensure copyStatus (local state for individual copy button) is properly scoped here
+  const [localCopyStatus, setLocalCopyStatus] = useState<string | undefined>(undefined);
+
 
   const canRewind = logEntry.iteration >= 0 && !isProcessing;
   const iterZeroResultForExportCheck = logEntry.iteration === 0 ? reconstructProductCallback(0, iterationHistory) : null;
@@ -236,13 +255,13 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
             </button>
           )}
           <button
-            onClick={() => onCopyDiagnostics(logEntry)}
+            onClick={handleCopySingleDiagnostic}
             className="inline-flex items-center px-2.5 py-1 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 disabled:opacity-50 transition-colors relative"
             title="Copy diagnostics for this iteration to clipboard"
             aria-label="Copy diagnostics for this iteration"
             disabled={isProcessing}
           >
-            {copyStatusForThisItem || "Copy Diag."}
+            {localCopyStatus || "Copy Diag."}
           </button>
         </div>
       </div>

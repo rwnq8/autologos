@@ -1,5 +1,4 @@
 
-
 import { useRef, useState, useCallback }
 from 'react';
 import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, IsLikelyAiErrorResponseResult, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, ModelStrategy } from '../types.ts';
@@ -174,10 +173,11 @@ export const useIterativeLogic = (
     haltSignalRef.current = false;
     currentStreamBufferRef.current = "";
 
-    let currentIter = processState.currentIterationBeforeHalt ?? processState.currentIteration;
+    let currentIter = processState.currentProductBeforeHalt !== null ? (processState.currentIterationBeforeHalt ?? processState.currentIteration) : processState.currentIteration;
     let currentProd = processState.currentProductBeforeHalt ?? processState.currentProduct;
-    let currentPlanStageIdx = processState.currentPlanStageIndex ?? (processState.isPlanActive && processState.planStages.length > 0 ? 0 : null);
-    let currentStageIterCount = processState.currentStageIteration ?? 0;
+
+    let currentPlanStageIdx = processState.currentProductBeforeHalt !== null ? (processState.currentPlanStageIndex ?? (processState.isPlanActive && processState.planStages.length > 0 ? 0 : null)) : (processState.isPlanActive && processState.planStages.length > 0 ? (processState.currentPlanStageIndex ?? 0) : null);
+    let currentStageIterCount = processState.currentProductBeforeHalt !== null ? (processState.currentStageIteration ?? 0) : (processState.currentStageIteration ?? 0);
     
     const userBaseConfig = getUserSetBaseConfig();
 
@@ -194,7 +194,7 @@ export const useIterativeLogic = (
     updateProcessState({
       isProcessing: true, finalProduct: null,
       statusMessage: "Starting process...", aiProcessInsight: "Initializing strategy for Iteration 1...",
-      currentProductBeforeHalt: null, currentIterationBeforeHalt: undefined,
+      currentProductBeforeHalt: null, currentIterationBeforeHalt: undefined, // Clear these on new start
       currentModelForIteration: iterationStrategy.modelName,
       currentAppliedModelConfig: iterationStrategy.config,
       activeMetaInstructionForNextIter: iterationStrategy.activeMetaInstruction,
@@ -203,25 +203,25 @@ export const useIterativeLogic = (
 
     if (currentIter === 0 && (currentProd === null || currentProd.trim() === "")) {
       const initialFileProcessingInfo: FileProcessingInfo = {
-        filesSentToApiIteration: null, // No API call for Iteration 0 product itself
+        filesSentToApiIteration: null, 
         numberOfFilesActuallySent: processState.loadedFiles.length,
         totalFilesSizeBytesSent: processState.loadedFiles.reduce((sum, f) => sum + f.size, 0),
-        fileManifestProvidedCharacterCount: processState.initialPrompt.length, // Manifest length
-        loadedFilesForIterationContext: processState.loadedFiles, // Provide all files for context of Iter 0
+        fileManifestProvidedCharacterCount: processState.initialPrompt.length, 
+        loadedFilesForIterationContext: processState.loadedFiles, 
       };
-      let iterZeroProduct = ""; // Default to empty if files are primary input
+      let iterZeroProduct = ""; 
       if (processState.loadedFiles.length === 0 && processState.initialPrompt.trim() !== "") {
-        iterZeroProduct = processState.initialPrompt; // Use direct prompt if no files
+        iterZeroProduct = processState.initialPrompt; 
       }
       currentProd = iterZeroProduct;
       logIterationData(
         0, iterZeroProduct, "Initial state loaded.", "",
-        undefined, iterationStrategy.config, // Use the initially determined config for logging
+        undefined, iterationStrategy.config, 
         initialFileProcessingInfo, undefined,
         iterZeroProduct.length, iterZeroProduct.length, 0,
-        iterationStrategy.rationale, // Log initial strategy rationale
-        iterationStrategy.modelName, // Log initial model
-        iterationStrategy.activeMetaInstruction // Log initial meta instruction (likely undefined)
+        iterationStrategy.rationale, 
+        iterationStrategy.modelName, 
+        iterationStrategy.activeMetaInstruction 
       );
       updateProcessState({ currentProduct: iterZeroProduct, currentIteration: 0 });
       await performAutoSave();
@@ -270,8 +270,6 @@ export const useIterativeLogic = (
       productBeforeThisFailedIteration = currentProd;
       let iterationAttemptCount = 0; 
 
-      // --- Strategy Evaluation for the UPCOMING iteration (currentIter + 1) ---
-      // This uses state reflective of *before* this iteration runs, to decide strategy *for* this iteration.
       const iterationProgressPercentForNudge = maxOverallIterations > 0 ? currentIter / maxOverallIterations : 0;
       const nudgeStrategyForThisIteration = determineNudgeStrategyForNext(
           processState.stagnationInfo.consecutiveStagnantIterations,
@@ -280,23 +278,24 @@ export const useIterativeLogic = (
           processState.stagnationNudgeAggressiveness
       );
       const stagnationInfoForStrategyCall = { ...processState.stagnationInfo, nudgeStrategyApplied: nudgeStrategyForThisIteration };
-      const stateForCurrentStrategyEval: Pick<ProcessState, 'currentProduct' | 'currentIteration' | 'maxIterations' | 'inputComplexity' | 'stagnationInfo' | 'iterationHistory' | 'currentModelForIteration' | 'currentAppliedModelConfig' | 'isPlanActive' | 'planStages'| 'currentPlanStageIndex' | 'selectedModelName' | 'stagnationNudgeEnabled' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness'> = {
+      
+      const stateForCurrentStrategyEval: Pick<ProcessState, 'currentProduct' | 'currentIteration' | 'maxIterations' | 'inputComplexity' | 'stagnationInfo' | 'iterationHistory' | 'currentModelForIteration' | 'currentAppliedModelConfig' | 'isPlanActive' | 'planStages'| 'currentPlanStageIndex' | 'selectedModelName' | 'stagnationNudgeEnabled' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness' | 'initialPrompt' | 'loadedFiles'> = {
         currentProduct: currentProd,
-        currentIteration: currentIter, // Iteration about to run is currentIter
+        currentIteration: currentIter, 
         maxIterations: processState.maxIterations,
         inputComplexity: processState.inputComplexity,
         stagnationInfo: stagnationInfoForStrategyCall,
-        iterationHistory: processState.iterationHistory, // Full history up to last completed iter
-        currentModelForIteration: processState.currentModelForIteration, // Model used in *last* iter
-        currentAppliedModelConfig: processState.currentAppliedModelConfig, // Config used in *last* iter
+        iterationHistory: processState.iterationHistory, 
+        currentModelForIteration: processState.currentModelForIteration, 
+        currentAppliedModelConfig: processState.currentAppliedModelConfig,
         isPlanActive: processState.isPlanActive, planStages: processState.planStages, currentPlanStageIndex: currentPlanStageIdx,
         selectedModelName: processState.selectedModelName, stagnationNudgeEnabled: processState.stagnationNudgeEnabled,
         strategistInfluenceLevel: processState.strategistInfluenceLevel, stagnationNudgeAggressiveness: processState.stagnationNudgeAggressiveness,
+        initialPrompt: processState.initialPrompt, loadedFiles: processState.loadedFiles, 
       };
       iterationStrategy = await reevaluateStrategy(stateForCurrentStrategyEval, userBaseConfig);
-      // --- End Strategy Evaluation ---
-
-      updateProcessState({ // Update state with the strategy chosen for *this* iteration run
+      
+      updateProcessState({ 
           currentModelForIteration: iterationStrategy.modelName,
           currentAppliedModelConfig: iterationStrategy.config,
           activeMetaInstructionForNextIter: iterationStrategy.activeMetaInstruction 
@@ -328,7 +327,7 @@ export const useIterativeLogic = (
           const outlineInitialStrategyArgs: Pick<ProcessState, 'inputComplexity' | 'initialPrompt' | 'loadedFiles' | 'selectedModelName' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness'> = {
             inputComplexity: processState.inputComplexity, initialPrompt: processState.initialPrompt, loadedFiles: processState.loadedFiles, selectedModelName: iterationStrategy.modelName, strategistInfluenceLevel: processState.strategistInfluenceLevel, stagnationNudgeAggressiveness: processState.stagnationNudgeAggressiveness
           };
-          const outlineInitialStrategy = determineInitialStrategy(outlineInitialStrategyArgs, iterationStrategy.config); // Use the already decided config for outline generation model
+          const outlineInitialStrategy = determineInitialStrategy(outlineInitialStrategyArgs, iterationStrategy.config);
           outlineResultForIter1 = await GeminaiService.generateInitialOutline(processState.initialPrompt, processState.loadedFiles, outlineInitialStrategy.config, outlineInitialStrategy.modelName);
 
           if (outlineResultForIter1.errorMessage) {
@@ -358,7 +357,6 @@ export const useIterativeLogic = (
               }
           }
           
-          // Files are sent only if it's iteration 1 AND no outline was pre-generated.
           const filesSentToThisIterateCall = (currentIter + 1) === 1 && processState.loadedFiles.length > 0 && !outlineResultForIter1;
           fileProcessingInfoForApi = { 
               filesSentToApiIteration: filesSentToThisIterateCall ? (currentIter + 1) : null,
@@ -405,13 +403,26 @@ export const useIterativeLogic = (
           if (processedProduct.startsWith(CONVERGED_PREFIX)) {
               processedProduct = processedProduct.substring(CONVERGED_PREFIX.length);
           }
-          const tempLogEntryForValidation: IterationLogEntry = { iteration: currentIter + 1, productSummary: "", status: "", timestamp: Date.now(), fileProcessingInfo: fileProcessingInfoForApi };
+          
+          const tempLogEntryForValidation: IterationLogEntry = {
+            iteration: currentIter + 1,
+            productSummary: getProductSummary(iterationProductFromApi), // Provide summary for context if needed
+            status: apiResultForLog?.status || "VALIDATING",
+            timestamp: Date.now(),
+            fileProcessingInfo: fileProcessingInfoForApi,
+            apiStreamDetails: apiResultForLog?.apiStreamDetails, // Crucial for checking finishReason
+            linesAdded: 0, linesRemoved: 0, 
+          };
           const aiValidationResult: IsLikelyAiErrorResponseResult = isLikelyAiErrorResponse( iterationProductFromApi, previousProductSnapshot || "", tempLogEntryForValidation, activePlanStage?.length, activePlanStage?.format );
           validationInfoForLog = aiValidationResult.checkDetails ? { checkName: "AIResponseValidation", passed: !aiValidationResult.isError, reason: aiValidationResult.reason, details: aiValidationResult.checkDetails } : undefined;
+          
           let isCritFailureFromValidation = false;
           if (aiValidationResult.isError && validationInfoForLog?.details?.type) {
               const criticalErrorTypes: AiResponseValidationInfo['details']['type'][] = [ 'prompt_leakage', 'error_phrase_with_significant_reduction', 'extreme_reduction_error', 'extreme_reduction_instructed_but_with_error_phrase', 'initial_synthesis_failed_large_output' ];
               if (criticalErrorTypes.includes(validationInfoForLog.details.type)) isCritFailureFromValidation = true;
+              if (validationInfoForLog.details.type === 'error_phrase' && typeof validationInfoForLog.details.value === 'string' && validationInfoForLog.details.value.startsWith('API Finish Reason: UNKNOWN')) {
+                isCritFailureFromValidation = true;
+              }
           }
 
           if (aiValidationResult.isError) {

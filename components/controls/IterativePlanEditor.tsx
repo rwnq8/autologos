@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect, useRef, useContext } from 'react';
 import type { PlanStage, PlanTemplate, OutputFormat, OutputLength, OutputComplexity, CommonControlProps } from '../../types.ts';
 import { usePlanContext } from '../../contexts/PlanContext';
@@ -186,40 +185,52 @@ const IterativePlanEditor: React.FC<CommonControlProps> = ({
             <button
               onClick={handleSaveCurrentPlanAsTemplate}
               disabled={processCtx.isProcessing || planCtx.planStages.length === 0}
-              className="flex-1 inline-flex items-center justify-center px-3 py-1.5 border border-primary-400 dark:border-primary-500/70 text-xs font-medium rounded-md text-primary-600 dark:text-primary-300 hover:bg-primary-50 dark:hover:bg-primary-700/30 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 transition-colors"
-              title="Save current plan stages as a reusable template"
+              className="flex-1 py-2 px-3 border border-primary-500/70 text-xs font-medium rounded-md text-primary-600 dark:text-primary-300 bg-primary-100/50 dark:bg-primary-700/30 hover:bg-primary-200/50 dark:hover:bg-primary-800/40 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-60"
             >
-              Save Plan as Template
+              Save Current Plan as Template
             </button>
             <div className="relative flex-1" ref={templateDropdownRef}>
               <button
                 onClick={() => setIsTemplateDropdownOpen(!isTemplateDropdownOpen)}
                 disabled={processCtx.isProcessing}
-                className="w-full inline-flex items-center justify-center px-3 py-1.5 border border-primary-400 dark:border-primary-500/70 text-xs font-medium rounded-md text-primary-600 dark:text-primary-300 hover:bg-primary-50 dark:hover:bg-primary-700/30 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 transition-colors"
+                className="w-full flex-1 py-2 px-3 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-60 flex justify-between items-center"
                 aria-haspopup="true"
                 aria-expanded={isTemplateDropdownOpen}
               >
-                Load Template <span className="ml-1 text-xs">{isTemplateDropdownOpen ? '▲' : '▼'}</span>
+                Load Template
+                <span className="text-xs">{isTemplateDropdownOpen ? '▲' : '▼'}</span>
               </button>
               {isTemplateDropdownOpen && (
-                <div className="absolute z-10 mt-1 w-full bg-white dark:bg-slate-700 rounded-md shadow-lg border border-slate-200 dark:border-slate-600 max-h-60 overflow-y-auto">
-                  {planCtx.savedPlanTemplates.length === 0 && <p className="text-xs text-slate-500 dark:text-slate-400 p-2 text-center">No saved templates yet.</p>}
+                <div className="absolute right-0 mt-1 w-full bg-slate-50 dark:bg-slate-800 rounded-md shadow-lg z-20 border border-slate-300 dark:border-white/20 max-h-48 overflow-y-auto">
+                  {planCtx.savedPlanTemplates.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400">No saved templates.</p>
+                  )}
                   {planCtx.savedPlanTemplates.map((template) => (
-                    <div key={template.name} className="flex justify-between items-center hover:bg-slate-100 dark:hover:bg-slate-600">
+                    <div key={template.name} className="flex justify-between items-center group">
                       <button
-                        onClick={() => { planCtx.onLoadPlanTemplate(template); setIsTemplateDropdownOpen(false); }}
-                        className="block w-full text-left px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200"
+                        onClick={() => {
+                          planCtx.onLoadPlanTemplate(template);
+                          setIsTemplateDropdownOpen(false);
+                        }}
+                        className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200"
                       >
-                        {template.name} ({template.stages.length} stages)
+                        {template.name}
                       </button>
-                      <button
-                        onClick={() => { if (window.confirm(`Delete template "${template.name}"?`)) planCtx.handleDeletePlanTemplate(template.name); }}
-                        className="p-1.5 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 mr-1 rounded"
-                        title={`Delete template "${template.name}"`}
-                         aria-label={`Delete plan template "${template.name}"`}
-                      >
-                        Del
-                      </button>
+                      {/* Built-in templates are identified by being part of BUILT_IN_PLAN_TEMPLATES in usePlanTemplates hook */}
+                      {/* This simple check assumes names are unique enough or we rely on the hook's logic for undeletable built-ins */}
+                      {!template.stages.some(s => s.id.startsWith('b_s')) && ( // Simple heuristic for user templates
+                         <button
+                            onClick={() => {
+                              if (window.confirm(`Are you sure you want to delete template "${template.name}"?`)) {
+                                planCtx.handleDeletePlanTemplate(template.name);
+                              }
+                            }}
+                            className="p-1 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity text-xs mr-1"
+                            aria-label={`Delete template ${template.name}`}
+                          >
+                           ✕
+                          </button>
+                       )}
                     </div>
                   ))}
                 </div>
@@ -228,98 +239,94 @@ const IterativePlanEditor: React.FC<CommonControlProps> = ({
           </div>
 
           {planCtx.planStages.map((stage, index) => (
-            <div key={stage.id} className="p-4 bg-white/70 dark:bg-slate-800/40 rounded-lg shadow border border-slate-300 dark:border-slate-600/80 relative group mb-4">
-              <div className="flex justify-between items-center mb-3">
-                <h4 className="text-sm font-semibold text-primary-700 dark:text-primary-300">Stage {index + 1}</h4>
-                <div className="flex items-center space-x-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => handleMovePlanStage(index, 'up')} disabled={index === 0 || processCtx.isProcessing} className="p-1 rounded text-slate-500 hover:text-primary-600 dark:text-slate-400 dark:hover:text-primary-400 disabled:opacity-30 text-xs" title="Move stage up" aria-label={`Move stage ${index + 1} up`}>Up</button>
-                  <button onClick={() => handleMovePlanStage(index, 'down')} disabled={index === planCtx.planStages.length - 1 || processCtx.isProcessing} className="p-1 rounded text-slate-500 hover:text-primary-600 dark:text-slate-400 dark:hover:text-primary-400 disabled:opacity-30 text-xs" title="Move stage down" aria-label={`Move stage ${index + 1} down`}>Down</button>
-                  <button onClick={() => handleRemovePlanStage(stage.id)} disabled={processCtx.isProcessing} className="p-1 rounded text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50 text-xs" title="Remove stage" aria-label={`Remove stage ${index + 1}`}>Remove</button>
+            <div key={stage.id} className="p-3 bg-white/70 dark:bg-slate-700/40 rounded-md border border-slate-300 dark:border-white/10 space-y-2 relative">
+              <div className="flex justify-between items-center">
+                <h4 className="text-sm font-medium text-primary-700 dark:text-primary-300">Stage {index + 1}</h4>
+                <div className="flex space-x-1">
+                   <button onClick={() => handleMovePlanStage(index, 'up')} disabled={index === 0 || processCtx.isProcessing} className="p-1 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 disabled:opacity-30" aria-label="Move stage up">▲</button>
+                   <button onClick={() => handleMovePlanStage(index, 'down')} disabled={index === planCtx.planStages.length - 1 || processCtx.isProcessing} className="p-1 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 disabled:opacity-30" aria-label="Move stage down">▼</button>
+                   <button onClick={() => handleRemovePlanStage(stage.id)} disabled={processCtx.isProcessing} className="p-1 text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-30" aria-label="Remove stage">✕</button>
                 </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-2 text-xs">
                 <div>
-                  <label htmlFor={`stage-format-${stage.id}`} className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-0.5">Format</label>
-                  <select id={`stage-format-${stage.id}`} value={stage.format} onChange={e => handlePlanStageChange(stage.id, 'format', e.target.value as OutputFormat)} disabled={processCtx.isProcessing} className={(commonSelectClasses ?? '') + " text-xs py-1.5"}>
-                    <option value="auto">Auto (AI Decides)</option>
+                  <label htmlFor={`stage-format-${stage.id}`} className="block font-medium text-slate-700 dark:text-slate-300 mb-0.5">Format</label>
+                  <select id={`stage-format-${stage.id}`} value={stage.format} onChange={(e) => handlePlanStageChange(stage.id, 'format', e.target.value as OutputFormat)} className={commonSelectClasses} disabled={processCtx.isProcessing}>
                     <option value="paragraph">Paragraph</option>
                     <option value="key_points">Key Points</option>
                     <option value="outline">Outline</option>
                     <option value="json">JSON</option>
+                    <option value="auto">Auto-Detect/Maintain</option>
                   </select>
                 </div>
                 <div>
-                  <label htmlFor={`stage-iterations-${stage.id}`} className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-0.5">Stage Iterations</label>
-                  <input type="number" id={`stage-iterations-${stage.id}`} value={stage.stageIterations} onChange={e => handlePlanStageChange(stage.id, 'stageIterations', Math.max(1, parseInt(e.target.value, 10) || 1))} min="1" max="50" disabled={processCtx.isProcessing} className={commonInputClasses + " text-xs py-1.5 px-2"} />
-                </div>
-                <div>
-                  <label htmlFor={`stage-length-${stage.id}`} className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-0.5">Length</label>
-                  <select id={`stage-length-${stage.id}`} value={stage.length} onChange={e => handlePlanStageChange(stage.id, 'length', e.target.value as OutputLength)} disabled={processCtx.isProcessing} className={(commonSelectClasses ?? '') + " text-xs py-1.5"}>
-                    <option value="auto">Auto (AI Decides)</option>
-                    <option value="shorter">Shorter</option><option value="same">Same</option><option value="longer">Longer</option><option value="much_longer">Much Longer</option>
+                  <label htmlFor={`stage-length-${stage.id}`} className="block font-medium text-slate-700 dark:text-slate-300 mb-0.5">Length</label>
+                  <select id={`stage-length-${stage.id}`} value={stage.length} onChange={(e) => handlePlanStageChange(stage.id, 'length', e.target.value as OutputLength)} className={commonSelectClasses} disabled={processCtx.isProcessing}>
+                    <option value="shorter">Shorter</option>
+                    <option value="same">Same</option>
+                    <option value="longer">Longer</option>
+                    <option value="much_longer">Much Longer</option>
+                    <option value="auto">Auto</option>
                   </select>
                 </div>
                 <div>
-                  <label htmlFor={`stage-complexity-${stage.id}`} className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-0.5">Complexity</label>
-                  <select id={`stage-complexity-${stage.id}`} value={stage.complexity} onChange={e => handlePlanStageChange(stage.id, 'complexity', e.target.value as OutputComplexity)} disabled={processCtx.isProcessing} className={(commonSelectClasses ?? '') + " text-xs py-1.5"}>
-                    <option value="auto">Auto (AI Decides)</option>
-                    <option value="simplify">Simplify</option><option value="maintain">Maintain</option><option value="enrich">Enrich</option>
+                  <label htmlFor={`stage-complexity-${stage.id}`} className="block font-medium text-slate-700 dark:text-slate-300 mb-0.5">Complexity</label>
+                  <select id={`stage-complexity-${stage.id}`} value={stage.complexity} onChange={(e) => handlePlanStageChange(stage.id, 'complexity', e.target.value as OutputComplexity)} className={commonSelectClasses} disabled={processCtx.isProcessing}>
+                    <option value="simplify">Simplify</option>
+                    <option value="maintain">Maintain</option>
+                    <option value="enrich">Enrich</option>
+                    <option value="auto">Auto</option>
                   </select>
                 </div>
-
-                {stage.format !== 'auto' && (
-                   <div className="sm:col-span-2">
-                    <label htmlFor={`stage-custom-instruction-${stage.id}`} className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-0.5">
-                      Custom Instruction for this Stage (Optional)
-                    </label>
-                    <textarea
-                      id={`stage-custom-instruction-${stage.id}`}
-                      rows={2}
-                      value={stage.customInstruction || ''}
-                      onChange={e => handlePlanStageChange(stage.id, 'customInstruction', e.target.value)}
-                      disabled={processCtx.isProcessing}
-                      className={commonInputClasses + " text-xs py-1.5 px-2"}
-                      placeholder="e.g., Focus on clarifying the introduction, Adopt a formal tone..."
-                    />
-                  </div>
-                )}
-
-                {stage.format === 'paragraph' && (
-                  <div className="sm:col-span-2 mt-2 p-2 bg-slate-50/50 dark:bg-slate-700/30 rounded-md border border-slate-200 dark:border-slate-600/50 space-y-2">
-                    <h5 className="text-xs font-medium text-primary-600 dark:text-primary-400">Paragraph Settings for Stage (Overrides Global if Checked):</h5>
-                    <label className={(commonCheckboxLabelClasses ?? '') + " text-xs"}>
-                      <input type="checkbox" checked={stage.outputParagraphShowHeadings ?? processCtx.outputParagraphShowHeadings} onChange={(e) => handlePlanStageChange(stage.id, 'outputParagraphShowHeadings', e.target.checked)} disabled={processCtx.isProcessing} className={(commonCheckboxInputClasses ?? '') + " mr-2"} />
-                      Include Headings
-                    </label>
-                    {(stage.outputParagraphShowHeadings ?? processCtx.outputParagraphShowHeadings) && (
-                      <>
-                        <label className={(commonCheckboxLabelClasses ?? '') + " text-xs ml-4"}>
-                          <input type="checkbox" checked={stage.outputParagraphNumberedHeadings ?? processCtx.outputParagraphNumberedHeadings} onChange={(e) => handlePlanStageChange(stage.id, 'outputParagraphNumberedHeadings', e.target.checked)} disabled={processCtx.isProcessing} className={(commonCheckboxInputClasses ?? '') + " mr-2"} />
-                          Numbered Headings
-                        </label>
-                        <div>
-                          <label htmlFor={`stage-maxdepth-${stage.id}`} className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-0.5 ml-4">Max Heading Depth (1-6)</label>
-                          <input type="number" id={`stage-maxdepth-${stage.id}`} value={stage.outputParagraphMaxHeadingDepth ?? processCtx.outputParagraphMaxHeadingDepth} onChange={e => handlePlanStageChange(stage.id, 'outputParagraphMaxHeadingDepth', Math.max(1, Math.min(6, parseInt(e.target.value, 10) || 1)))} min="1" max="6" disabled={processCtx.isProcessing} className={commonInputClasses + " text-xs py-1 px-1.5 w-16 ml-4"} />
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
+                <div>
+                  <label htmlFor={`stage-iterations-${stage.id}`} className="block font-medium text-slate-700 dark:text-slate-300 mb-0.5">Iterations</label>
+                  <input type="number" id={`stage-iterations-${stage.id}`} value={stage.stageIterations} onChange={(e) => handlePlanStageChange(stage.id, 'stageIterations', parseInt(e.target.value, 10) || 1)} min="1" max="50" className={commonInputClasses + " text-xs py-1.5"} disabled={processCtx.isProcessing} />
+                </div>
               </div>
+               <div className="mt-1.5">
+                  <label htmlFor={`stage-custom-instruction-${stage.id}`} className="block font-medium text-slate-700 dark:text-slate-300 mb-0.5 text-xs">Custom Instruction (Optional)</label>
+                  <textarea id={`stage-custom-instruction-${stage.id}`} value={stage.customInstruction || ""} onChange={(e) => handlePlanStageChange(stage.id, 'customInstruction', e.target.value)} rows={1} className={commonInputClasses + " text-xs py-1.5 resize-y"} placeholder="e.g., Focus on clarifying the methodology section." disabled={processCtx.isProcessing} />
+                </div>
+                {stage.format === 'paragraph' && (
+                  <details className="text-xs mt-1.5">
+                    <summary className="cursor-pointer text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400">Override Paragraph Defaults (Optional)</summary>
+                    <div className="mt-1 p-2 bg-slate-50 dark:bg-black/20 rounded border border-slate-200 dark:border-white/5 space-y-1.5">
+                       <label className={commonCheckboxLabelClasses + " text-xs"}>
+                         <input type="checkbox" checked={stage.outputParagraphShowHeadings ?? processCtx.outputParagraphShowHeadings /* fallback to global default for display */} onChange={(e) => handlePlanStageChange(stage.id, 'outputParagraphShowHeadings', e.target.checked)} disabled={processCtx.isProcessing} className={commonCheckboxInputClasses + " mr-1.5"} />
+                         Include Headings
+                       </label>
+                       {(stage.outputParagraphShowHeadings ?? processCtx.outputParagraphShowHeadings) && (
+                         <>
+                           <label className={commonCheckboxLabelClasses + " text-xs ml-3"}>
+                             <input type="checkbox" checked={stage.outputParagraphNumberedHeadings ?? processCtx.outputParagraphNumberedHeadings} onChange={(e) => handlePlanStageChange(stage.id, 'outputParagraphNumberedHeadings', e.target.checked)} disabled={processCtx.isProcessing} className={commonCheckboxInputClasses + " mr-1.5"} />
+                             Numbered Headings
+                           </label>
+                           <div className="ml-3">
+                             <label htmlFor={`stage-depth-${stage.id}`} className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-0.5">Max Heading Depth (1-6)</label>
+                             <input type="number" id={`stage-depth-${stage.id}`} value={stage.outputParagraphMaxHeadingDepth ?? processCtx.outputParagraphMaxHeadingDepth} onChange={(e) => handlePlanStageChange(stage.id, 'outputParagraphMaxHeadingDepth', parseInt(e.target.value,10))} min="1" max="6" className={commonInputClasses + " text-xs py-1 w-16"} disabled={processCtx.isProcessing} />
+                           </div>
+                         </>
+                       )}
+                       <button onClick={() => {
+                           handlePlanStageChange(stage.id, 'outputParagraphShowHeadings', undefined);
+                           handlePlanStageChange(stage.id, 'outputParagraphNumberedHeadings', undefined);
+                           handlePlanStageChange(stage.id, 'outputParagraphMaxHeadingDepth', undefined);
+                       }} className="mt-1 text-xs text-slate-500 hover:text-red-500 dark:hover:text-red-400 disabled:opacity-50" disabled={processCtx.isProcessing}>Reset to Global Defaults</button>
+                    </div>
+                  </details>
+                )}
             </div>
           ))}
           <button
             onClick={handleAddPlanStage}
             disabled={processCtx.isProcessing}
-            className="w-full mt-3 inline-flex items-center justify-center px-3 py-2 border border-dashed border-primary-400 dark:border-primary-500/80 text-sm font-medium rounded-md text-primary-600 dark:text-primary-300 hover:bg-primary-50 dark:hover:bg-primary-700/30 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 transition-colors"
+            className="w-full py-2 px-3 border border-dashed border-primary-500/70 text-xs font-medium rounded-md text-primary-600 dark:text-primary-300 hover:bg-primary-50/50 dark:hover:bg-primary-700/20 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-60"
           >
-            Add Stage to Plan
+            + Add Plan Stage
           </button>
-          {planCtx.planStages.length > 0 && (
-            <p className="text-xs text-center text-slate-500 dark:text-slate-400 mt-2">
-              Total plan iterations: {totalPlanIterations} (approx.)
-            </p>
-          )}
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+            Total Plan Iterations: {totalPlanIterations}
+          </p>
         </div>
       )}
     </div>

@@ -1,5 +1,4 @@
 
-
 import React, { useRef, useContext, useState } from 'react';
 import type { CommonControlProps } from '../../types';
 import { useApplicationContext } from '../../contexts/ApplicationContext';

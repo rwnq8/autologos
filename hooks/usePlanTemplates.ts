@@ -1,6 +1,4 @@
 
-
-
 import { useState, useEffect, useCallback } from 'react';
 import type { PlanTemplate, PlanStage } from '../types.ts';
 

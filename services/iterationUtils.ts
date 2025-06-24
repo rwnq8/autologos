@@ -124,6 +124,21 @@ export function isLikelyAiErrorResponse(
   const isGlobalModeContext = !lengthInstruction && !formatInstruction;
   const isInstructedToShorten = lengthInstruction === 'shorter';
 
+  // CRITICAL: Check for bad finish reasons from API stream combined with minimal output
+  if (currentLogEntryForValidation.apiStreamDetails && currentLogEntryForValidation.apiStreamDetails.length > 0) {
+    const lastApiCall = currentLogEntryForValidation.apiStreamDetails[currentLogEntryForValidation.apiStreamDetails.length - 1];
+    const problematicFinishReasons = ["UNKNOWN", "OTHER", "FINISH_REASON_UNSPECIFIED"]; // "MAX_TOKENS" is handled by continuation logic, "STOP" is normal.
+    if (lastApiCall.finishReason && problematicFinishReasons.includes(lastApiCall.finishReason)) {
+      if (newLengthChars < 50) { // Increased threshold for concern with bad finish reasons
+        return {
+          isError: true,
+          reason: `CRITICAL: API call finished with reason '${lastApiCall.finishReason}' and produced minimal output (${newLengthChars} chars). This indicates a problem with the generation process.`,
+          checkDetails: { type: 'error_phrase', value: `API Finish Reason: ${lastApiCall.finishReason}, Output Length: ${newLengthChars}` }
+        };
+      }
+    }
+  }
+
   // --- Start of Prioritized Critical Checks ---
 
   // 1. Check for Prompt Leakage (CRITICAL)
@@ -211,13 +226,12 @@ export function isLikelyAiErrorResponse(
 
   // 4. Initial Synthesis Check for Iteration 1 Output (CRITICAL)
   if (currentLogEntryForValidation.iteration === 1 && currentLogEntryForValidation.fileProcessingInfo && currentLogEntryForValidation.fileProcessingInfo.numberOfFilesActuallySent > 1 && currentLogEntryForValidation.fileProcessingInfo.totalFilesSizeBytesSent > 0) {
-    const { totalFilesSizeBytesSent, filesSentToApiIteration } = currentLogEntryForValidation.fileProcessingInfo;
-    const loadedFilesForIter1 = currentLogEntryForValidation.fileProcessingInfo.loadedFilesForIterationContext || []; // Assume this is passed if needed
+    const { totalFilesSizeBytesSent } = currentLogEntryForValidation.fileProcessingInfo;
+    const loadedFilesForIter1 = currentLogEntryForValidation.fileProcessingInfo.loadedFilesForIterationContext || []; 
 
     let synthesisFailed = false;
     let synthesisReason = "";
     
-    // Heuristic 1: Text-dominant input compare output chars to input chars
     const textFiles = loadedFilesForIter1.filter(f => f.mimeType.startsWith('text/'));
     if (textFiles.length / loadedFilesForIter1.length >= TEXT_DOMINANT_THRESHOLD_PERCENT || textFiles.reduce((sum, f) => sum + f.size, 0) / totalFilesSizeBytesSent >= TEXT_DOMINANT_THRESHOLD_PERCENT ) {
       const totalEstimatedInputChars = textFiles.reduce((sum, f) => sum + estimateCharsFromBase64Text(f.base64Data), 0);
@@ -227,13 +241,11 @@ export function isLikelyAiErrorResponse(
       }
     }
 
-    // Heuristic 2 (Fallback or for mixed/binary): Absolute char limit for smaller inputs
     if (!synthesisFailed && totalFilesSizeBytesSent < MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 && newLengthChars > ABSOLUTE_MAX_CHARS_ITER1_PRODUCT) {
       synthesisFailed = true;
       synthesisReason = `Initial synthesis from files (<${MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 / 1024}KB) likely failed. Output product size (${newLengthChars} chars) exceeds absolute limit of ${ABSOLUTE_MAX_CHARS_ITER1_PRODUCT} chars.`;
     }
     
-    // Heuristic 3 (Original byte-to-char, stricter factor)
     if (!synthesisFailed && newLengthChars > totalFilesSizeBytesSent * INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES) {
         synthesisFailed = true;
         synthesisReason = `Initial synthesis from multiple files likely failed. Output product size (${newLengthChars} chars) is excessively larger (>${INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES}x) than total input file size (${totalFilesSizeBytesSent} bytes).`;
@@ -316,9 +328,7 @@ export const parseAndCleanJsonOutput = (rawJsonString: string): string => {
   try { const parsedData = JSON.parse(jsonStr); return JSON.stringify(parsedData, null, 2); } catch (e) { return jsonStr; }
 };
 
-// Add `loadedFilesForIterationContext` to `FileProcessingInfo` if it's not already there.
-// This is needed for the refined `initial_synthesis_failed_large_output` check.
-// The type change will be in `types.ts`.
+
 declare module '../types.ts' {
   interface FileProcessingInfo {
     loadedFilesForIterationContext?: LoadedFile[];
