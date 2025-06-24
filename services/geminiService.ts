@@ -1,464 +1,350 @@
 
 import { GoogleGenAI } from "@google/genai";
-import type { GenerateContentResponse } from "@google/genai";
-import type { ProcessingMode, ModelConfig, SuggestedParamsResponse, ModelParameterGuidance, ParameterAdvice, StaticAiModelDetails } from "../types";
+import type { GenerateContentResponse, Part, Content } from "@google/genai";
+import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, ParameterAdvice, LoadedFile, PlanStage, ModelParameterGuidance, SuggestedParamsResponse } from "../types.ts";
+import { getUserPromptComponents, buildTextualPromptPart, CONVERGED_PREFIX } from './promptBuilderService';
 
-let API_KEY: string | undefined = undefined;
-try {
-    // Safely check for process, process.env, and process.env.API_KEY
-    if (typeof process !== 'undefined' && process.env && typeof process.env.API_KEY === 'string') {
-        API_KEY = process.env.API_KEY;
-    } else if (typeof process !== 'undefined' && process.env && process.env.API_KEY === undefined) {
+const API_KEY: string | undefined = (() => {
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      const key = process.env.API_KEY;
+      if (typeof key === 'string' && key.length > 0) {
+        console.info("API_KEY loaded from process.env.");
+        return key;
+      } else if (key === undefined) {
         console.warn("process.env.API_KEY is undefined. Gemini API calls will be disabled if a key is not found by other means.");
+        return undefined;
+      } else {
+        console.warn("process.env.API_KEY found but is not a non-empty string. Gemini API calls will be disabled if a key is not found by other means.");
+        return undefined;
+      }
+    } else {
+      console.warn("Could not access process.env. This is expected in some environments (like browsers). Gemini API calls will be disabled if a key is not found.");
+      return undefined;
     }
-} catch (e) {
-    // This catch block might be for other errors during API_KEY retrieval,
-    // but the main check for 'process' undefined is above.
-    console.warn("Could not access process.env.API_KEY. This might be expected in some browser environments. Gemini API calls will be disabled if a key is not found.", e);
-}
-
+  } catch (e) {
+    console.error("Error accessing process.env.API_KEY. Gemini API calls will be disabled.", e);
+    return undefined;
+  }
+})();
 
 let ai: GoogleGenAI | null = null;
 let apiKeyAvailable = false;
 
-try {
-  if (API_KEY) {
-    // Ensure GoogleGenAI is available before trying to instantiate
-    if (typeof GoogleGenAI === 'function') {
+if (API_KEY) {
+    try {
         ai = new GoogleGenAI({ apiKey: API_KEY });
         apiKeyAvailable = true;
-    } else {
-        console.error("GoogleGenAI constructor is not available from @google/genai module. Gemini API calls will be disabled.");
+        console.info("GoogleGenAI client initialized successfully.");
+    } catch (error) {
+        console.error("Error during GoogleGenAI client initialization. Gemini API calls will be disabled.", error);
+        ai = null;
         apiKeyAvailable = false;
     }
-  } else {
-    console.warn("API_KEY was not found or is not configured. Gemini API calls will be disabled.");
-    apiKeyAvailable = false; 
-  }
-} catch (error) {
-  console.error("Error during GoogleGenAI initialization. Gemini API calls will be disabled.", error);
-  ai = null; 
-  apiKeyAvailable = false; 
+} else {
+    console.warn("API_KEY was not found or is not configured. GoogleGenAI client not initialized. Gemini API calls will be disabled.");
+    apiKeyAvailable = false;
 }
 
-const MODEL_NAME = 'gemini-2.5-flash-preview-04-17';
+export const DEFAULT_MODEL_NAME = 'gemini-2.5-flash-preview-04-17';
 
-export const DEFAULT_MODEL_CONFIG: ModelConfig = {
-    temperature: 0.75, 
-    topP: 0.95,
-    topK: 64,
-};
+// Default starting point for global mode's dynamic parameter sweep & reset target
+export const CREATIVE_DEFAULTS: ModelConfig = { temperature: 0.75, topP: 0.95, topK: 60 };
+// Target for the end of global mode's dynamic parameter sweep - now sharply deterministic
+export const FOCUSED_END_DEFAULTS: ModelConfig = { temperature: 0.0, topP: 1.0, topK: 1 };
+// General defaults, used if no specific strategy applies (e.g., initial suggestion basis before dynamic takes over)
+export const GENERAL_BALANCED_DEFAULTS: ModelConfig = { temperature: 0.6, topP: 0.9, topK: 40 };
+// Legacy focused defaults, less used now with dynamic strategy.
+export const LEGACY_FOCUSED_DEFAULTS: ModelConfig = { temperature: 0.3, topP: 0.85, topK: 20 };
 
-// Base defaults, adjustments will be made from these
-export const EXPANSIVE_MODE_DEFAULTS: ModelConfig = { temperature: 0.8, topP: 0.95, topK: 60 };
-export const CONVERGENT_MODE_DEFAULTS: ModelConfig = { temperature: 0.4, topP: 0.9, topK: 40 };
 
+const MIN_WORDS_FOR_ANALYSIS = 30; // Applied to text content if available, or manifest
 
-// StaticAiModelDetails is now imported from ../types
+interface TextStats {
+  wordCount: number;
+  sentenceCount: number;
+  avgSentenceLength: number;
+  uniqueWordCount: number;
+  lexicalDiversity: number;
+}
 
-export const getStaticModelDetails = (): StaticAiModelDetails => {
+function analyzeTextComplexity(text: string): TextStats {
+  if (!text || !text.trim()) {
+    return { wordCount: 0, sentenceCount: 0, avgSentenceLength: 0, uniqueWordCount: 0, lexicalDiversity: 0 };
+  }
+  const words = text.toLowerCase().match(/\b[\w'-]+\b/g) || [];
+  const wordCount = words.length;
+  const sentences = text.split(/[.?!;]+(?=\s+|$)/g).filter(s => s.trim().length > 0);
+  const sentenceCount = sentences.length > 0 ? sentences.length : (wordCount > 0 ? 1 : 0);
+  const uniqueWords = new Set(words);
+  const uniqueWordCount = uniqueWords.size;
+  const lexicalDiversity = wordCount > 0 ? uniqueWordCount / wordCount : 0;
+  const avgSentenceLength = sentenceCount > 0 ? wordCount / sentenceCount : 0;
+
   return {
-    modelName: MODEL_NAME,
-    tools: "None", 
+    wordCount,
+    sentenceCount,
+    avgSentenceLength,
+    uniqueWordCount,
+    lexicalDiversity,
+  };
+}
+
+export const getAiModelDetails = (currentModelName: string): StaticAiModelDetails => {
+  return {
+    modelName: currentModelName,
+    tools: "Multi-modal File Input, Dynamic Parameters, Stagnation Nudge",
   };
 };
 
 export const isApiKeyAvailable = (): boolean => apiKeyAvailable;
 
 export const suggestModelParameters = (
-  prompt: string,
-  currentMode: ProcessingMode
+  textForAnalysis: string
 ): SuggestedParamsResponse => {
-  let suggestedConfig = currentMode === 'expansive' ? 
-    { ...EXPANSIVE_MODE_DEFAULTS } : 
-    { ...CONVERGENT_MODE_DEFAULTS };
-  const rationales: string[] = [`Base settings for '${currentMode}' mode applied.`];
+  const isTextProvided = textForAnalysis && textForAnalysis.trim().length > 0;
+  let baseConfig: ModelConfig = { ...CREATIVE_DEFAULTS };
+  const rationales: string[] = [];
 
-  if (!prompt || prompt.trim().length === 0) {
-    rationales.push("No prompt provided; using mode defaults.");
-    return { config: suggestedConfig, rationales }; 
+  rationales.push(`Using creative default settings as a starting point, suitable for initial exploration.`);
+
+  if (!isTextProvided) {
+    rationales.push(`No textual context provided for analysis. Using creative default starting settings.`);
+    return { config: baseConfig, rationales };
   }
 
-  const lowerPrompt = prompt.toLowerCase();
-  const promptLength = prompt.split(/\s+/).length; 
-  let oldTempValue: number, oldTopPValue: number, oldTopKValue: number;
+  const stats = analyzeTextComplexity(textForAnalysis);
 
-  // Helper to add rationale if value changed
-  const addRationale = (paramName: string, oldValue: number, newValue: number, specificMsg: string) => {
-    // For temperature and topP, compare with a tolerance for floating point
-    const valueChanged = paramName === 'topK' ? oldValue !== newValue : Math.abs(oldValue - newValue) > 0.001;
-    if (valueChanged) {
-      const changeDir = newValue > oldValue ? "increased" : "decreased";
-      const formattedOld = paramName === 'topK' ? oldValue.toFixed(0) : oldValue.toFixed(2);
-      const formattedNew = paramName === 'topK' ? newValue.toFixed(0) : newValue.toFixed(2);
-      rationales.push(`${specificMsg}: ${paramName} ${changeDir} from ${formattedOld} to ${formattedNew}.`);
-    }
-  };
-  
-  // 1. Code Content Detection (strong influence)
-  if (/[{};()\[\]=><\/\+\-\*]|function|class|const|let|var|import|export|def|printf|console\.log/.test(prompt)) {
-    oldTempValue = suggestedConfig.temperature;
-    suggestedConfig.temperature = Math.max(0.05, Math.min(0.4, suggestedConfig.temperature * 0.4));
-    addRationale("Temperature", oldTempValue, suggestedConfig.temperature, "Code-like content detected, prioritizing precision");
-
-    oldTopPValue = suggestedConfig.topP;
-    suggestedConfig.topP = Math.max(0.85, Math.min(1.0, suggestedConfig.topP + 0.05)); // Allow slightly wider net if temperature is very low
-    addRationale("Top-P", oldTopPValue, suggestedConfig.topP, "Code-like content, adjusting Top-P");
-    
-    oldTopKValue = suggestedConfig.topK;
-    suggestedConfig.topK = Math.max(10, Math.min(50, Math.floor(suggestedConfig.topK * 0.6)));
-    addRationale("Top-K", oldTopKValue, suggestedConfig.topK, "Code-like content, focusing Top-K");
-    rationales.push("Code-like content significantly influences parameters towards precision and deterministic output.");
+  if (stats.wordCount < MIN_WORDS_FOR_ANALYSIS) {
+    rationales.push(`Provided textual context is short (${stats.wordCount} words). Advanced analysis for parameter tuning is less reliable; using creative default starting settings.`);
+    return { config: baseConfig, rationales };
   }
 
-  // 2. Mode-Specific Keyword Adjustments
-  if (currentMode === 'expansive') {
-    if (/(story|poem|imagine|create|generate ideas|brainstorm|narrative|fiction|dialogue|explore options|what if|vision|concept|artistic|invent)/.test(lowerPrompt)) {
-      oldTempValue = suggestedConfig.temperature;
-      suggestedConfig.temperature += 0.3;
-      addRationale("Temperature", oldTempValue, suggestedConfig.temperature, "Creative/brainstorming keywords");
-      
-      oldTopKValue = suggestedConfig.topK;
-      suggestedConfig.topK += 20;
-      addRationale("Top-K", oldTopKValue, suggestedConfig.topK, "Creative/brainstorming keywords, broadening token selection");
-
-      oldTopPValue = suggestedConfig.topP;
-      suggestedConfig.topP += 0.03;
-       addRationale("Top-P", oldTopPValue, suggestedConfig.topP, "Creative/brainstorming keywords, slightly widening probability mass");
-    } else if (/(explain in detail|elaborate on|provide examples|discuss implications|expand upon|deep dive|breakdown)/.test(lowerPrompt)) {
-      oldTempValue = suggestedConfig.temperature;
-      suggestedConfig.temperature += 0.15;
-      addRationale("Temperature", oldTempValue, suggestedConfig.temperature, "Elaborative keywords, encouraging detailed output");
-
-      oldTopKValue = suggestedConfig.topK;
-      suggestedConfig.topK += 10;
-      addRationale("Top-K", oldTopKValue, suggestedConfig.topK, "Elaborative keywords");
-    }
-  } else { // Convergent Mode
-    if (/(summarize|analyze|distill|extract|define|essence|core|minimal|identify key points|gist|tl;dr|conclusion|abstract|precis)/.test(lowerPrompt)) {
-      oldTempValue = suggestedConfig.temperature;
-      suggestedConfig.temperature -= 0.25;
-      addRationale("Temperature", oldTempValue, suggestedConfig.temperature, "Analytical/distilling keywords, focusing on conciseness");
-
-      oldTopKValue = suggestedConfig.topK;
-      suggestedConfig.topK -= 20;
-      addRationale("Top-K", oldTopKValue, suggestedConfig.topK, "Analytical/distilling keywords, narrowing token selection");
-      
-      oldTopPValue = suggestedConfig.topP;
-      suggestedConfig.topP -= 0.08;
-      addRationale("Top-P", oldTopPValue, suggestedConfig.topP, "Analytical/distilling keywords, restricting to more probable tokens");
-    } else if (/(what is|who is|when did|how does|explain .*\?|define .*\?|list facts|details for:)/.test(lowerPrompt) || (lowerPrompt.includes("?") && promptLength < 50)) {
-      oldTempValue = suggestedConfig.temperature;
-      suggestedConfig.temperature -= 0.3; // Could go very low for factual
-      addRationale("Temperature", oldTempValue, suggestedConfig.temperature, "Factual question/specific query, prioritizing accuracy");
-      
-      oldTopKValue = suggestedConfig.topK;
-      suggestedConfig.topK -= 25;
-      addRationale("Top-K", oldTopKValue, suggestedConfig.topK, "Factual question/specific query");
-
-      oldTopPValue = suggestedConfig.topP;
-      suggestedConfig.topP -= 0.1;
-      addRationale("Top-P", oldTopPValue, suggestedConfig.topP, "Factual question/specific query");
-    }
-  }
-
-  // 3. General Length Adjustments (fine-tuning)
-  if (promptLength < 15 && currentMode === 'expansive' && suggestedConfig.temperature < 0.9) {
-    oldTempValue = suggestedConfig.temperature;
-    suggestedConfig.temperature += 0.15;
-    addRationale("Temperature", oldTempValue, suggestedConfig.temperature, "Short prompt in expansive mode, encouraging broader exploration");
-  } else if (promptLength > 250) { // For very long prompts, slightly reduce temperature for coherence
-    if (suggestedConfig.temperature > 0.4) { // Only if not already very low
-        oldTempValue = suggestedConfig.temperature;
-        suggestedConfig.temperature -= 0.1;
-        addRationale("Temperature", oldTempValue, suggestedConfig.temperature, "Long prompt, slightly reducing temperature for coherence");
-    }
-  }
-
-
-  // 4. Final Clamping and Formatting
-  suggestedConfig.temperature = parseFloat(Math.max(0.0, Math.min(2.0, suggestedConfig.temperature)).toFixed(2));
-  suggestedConfig.topP = parseFloat(Math.max(0.0, Math.min(1.0, suggestedConfig.topP)).toFixed(2));
-  suggestedConfig.topK = parseInt(Math.max(1, Math.min(100, suggestedConfig.topK)).toString(), 10);
-  
-  if (rationales.length === 1) { // Only base rationale present
-    rationales.push("Prompt analysis did not trigger significant parameter adjustments beyond mode defaults and light length considerations.");
-  }
-
-  return { config: suggestedConfig, rationales };
+  rationales.push(`Context analyzed. Recommending creative starting parameters for broad initial exploration. These will dynamically adjust towards focused settings in global mode.`);
+  return { config: baseConfig, rationales };
 };
 
-
-export const getModelParameterGuidance = (config: ModelConfig): ModelParameterGuidance => {
+export const getModelParameterGuidance = (config: ModelConfig, isGlobalMode: boolean = false): ModelParameterGuidance => {
   const warnings: string[] = [];
   const advice: ParameterAdvice = {};
+  const tempDesc = isGlobalMode ? "Starting Temperature" : "Temperature";
+  const topPDesc = isGlobalMode ? "Starting Top-P" : "Top-P";
+  const topKDesc = isGlobalMode ? "Starting Top-K" : "Top-K";
 
-  // Temperature Advice
-  if (config.temperature === 0) {
-    advice.temperature = "Deterministic output; usually used with Top-K=1 for greedy decoding.";
-  } else if (config.temperature < 0.3) {
-    advice.temperature = "Very focused and less random output. Good for precision tasks, factual recall.";
-  } else if (config.temperature < 0.7) {
-    advice.temperature = "Balanced output. Good for factual responses or controlled creativity.";
-  } else if (config.temperature <= 1.0) {
-    advice.temperature = "More creative and diverse output. Good for brainstorming or varied responses.";
-  } else if (config.temperature <= 1.5) {
-    advice.temperature = "Highly creative; may start to introduce more randomness or less coherence.";
+  if (config.temperature === 0.0) {
+    advice.temperature = `${tempDesc}: Deterministic output; usually used with Top-K=1 for greedy decoding.`;
+  } else if (config.temperature > 0 && config.temperature < 0.3) {
+    advice.temperature = `${tempDesc}: Very focused and less random output. Good for precision or maintaining strict coherence.`;
+  } else if (config.temperature >= 0.3 && config.temperature < 0.7) {
+    advice.temperature = `${tempDesc}: Balanced output. Good for factual responses or controlled creativity.`;
+  } else if (config.temperature >= 0.7 && config.temperature <= 1.0) {
+    advice.temperature = `${tempDesc}: More creative and diverse output. Good for brainstorming or nuanced generation. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
+  } else if (config.temperature > 1.0 && config.temperature <= 1.5) {
+    advice.temperature = `${tempDesc}: Highly creative; may start to introduce more randomness or less coherence. Higher risk of hallucination. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
   } else {
-    advice.temperature = "Extremely creative/random; high chance of unexpected or less coherent output.";
-    warnings.push("Very high temperature ( > 1.5) might lead to highly random or incoherent output.");
+    advice.temperature = `${tempDesc}: Extremely creative/random; high chance of unexpected or less coherent output. Not recommended for most tasks. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
+    warnings.push(`Very high ${tempDesc} ( > 1.5) might lead to highly random or incoherent output and increased hallucination risk.`);
   }
 
-  // Top-P Advice
-  if (config.topP < 0.3) {
-    advice.topP = "Very restrictive selection of tokens. Output may be limited. Useful for high precision.";
-  } else if (config.topP < 0.7) {
-    advice.topP = "Moderately selective. Balances focus with some diversity.";
-  } else if (config.topP < 0.9) {
-    advice.topP = "Less restrictive, allowing for more diverse token choices.";
-  } else if (config.topP < 1.0) {
-    advice.topP = "Allows a wider range of tokens, increasing diversity. Default is often around 0.95.";
-  } else { // topP === 1.0
-    advice.topP = "Considers all tokens (no nucleus sampling). Diversity depends more on Temperature and Top-K.";
+  if (config.topP === 0.0 && config.temperature === 0.0) {
+     advice.topP = `${topPDesc}: Not typically used when temperature is 0 (greedy decoding is active).`;
+  } else if (config.topP === 0.0 && config.temperature > 0) {
+    advice.topP = `${topPDesc}: Top-P is 0 but temperature > 0. This is an unusual setting; typically topP > 0.8 for nucleus sampling. May result in no tokens being selected if not handled carefully by the model.`;
+    warnings.push(`${topPDesc} = 0 with Temperature > 0 is an unusual setting and might lead to unexpected behavior or no output.`);
+  } else if (config.topP > 0 && config.topP < 0.3) {
+    advice.topP = `${topPDesc}: Very restrictive selection of tokens. Output may be limited. Useful for high precision if combined with low temperature.`;
+  } else if (config.topP >= 0.3 && config.topP < 0.7) {
+    advice.topP = `${topPDesc}: Moderately selective. Balances focus with some diversity.`;
+  } else if (config.topP >= 0.7 && config.topP < 0.9) {
+    advice.topP = `${topPDesc}: Less restrictive, allowing for more diverse token choices. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
+  } else if (config.topP >= 0.9 && config.topP <= 1.0) {
+    advice.topP = `${topPDesc}: Allows a wider range of tokens, increasing diversity. Values around 0.9-0.95 are common for balanced creative tasks. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
   }
-  
-  // Top-K Advice
+
   if (config.topK === 1) {
-    advice.topK = "Greedy decoding. Always picks the single most likely next token.";
-  } else if (config.topK < 10) {
-    advice.topK = "Very limited token choices. Output may be repetitive or simplistic. Good for specific answers.";
-  } else if (config.topK < 40) {
-    advice.topK = "Moderately limited token choices. Good for focused output with some variety.";
-  } else if (config.topK < 80) {
-    advice.topK = "Broader token selection, allowing for more diverse output. Common for creative tasks.";
-  } else { // topK >= 80
-    advice.topK = "Very broad token selection. Relies more on Temperature and Top-P for filtering.";
+    advice.topK = `${topKDesc}: Greedy decoding. Always picks the single most likely next token. Best for factual, deterministic output.`;
+  } else if (config.topK > 1 && config.topK < 10) {
+    advice.topK = `${topKDesc}: Very limited token choices. Output may be repetitive. Good for specific answers when combined with low temperature.`;
+  } else if (config.topK >= 10 && config.topK < 40) {
+    advice.topK = `${topKDesc}: Moderately limited token choices. Good for focused output with some variety.`;
+  } else if (config.topK >= 40 && config.topK < 80) {
+    advice.topK = `${topKDesc}: Broader token selection. Good for creative exploration. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
+  } else {
+    advice.topK = `${topKDesc}: Very broad token selection. Relies more on Temperature and Top-P for filtering. Can increase randomness or lack of focus if not carefully managed. ${isGlobalMode ? '(Will decrease over iterations)' : ''}`;
   }
 
-  // Warnings for combinations
-  if (config.temperature > 1.0 && config.topK < 10 && config.topK > 1) {
-    warnings.push("High temperature with very low Top-K (< 10, not 1) can be unpredictable and may produce low-quality results.");
+  if (config.temperature > 0.8 && config.topK < 20 && config.topK > 1) {
+    warnings.push(`Higher ${tempDesc} with low ${topKDesc} may lead to unfocused or repetitive output. Consider increasing ${topKDesc} or decreasing ${tempDesc}.`);
   }
-  if (config.topP < 0.5 && config.temperature > 0.5) {
-    warnings.push("Low Top-P (< 0.5) with moderate/high temperature can be restrictive and may cause erratic behavior by cutting off too many good options early.");
-  }
-  if (config.topP === 1.0 && config.topK === 1 && config.temperature > 0) {
-    warnings.push("Using Top-P=1 and Top-K=1 simultaneously with temperature > 0 is unusual. Top-K=1 implies greedy decoding (if temp=0), making Top-P less relevant.");
-  }
-   if (config.topK < 5 && config.topK > 1) { 
-    warnings.push("Very low Top-K (< 5, not 1) might overly restrict word choice, leading to repetitive or simplistic output, especially if temperature is also low.");
-  }
-  if (config.temperature == 0.0 && config.topK > 1) {
-    warnings.push("Temperature of 0.0 typically implies greedy decoding (Top-K=1). Using Top-K > 1 with Temp=0.0 might yield inconsistent behavior depending on implementation, usually Top-K=1 is preferred here.");
-  }
-
-
   return { warnings, advice };
-};
-
-// Helper function to construct the user prompt parts
-const getUserPromptComponents = (
-    originalPrompt: string,
-    processingMode: ProcessingMode,
-    iterationNumber: number,
-    maxIterations: number,
-): { systemInstruction: string; coreUserInstructions: string } => {
-    let systemInstruction: string;
-    let coreUserInstructions: string;
-
-    if (processingMode === 'expansive') {
-        systemInstruction = `You are an AI process engine in 'EXPANSIVE' mode. Your goal is to iteratively evolve a "product" by significantly expanding its core concepts and adding new, related information based on an original user input. In each iteration, focus on adding one or two distinct, substantial new sections or elaborating deeply on specific existing points, rather than attempting to rewrite or expand the entire product at once. This mode is non-convergent; aim for continuous, meaningful semantic expansion. Ensure your additions are well-contained and complete. Only if no further meaningful semantic expansion is possible without becoming trivial or redundant, prefix your response with "CONVERGED:". If your response is truncated due to length, you will be prompted to continue.`;
-        coreUserInstructions = `
-1.  **Identify Key Area(s) for Focused Expansion**: Analyze the "Current State of Product". Identify *one or two specific, high-priority concepts* for substantial new elaboration, or determine a *single, logical next section* to add. Always relate this back to the "Original User Input".
-2.  **Provide Focused Elaboration / New Section**: For the identified concept(s) or new section, provide a *detailed and focused* elaboration or the new section content. Aim for depth and completeness in *this specific addition*.
-3.  **Integrate Expansions**: Weave these expansions into a new, coherent version of the product, enriching its detail.
-4.  **Output Format**: Provide ONLY the new, expanded product. Do NOT include preambles.`;
-    } else { // convergent mode
-        systemInstruction = `You are an AI process engine in 'CONVERGENT' mode. Your goal is to iteratively distill a "product" based on an original user input down to its most essential, minimal, core representation. Focus on identifying the absolute fundamental concepts and removing elaborations, examples, or redundant information. Simplify phrasing. If the product is maximally distilled and no further meaningful reduction is possible without losing its core identity, you MUST prefix your response with "CONVERGED:". If your response is truncated due to length, you will be prompted to continue.`;
-        coreUserInstructions = `
-1.  **Identify Core Essence**: Analyze the "Current State of Product" for its fundamental concepts in relation to the "Original User Input."
-2.  **Distill and Reduce**: Remove elaborations, simplify phrasing, and consolidate ideas to their most direct form.
-3.  **Integrate into Minimal Form**: Formulate a new, significantly more concise product representing this distilled essence.
-4.  **Output Format**: Provide ONLY the new, distilled product. If converged, prefix with "CONVERGED:". Do NOT include other preambles.`;
-    }
-    return { systemInstruction, coreUserInstructions };
-};
-
-
-const buildFullUserPrompt = (
-    originalPrompt: string,
-    productToProcess: string, // This is `previousProduct` for initial call, or `fullGeneratedTextSoFar` for continuations
-    iterationNumber: number,
-    maxIterations: number,
-    processingMode: ProcessingMode,
-    coreUserInstructions: string,
-    isContinuation: boolean
-): string => {
-    return `
-Original User Input:
-"${originalPrompt}"
-
-${isContinuation ? `PARTIAL PRODUCT CONTENT (GENERATED SO FAR FOR THIS ITERATION ${iterationNumber}):` : `Current State of Product (after Iteration ${iterationNumber - 1}):`}
-\`\`\`
-${productToProcess}
-\`\`\`
-
-This is Iteration ${iterationNumber} of a maximum of ${maxIterations} iterations in ${processingMode.toUpperCase()} mode.
-${isContinuation ? `\nIMPORTANT: YOU ARE CONTINUING A PREVIOUSLY TRUNCATED RESPONSE FOR THIS ITERATION. Your previous output was cut short.` : ''}
-
-Instructions for this iteration ${isContinuation ? '(CONTINUING PREVIOUS RESPONSE)' : ''}:
-${coreUserInstructions}
-
-${isContinuation ?
-`Please continue generating the product text EXACTLY where you left off from the "PARTIAL PRODUCT CONTENT" shown above.
-DO NOT repeat any part of the "PARTIAL PRODUCT CONTENT".
-DO NOT add any preambles, apologies, or explanations for continuing.
-DO NOT restart the whole product.
-Simply provide the NEXT CHUNK of the product text.
-If you believe the product is complete or converged (and you would have prefixed with "CONVERGED:"), ensure that prefix is at the very start of THIS CHUNK if it's the final part.`
-: `Provide the next version of the product (or the converged product with the prefix):`}
-`;
 };
 
 
 export const iterateProduct = async (
-  previousProduct: string,
-  iterationNumber: number,
-  maxIterations: number,
-  originalPrompt: string,
-  processingMode: ProcessingMode,
+  currentProduct: string,
+  currentIterationOverall: number,
+  maxIterationsOverall: number,
+  fileManifest: string,
+  loadedFiles: LoadedFile[],
+  activePlanStage: PlanStage | null,
+  outputParagraphShowHeadings: boolean,
+  outputParagraphMaxHeadingDepth: number,
+  outputParagraphNumberedHeadings: boolean,
   modelConfig: ModelConfig,
-): Promise<string> => {
-  if (!ai) {
-    throw new Error("Gemini API client not initialized. API Key might be missing or client setup failed.");
+  isGlobalMode: boolean,
+  modelToUse: string,
+  onStreamChunk: (chunkText: string) => void,
+  isHaltSignalled: () => boolean
+): Promise<IterateProductResult> => {
+  if (!ai || !apiKeyAvailable) {
+    return { product: currentProduct, status: 'ERROR', errorMessage: "Gemini API client not initialized or API key missing." };
   }
 
-  const { systemInstruction, coreUserInstructions } = getUserPromptComponents(originalPrompt, processingMode, iterationNumber, maxIterations);
+  const { systemInstruction, coreUserInstructions } = getUserPromptComponents(
+    currentIterationOverall, maxIterationsOverall,
+    activePlanStage,
+    outputParagraphShowHeadings, outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings,
+    isGlobalMode,
+    currentProduct.length === 0 && loadedFiles.length > 0
+  );
 
-  let fullGeneratedText = "";
-  let productContentForNextPrompt = previousProduct; // For the first call, this is indeed the previous iteration's full product
-  let currentCallIsContinuation = false;
-  let callCount = 0;
-  const MAX_CONTINUATION_CALLS = 5; // Limit continuation attempts to prevent infinite loops or excessive cost
+  const textPromptPart = buildTextualPromptPart(currentProduct, fileManifest, coreUserInstructions, currentIterationOverall);
 
-  while (callCount < MAX_CONTINUATION_CALLS) {
-    callCount++;
+  const parts: Part[] = [];
+  if (currentIterationOverall === 1) { // Only send full file data on the first *actual processing* iteration
+    loadedFiles.forEach(file => {
+        parts.push({ inlineData: { mimeType: file.mimeType, data: file.base64Data } });
+    });
+  }
+  parts.push({ text: textPromptPart });
 
-    const userPromptForThisCall = buildFullUserPrompt(
-      originalPrompt,
-      productContentForNextPrompt,
-      iterationNumber,
-      maxIterations,
-      processingMode,
-      coreUserInstructions,
-      currentCallIsContinuation
-    );
+  let accumulatedText = "";
+  let fullUserPromptForLog = textPromptPart;
+  const apiStreamDetails: ApiStreamCallDetail[] = [];
+  let streamCallCount = 0;
+  let isContinuationCall = false;
 
-    console.log(`Gemini API Call #${callCount} for Iteration ${iterationNumber}. Mode: ${processingMode}. Continuation: ${currentCallIsContinuation}`);
-    // For very deep debugging, you might uncomment the next line, but it can be very verbose.
-    // if (callCount > 1 || currentCallIsContinuation) console.log("User prompt for this continuation call:", userPromptForThisCall.substring(0, 500) + "...");
+  try {
+    let continueStreaming = true;
 
+    while(continueStreaming) {
+        streamCallCount++;
+        if (isHaltSignalled()) {
+            return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: "Process halted by user during API call preparation.", promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails };
+        }
 
-    try {
-      const response: GenerateContentResponse = await ai.models.generateContent({
-          model: MODEL_NAME,
-          // The userPromptForThisCall now contains the full context including previous product / partial product
-          contents: [{ role: 'user', parts: [{ text: userPromptForThisCall }] }],
-          config: {
-              systemInstruction: systemInstruction,
-              temperature: modelConfig.temperature,
-              topP: modelConfig.topP,
-              topK: modelConfig.topK,
-              // No maxOutputTokens explicitly set, relies on model's default (8192 for gemini-2.5-flash-preview-04-17)
-          }
-      });
+        const currentPromptForThisAPICall = parts.find(p => p.text !== undefined)?.text || "Error: Text part missing";
 
-      // --- DIAGNOSTIC LOGGING START ---
-      console.log(`Gemini API Response Details for Iteration ${iterationNumber}, Call ${callCount} (Mode: ${processingMode}):`);
-      if (response.candidates && response.candidates.length > 0) {
-        response.candidates.forEach((candidate, index) => {
-          console.log(`  Candidate ${index}:`);
-          console.log(`    Finish Reason: ${candidate.finishReason}`);
-          if (candidate.finishMessage) {
-              console.log(`    Finish Message: ${candidate.finishMessage}`);
-          }
-          console.log(`    Safety Ratings:`, candidate.safetyRatings);
-          console.log(`    Content Parts Count: ${candidate.content?.parts?.length || 0}`);
-           if (candidate.content?.parts) {
-             candidate.content.parts.forEach((part, partIndex) => {
-               if (part.text) {
-                 console.log(`    Part ${partIndex} (text): ${part.text.substring(0,100)}... (length: ${part.text.length})`);
-               } else {
-                 console.log(`    Part ${partIndex} (non-text):`, part);
-               }
-             });
-           }
-          if (candidate.citationMetadata) {
-              console.log(`    Citation Metadata:`, candidate.citationMetadata);
-          }
-           if (candidate.tokenCount) {
-              console.log(`    Token Count: ${candidate.tokenCount}`);
-          }
+        const systemInstructionContent: Content | undefined = systemInstruction ? { role: "system", parts: [{text: systemInstruction}] } : undefined;
+        
+        const generationConfig: any = { 
+            candidateCount: 1,
+            temperature: modelConfig.temperature,
+            topP: modelConfig.topP,
+            topK: modelConfig.topK,
+        };
+        
+        if (activePlanStage && activePlanStage.format === 'json') {
+            generationConfig.responseMimeType = "application/json";
+        }
+
+        const requestPayload = {
+            contents: [{ role: "user", parts }],
+            ...(systemInstructionContent && { systemInstruction: systemInstructionContent }),
+            generationConfig,
+        };
+
+        const stream = await ai.models.generateContentStream({
+            model: modelToUse,
+            ...requestPayload
         });
-      } else {
-        console.log("  No candidates found in the response for this chunk.");
-      }
-      if (response.usageMetadata) {
-          console.log(`  Usage Metadata for this chunk:`, response.usageMetadata);
-      }
-      console.log(`  Extracted text (response.text) for this chunk, first 100 chars: ${response.text?.substring(0,100)}... (chunk length: ${response.text?.length})`);
-      // --- DIAGNOSTIC LOGGING END ---
 
-      const chunkText = response.text;
-      if (typeof chunkText !== 'string') {
-          console.error("Gemini API response.text is not a string for this chunk:", chunkText);
-          throw new Error(`Received invalid response chunk from AI (not text) on iteration ${iterationNumber}, call ${callCount}.`);
-      }
 
-      fullGeneratedText += chunkText; // Append the new chunk to the total for this iteration
+        let textFromThisStreamCall = "";
+        let currentFinishReason: string | null = null;
+        let currentSafetyRatings: any = null;
 
-      const candidate = response.candidates?.[0];
-      if (candidate?.finishReason === 'MAX_TOKENS') {
-        console.log(`Iteration ${iterationNumber}, Call ${callCount}: Output truncated (MAX_TOKENS). Will attempt continuation.`);
-        productContentForNextPrompt = fullGeneratedText; // The next prompt will use all text generated *so far in this iteration*
-        currentCallIsContinuation = true;
-        // Optional: Add a small delay if making rapid calls to avoid rate limits or model overload, though likely not needed here.
-        // await new Promise(resolve => setTimeout(resolve, 200)); 
-      } else {
-        // Not MAX_TOKENS, so this is the end of generation for this iteration (STOP, SAFETY, ERROR, etc.)
-        if (candidate?.finishReason !== 'STOP' && candidate?.finishReason !== undefined) { // Log if not a clean stop
-            console.warn(`Iteration ${iterationNumber}, Call ${callCount}: Finished with reason: ${candidate.finishReason}${candidate.finishMessage ? ' - ' + candidate.finishMessage : ''}.`);
-        } else if (candidate?.finishReason === 'STOP') {
-            console.log(`Iteration ${iterationNumber}, Call ${callCount}: Finished with reason: STOP.`);
+        for await (const chunk of stream) {
+            if (isHaltSignalled()) {
+                apiStreamDetails.push({ callCount: streamCallCount, promptForThisCall: currentPromptForThisAPICall, finishReason: "HALTED_BY_USER", safetyRatings: currentSafetyRatings, textLengthThisCall: textFromThisStreamCall.length, isContinuation: isContinuationCall });
+                return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: "Process halted by user during streaming.", promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails };
+            }
+            const chunkText = chunk.text;
+            if (chunkText) {
+                accumulatedText += chunkText;
+                textFromThisStreamCall += chunkText;
+                onStreamChunk(chunkText);
+            }
+            currentFinishReason = chunk.candidates?.[0]?.finishReason || null;
+            currentSafetyRatings = chunk.candidates?.[0]?.safetyRatings || null;
+        }
+
+        apiStreamDetails.push({ callCount: streamCallCount, promptForThisCall: currentPromptForThisAPICall, finishReason: currentFinishReason, safetyRatings: currentSafetyRatings, textLengthThisCall: textFromThisStreamCall.length, isContinuation: isContinuationCall });
+
+        if (currentFinishReason === "MAX_TOKENS") {
+            parts.pop(); // Remove the last text part
+            parts.push({ text: "Continue generating the response from where you left off, ensuring completion." });
+            fullUserPromptForLog += "\n\n---CONTINUATION---\nContinue generating the response from where you left off, ensuring completion.";
+            isContinuationCall = true;
         } else {
-             console.log(`Iteration ${iterationNumber}, Call ${callCount}: Finished (no specific reason provided, or candidate undefined).`);
+            continueStreaming = false;
         }
-        break; // Exit the while loop, generation for this iteration is complete.
-      }
-    } catch (error) {
-        // Log the error along with context
-        console.error(`Gemini API error in iterateProduct (iteration: ${iterationNumber}, call: ${callCount}, mode: ${processingMode}):`, error);
-        const partialText = fullGeneratedText ? ` (Partial text generated before error: "${fullGeneratedText.substring(0,150)}...")` : "";
-        if (error instanceof Error) {
-            throw new Error(`Gemini API request failed on iteration ${iterationNumber}, call ${callCount}: ${error.message}${partialText}`);
-        }
-        throw new Error(`Gemini API request failed with an unknown error on iteration ${iterationNumber}, call ${callCount}.${partialText}`);
     }
-  } // End of while loop for continuations
 
-  if (callCount >= MAX_CONTINUATION_CALLS && currentCallIsContinuation) { 
-    // This means the last call in the loop was a continuation attempt that hit the MAX_CONTINUATION_CALLS limit.
-    const warningMessage = `\n\n[SYSTEM_NOTE: Reached maximum continuation calls (${MAX_CONTINUATION_CALLS}) for iteration ${iterationNumber}. The output for this iteration might be incomplete.]`;
-    console.warn(warningMessage.trim());
-    fullGeneratedText += warningMessage;
+    if (accumulatedText.startsWith(CONVERGED_PREFIX)) {
+      return { product: accumulatedText, status: 'CONVERGED', promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails };
+    }
+    return { product: accumulatedText, status: 'COMPLETED', promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails };
+
+  } catch (error: any) {
+    console.error(`Error during Gemini API call for Iteration ${currentIterationOverall}, Call ${streamCallCount}:`, error);
+    
+    let errorMessage = "An unknown API error occurred. Check console for details.";
+    let isRateLimitErrorFlag = false;
+
+    if (error.error && typeof error.error.message === 'string') { // Handles structure like { error: { code, message, status } }
+        const apiErrorDetails = error.error;
+        let originalApiMessage = apiErrorDetails.message;
+
+        if (
+            apiErrorDetails.status === "RESOURCE_EXHAUSTED" ||
+            apiErrorDetails.code === 429 ||
+            (typeof apiErrorDetails.code === 'string' && apiErrorDetails.code.includes("429")) ||
+            // Fallback checks on the message content itself
+            originalApiMessage.toUpperCase().includes("RESOURCE_EXHAUSTED") ||
+            originalApiMessage.toUpperCase().includes("RATE LIMIT") ||
+            originalApiMessage.includes("429") ||
+            originalApiMessage.toUpperCase().includes("QUOTA")
+        ) {
+            errorMessage = `API Quota Exceeded or Rate Limit Hit. Please check your Gemini API plan, billing details, or try again later. For more info: https://ai.google.dev/gemini-api/docs/rate-limits. Original API message: "${originalApiMessage}"`;
+            isRateLimitErrorFlag = true;
+        } else {
+            errorMessage = `API Error: ${originalApiMessage}`;
+        }
+    } else if (typeof error.message === 'string') { // Handles generic error with a top-level message
+        let originalApiMessage = error.message;
+        if (
+            originalApiMessage.toUpperCase().includes("RESOURCE_EXHAUSTED") ||
+            originalApiMessage.toUpperCase().includes("RATE LIMIT") ||
+            originalApiMessage.includes("429") ||
+            originalApiMessage.toUpperCase().includes("QUOTA")
+        ) {
+            const status = (error as any).status;
+            const code = (error as any).code;
+            let detailsPart = "";
+            if (status || code) {
+                detailsPart = ` (Status: ${status || 'N/A'}, Code: ${code || 'N/A'})`;
+            }
+            errorMessage = `API Quota Exceeded or Rate Limit Hit. Please check your Gemini API plan, billing details, or try again later. For more info: https://ai.google.dev/gemini-api/docs/rate-limits. Original API message: "${originalApiMessage}"${detailsPart}`;
+            isRateLimitErrorFlag = true;
+        } else {
+             errorMessage = `API Error: ${originalApiMessage}`;
+        }
+    } else if (error.toString) { // Final fallback
+        errorMessage = error.toString();
+    }
+    
+    apiStreamDetails.push({ callCount: streamCallCount, promptForThisCall: "N/A (Error before/during stream start)", finishReason: "ERROR_BEFORE_STREAM", safetyRatings: null, textLengthThisCall: 0, isContinuation: isContinuationCall });
+    return { product: accumulatedText || currentProduct, status: 'ERROR', errorMessage, promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptForLog, apiStreamDetails, isRateLimitError: isRateLimitErrorFlag };
   }
-
-  // The fullGeneratedText should naturally include "CONVERGED:" if the AI intended it at the end of its generation.
-  // No special handling for "CONVERGED:" needed here, as it's part of the text content.
-  return fullGeneratedText;
 };
-
-/*
-export const generateOverallEvolutionSummary = async (
-  // ... (Commented out code remains unchanged) ...
-*/

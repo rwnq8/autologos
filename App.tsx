@@ -1,742 +1,443 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
-import type { IterationLogEntry, ProcessState, LoadedFile, ProcessingMode, StaticAiModelDetails, SettingsSuggestionSource, ModelConfig, DisplayAreaExternalProps, ParameterAdvice, SuggestedParamsResponse, ModelParameterGuidance } from './types';
-import * as geminiService from './services/geminiService';
+
+
+import React, { useEffect, useCallback, useRef, useState } from 'react';
+import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, DiffViewType, AutologosProjectFile, PortableDiffsFile } from './types.ts';
+import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, PORTABLE_DIFFS_FILE_FORMAT_VERSION } from './types.ts';
+import * as GeminaiService from './services/geminiService'; // Corrected import alias
+import { DEFAULT_PROJECT_NAME_FALLBACK, INITIAL_PROJECT_NAME_STATE, generateFileName } from './services/utils';
 import Controls from './components/Controls';
 import DisplayArea from './components/DisplayArea';
-import * as Diff from 'diff';
+import { usePlanTemplates } from './hooks/usePlanTemplates';
+import { useProcessState, createInitialProcessState } from './hooks/useProcessState';
+import { useModelParameters } from './hooks/useModelParameters';
+import { useIterativeLogic } from './hooks/useIterativeLogic';
+import { useProjectIO } from './hooks/useProjectIO';
+import { useAutoSave } from './hooks/useAutoSave';
+import { reconstructProduct } from './services/diffService';
+import { inferProjectNameFromInput } from './services/projectUtils';
+import { useDebounce } from './hooks/useDebounce';
 
-
-// Simple debounce hook
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value);
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [value, delay]);
-  return debouncedValue;
-}
-
-// Safely initialize parts of the state that depend on geminiService
-let safeInitialApiKeyStatus: 'loaded' | 'missing' = 'missing';
-let safeInitialTemp = 0.8; // Fallback default
-let safeInitialTopP = 0.95; // Fallback default
-let safeInitialTopK = 60;   // Fallback default
-let safeInitialModelConfigRationales: string[] = ["Using fallback default model settings."];
-
-try {
-  // Check if geminiService and its properties are available
-  if (geminiService && typeof geminiService.isApiKeyAvailable === 'function') {
-    safeInitialApiKeyStatus = geminiService.isApiKeyAvailable() ? 'loaded' : 'missing';
-  } else {
-    console.warn("geminiService.isApiKeyAvailable is not available. Defaulting apiKeyStatus to 'missing'.");
-  }
-
-  if (geminiService && geminiService.EXPANSIVE_MODE_DEFAULTS) {
-    safeInitialTemp = geminiService.EXPANSIVE_MODE_DEFAULTS.temperature;
-    safeInitialTopP = geminiService.EXPANSIVE_MODE_DEFAULTS.topP;
-    safeInitialTopK = geminiService.EXPANSIVE_MODE_DEFAULTS.topK;
-    safeInitialModelConfigRationales = [`Using default settings for 'expansive' mode.`];
-  } else {
-    console.warn("geminiService.EXPANSIVE_MODE_DEFAULTS is not available. Using fallback model parameters.");
-  }
-} catch (e) {
-  console.error("Error accessing geminiService during initial state setup. Using fallback defaults.", e);
-}
+import { ApplicationProvider } from './contexts/ApplicationContext';
+import { ProcessProvider, type AddLogEntryType } from './contexts/ProcessContext';
+import { ModelConfigProvider } from './contexts/ModelConfigContext';
+import { PlanProvider } from './contexts/PlanContext';
+import ErrorBoundary from './components/shared/ErrorBoundary';
 
 
 const App: React.FC = () => {
-  const [staticAiModelDetails, setStaticAiModelDetails] = useState<StaticAiModelDetails | null>(null);
-  const [modelConfigWarnings, setModelConfigWarnings] = useState<string[]>([]);
-  const [promptChangedByFileLoad, setPromptChangedByFileLoad] = useState(false); // New state flag
+  const { state: processState, updateProcessState, handleLoadedFilesChange, addLogEntry: addLogEntryFromHook, handleReset: processStateResetHook } = useProcessState();
+  const { savedPlanTemplates, handleSavePlanAsTemplate, handleDeletePlanTemplate, planTemplateStatusMessage, clearPlanTemplateStatusMessage, loadUserTemplates, overwriteUserTemplates } = usePlanTemplates();
 
+  const debouncedLoadedFilesCount = useDebounce(processState.loadedFiles.length, 750);
 
-  const initialProcessState: ProcessState = {
-    initialPrompt: "",
-    currentProduct: null,
-    iterationHistory: [],
-    currentIteration: 0,
-    maxIterations: 10,
-    isProcessing: false,
-    finalProduct: null,
-    statusMessage: "Select processing mode, configure model, enter input data or load from file(s) to begin.",
-    apiKeyStatus: safeInitialApiKeyStatus,
-    loadedFiles: [],
-    promptSourceName: null,
-    processingMode: 'expansive', 
-    temperature: safeInitialTemp,
-    topP: safeInitialTopP,
-    topK: safeInitialTopK,
-    settingsSuggestionSource: 'mode',
-    userManuallyAdjustedSettings: false,
-    modelConfigRationales: safeInitialModelConfigRationales,
-    modelParameterAdvice: {},
-    // overallEvolutionSummary: null, 
-    configAtFinalization: null,
+  const processStateRef = useRef(processState);
+  useEffect(() => {
+    processStateRef.current = processState;
+  }, [processState]);
+
+  const appInitialModelParams = {
+      temperature: GeminaiService.CREATIVE_DEFAULTS.temperature,
+      topP: GeminaiService.CREATIVE_DEFAULTS.topP,
+      topK: GeminaiService.CREATIVE_DEFAULTS.topK,
+      settingsSuggestionSource: 'mode' as SettingsSuggestionSource,
+      userManuallyAdjustedSettings: false,
   };
-  
-  const [state, setState] = useState<ProcessState>(initialProcessState);
+
+  const modelParamsRef = useRef(appInitialModelParams);
 
   const {
-    initialPrompt,
-    currentProduct,
-    iterationHistory,
-    currentIteration,
-    maxIterations,
-    isProcessing,
-    finalProduct,
-    statusMessage,
-    apiKeyStatus,
-    loadedFiles,
-    promptSourceName,
-    processingMode,
-    temperature,
-    topP,
-    topK,
-    settingsSuggestionSource,
-    userManuallyAdjustedSettings,
-    modelConfigRationales,
-    modelParameterAdvice,
-    // overallEvolutionSummary,
-    configAtFinalization,
-  } = state;
-
-  const debouncedInitialPrompt = useDebounce(initialPrompt, 750);
-
-  useEffect(() => {
-    try {
-      if (geminiService && typeof geminiService.getStaticModelDetails === 'function') {
-        setStaticAiModelDetails(geminiService.getStaticModelDetails());
-      } else {
-        console.warn("geminiService.getStaticModelDetails is not available. Static model details will be unavailable.");
-        setStaticAiModelDetails({ modelName: "N/A", tools: "N/A" }); // Fallback
-      }
-    } catch (error) {
-        console.error("Error getting static model details from geminiService:", error);
-        setStaticAiModelDetails({ modelName: "Error", tools: "Error" }); // Error state
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      if (geminiService && typeof geminiService.getModelParameterGuidance === 'function') {
-        const guidance: ModelParameterGuidance = geminiService.getModelParameterGuidance({ temperature, topP, topK });
-        setModelConfigWarnings(guidance.warnings);
-        updateProcessState({ modelParameterAdvice: guidance.advice });
-      } else {
-        console.warn("geminiService.getModelParameterGuidance is not available. Model parameter advice will be unavailable.");
-        setModelConfigWarnings(["Model parameter advice service not available."]);
-        updateProcessState({ modelParameterAdvice: {} });
-      }
-    } catch (error) {
-      console.error("Error getting model parameter guidance:", error);
-      setModelConfigWarnings(["Error loading model parameter advice from service."]);
-      updateProcessState({ modelParameterAdvice: {} }); // Default to empty advice
-    }
-  }, [temperature, topP, topK]);
-
-
-  const updateProcessState = (updates: Partial<ProcessState>) => {
-    setState(prev => ({ ...prev, ...updates }));
-  };
+    temperature, topP, topK, settingsSuggestionSource, userManuallyAdjustedSettings,
+    modelConfigRationales, modelParameterAdvice, modelConfigWarnings,
+    handleTemperatureChange, handleTopPChange, handleTopKChange,
+    getCalculatedModelConfigForIteration, resetModelParametersToDefaults, setUserManuallyAdjustedSettings
+  } = useModelParameters(
+    processState.initialPrompt,
+    debouncedLoadedFilesCount,
+    processState.isPlanActive,
+    processState.currentIteration,
+    processState.maxIterations,
+    { isStagnant: false, consecutiveStagnantIterations: 0 }, // Simplified for now, real stagnation logic is complex
+    processState.promptChangedByFileLoad,
+    () => updateProcessState({ promptChangedByFileLoad: false }),
+    appInitialModelParams.temperature,
+    appInitialModelParams.topP,
+    appInitialModelParams.topK,
+    processState.stagnationNudgeEnabled 
+  );
   
-  const getProductSummary = (product: string | undefined | null): string => {
-    if (!product) return "N/A";
-    const limit = 100;
-    return product.length > limit ? product.substring(0, limit - 3) + "..." : product;
-  };
+  const maxIterationsForContext = processState.maxIterations;
+  const onMaxIterationsChangeForContext = (value: number) => updateProcessState({ maxIterations: value });
 
-  const addLogEntry = useCallback((logData: { iteration: number; product: string | null; status: string; previousProduct?: string | null }) => {
-    let linesAdded = 0;
-    let linesRemoved = 0;
 
-    if (logData.iteration > 0 && logData.previousProduct && logData.product) {
-        const changes = Diff.diffLines(logData.previousProduct, logData.product, { newlineIsToken: false, ignoreWhitespace: false });
-        changes.forEach(part => {
-            if (part.added) linesAdded += part.count || 0;
-            if (part.removed) linesRemoved += part.count || 0;
-        });
+  useEffect(() => {
+    modelParamsRef.current = {temperature, topP, topK, settingsSuggestionSource, userManuallyAdjustedSettings};
+  }, [temperature, topP, topK, settingsSuggestionSource, userManuallyAdjustedSettings]);
+
+  const setLoadedModelParametersCallback = useCallback((params: {
+    temperature: number;
+    topP: number;
+    topK: number;
+    settingsSuggestionSource: SettingsSuggestionSource;
+    userManuallyAdjustedSettings: boolean;
+  }) => {
+    handleTemperatureChange(params.temperature);
+    handleTopPChange(params.topP);
+    handleTopKChange(params.topK);
+    setUserManuallyAdjustedSettings(params.userManuallyAdjustedSettings);
+  }, [handleTemperatureChange, handleTopPChange, handleTopKChange, setUserManuallyAdjustedSettings]);
+
+  const [isApiRateLimitedLocal, setIsApiRateLimitedLocal] = useState(processState.isApiRateLimited || false);
+  const [rateLimitCooldownActiveSecondsLocal, setRateLimitCooldownActiveSecondsLocal] = useState(processState.rateLimitCooldownActiveSeconds || 0);
+  const cooldownTimerRef = useRef<number | null>(null);
+  const rateLimitCooldownDuration = 60;
+
+  const clearCooldownTimer = useCallback(() => {
+    if (cooldownTimerRef.current) {
+      clearInterval(cooldownTimerRef.current);
+      cooldownTimerRef.current = null;
     }
-
-    const newEntry: IterationLogEntry = {
-      iteration: logData.iteration,
-      productSummary: getProductSummary(logData.product),
-      status: logData.status,
-      timestamp: new Date().toLocaleTimeString(),
-      fullProduct: logData.product ?? undefined,
-      linesAdded: linesAdded > 0 ? linesAdded : undefined,
-      linesRemoved: linesRemoved > 0 ? linesRemoved : undefined,
-    };
-    setState(prev => {
-        const existingEntryIndex = prev.iterationHistory.findIndex(entry => entry.iteration === newEntry.iteration);
-        if (existingEntryIndex !== -1) {
-            const updatedHistory = [...prev.iterationHistory];
-            updatedHistory[existingEntryIndex] = newEntry; 
-            return { ...prev, iterationHistory: updatedHistory };
-        }
-        return { ...prev, iterationHistory: [...prev.iterationHistory, newEntry] };
-    });
   }, []);
 
-  // Effect for mode-based default settings
   useEffect(() => {
-    if (isProcessing || userManuallyAdjustedSettings) return;
-
-    if (settingsSuggestionSource === 'mode' || !initialPrompt.trim()) {
-        let baseConfig: ModelConfig | null = null;
-        try {
-            baseConfig = processingMode === 'expansive' ? 
-                               geminiService.EXPANSIVE_MODE_DEFAULTS : 
-                               geminiService.CONVERGENT_MODE_DEFAULTS;
-        } catch (e) {
-            console.warn("Could not access default model configs from geminiService.", e);
-        }
-
-        if (!baseConfig) { // Fallback if geminiService constants are unavailable
-            baseConfig = processingMode === 'expansive' ? 
-                         { temperature: 0.8, topP: 0.95, topK: 60 } : 
-                         { temperature: 0.4, topP: 0.9, topK: 40 };
-        }
-        
-        const currentRationales = processingMode === 'expansive' ? 
-                                 [`Using default settings for 'expansive' mode.`] : 
-                                 [`Using default settings for 'convergent' mode.`];
-
-        if (temperature !== baseConfig.temperature || topP !== baseConfig.topP || topK !== baseConfig.topK) {
-            updateProcessState({ 
-                temperature: baseConfig.temperature,
-                topP: baseConfig.topP,
-                topK: baseConfig.topK,
-                settingsSuggestionSource: 'mode', 
-                modelConfigRationales: currentRationales,
-            });
-        } else if (settingsSuggestionSource !== 'mode') { 
-             updateProcessState({ 
-                settingsSuggestionSource: 'mode',
-                modelConfigRationales: currentRationales,
-            });
-        }
+    setIsApiRateLimitedLocal(processState.isApiRateLimited || false);
+    setRateLimitCooldownActiveSecondsLocal(processState.rateLimitCooldownActiveSeconds || 0);
+    if (!(processState.isApiRateLimited || false)) {
+        clearCooldownTimer();
     }
-  }, [processingMode, isProcessing, userManuallyAdjustedSettings, settingsSuggestionSource, initialPrompt, temperature, topP, topK]);
+  }, [processState.isApiRateLimited, processState.rateLimitCooldownActiveSeconds, clearCooldownTimer]);
 
-  // Effect for input-based suggested settings (debounced)
-  useEffect(() => {
-    if (promptChangedByFileLoad) {
-        setPromptChangedByFileLoad(false); 
-        return;
-    }
+  const handleRateLimitErrorEncountered = useCallback(() => {
+    clearCooldownTimer();
+    updateProcessState({ isApiRateLimited: true, rateLimitCooldownActiveSeconds: rateLimitCooldownDuration });
+    setIsApiRateLimitedLocal(true);
+    setRateLimitCooldownActiveSecondsLocal(rateLimitCooldownDuration);
 
-    if (isProcessing || userManuallyAdjustedSettings) return;
-    if (!debouncedInitialPrompt.trim()) {
-      if (settingsSuggestionSource !== 'mode') {
-         let baseConfig: ModelConfig | null = null;
-         try {
-            baseConfig = processingMode === 'expansive' ? 
-                               geminiService.EXPANSIVE_MODE_DEFAULTS : 
-                               geminiService.CONVERGENT_MODE_DEFAULTS;
-         } catch (e) { console.warn("Could not access default model configs from geminiService.", e); }
-         
-         if (!baseConfig) { // Fallback
-            baseConfig = processingMode === 'expansive' ? 
-                         { temperature: 0.8, topP: 0.95, topK: 60 } : 
-                         { temperature: 0.4, topP: 0.9, topK: 40 };
-         }
-
-          updateProcessState({
-            temperature: baseConfig.temperature,
-            topP: baseConfig.topP,
-            topK: baseConfig.topK,
-            settingsSuggestionSource: 'mode',
-            modelConfigRationales: [`No prompt; using default settings for '${processingMode}' mode.`],
-          });
-      }
-      return;
-    }
-    
-    try {
-        if (geminiService && typeof geminiService.suggestModelParameters === 'function') {
-            const suggested: SuggestedParamsResponse = geminiService.suggestModelParameters(debouncedInitialPrompt, processingMode);
-            
-            if (suggested.config.temperature !== temperature || 
-                suggested.config.topP !== topP || 
-                suggested.config.topK !== topK) {
-              updateProcessState({
-                temperature: suggested.config.temperature,
-                topP: suggested.config.topP,
-                topK: suggested.config.topK,
-                settingsSuggestionSource: 'input',
-                modelConfigRationales: suggested.rationales,
-              });
-            } else if (settingsSuggestionSource !== 'input' && settingsSuggestionSource !== 'manual') {
-               updateProcessState({
-                settingsSuggestionSource: 'input',
-                modelConfigRationales: suggested.rationales,
-              });
-            }
-        } else {
-            console.warn("geminiService.suggestModelParameters is not available. Cannot suggest parameters based on input.");
+    cooldownTimerRef.current = setInterval(() => {
+      setRateLimitCooldownActiveSecondsLocal(prev => {
+        const newTime = prev - 1;
+        updateProcessState({ rateLimitCooldownActiveSeconds: newTime });
+        if (newTime <= 0) {
+          clearCooldownTimer();
+          updateProcessState({ isApiRateLimited: false, rateLimitCooldownActiveSeconds: 0 });
+          setIsApiRateLimitedLocal(false);
+          return 0;
         }
-    } catch (error) {
-        console.error("Error suggesting model parameters:", error);
-    }
-  }, [debouncedInitialPrompt, processingMode, isProcessing, userManuallyAdjustedSettings, temperature, topP, topK, settingsSuggestionSource, promptChangedByFileLoad]);
-
-
-  useEffect(() => {
-    let active = true;
-
-    const runIterationCycle = async () => {
-      if (!active || !isProcessing || !initialPrompt || currentProduct === null || finalProduct !== null) {
-        if (finalProduct !== null && isProcessing) { 
-            updateProcessState({ 
-                isProcessing: false, 
-            });
-        }
-        return;
-      }
-
-      const nextIterationNumber = currentIteration + 1;
-      const previousProductForLog = currentProduct; 
-
-      if (nextIterationNumber > maxIterations) {
-        let finalStatusMsg = `Max iterations (${maxIterations}) reached. `;
-        finalStatusMsg += processingMode === 'convergent' ? "Product may not be fully converged. " : "";
-        finalStatusMsg += "Process stopped.";
-        
-        const finalConfig: ModelConfig = {temperature, topP, topK};
-        updateProcessState({
-          statusMessage: finalStatusMsg,
-          finalProduct: currentProduct, 
-          isProcessing: false, 
-          configAtFinalization: finalConfig,
-        });
-        addLogEntry({
-            iteration: currentIteration, 
-            product: currentProduct,
-            status: `Completed (Max iterations ${maxIterations} reached)`,
-            previousProduct: iterationHistory.find(e => e.iteration === currentIteration -1)?.fullProduct
-        });
-        return;
-      }
-
-      updateProcessState({ statusMessage: `Processing iteration ${nextIterationNumber} of ${maxIterations} in ${processingMode} mode...`});
-      try {
-        if (!geminiService || typeof geminiService.iterateProduct !== 'function') {
-            throw new Error("geminiService.iterateProduct is not available. Cannot process iteration.");
-        }
-        const modelConfigForThisIteration: ModelConfig = { temperature, topP, topK };
-        const geminiResponseText = await geminiService.iterateProduct(
-          currentProduct,
-          nextIterationNumber,
-          maxIterations,
-          initialPrompt, 
-          processingMode,
-          modelConfigForThisIteration
-        );
-
-        if (!active) return;
-
-        if (geminiResponseText.startsWith("CONVERGED:")) {
-          const convergedProduct = geminiResponseText.replace("CONVERGED:", "").trim();
-          let finalStatusMsg = "Convergence signaled by AI. ";
-          finalStatusMsg += processingMode === 'convergent' ? "Distillation complete. " : "Further expansion deemed not beneficial by AI. ";
-          finalStatusMsg += "Process complete.";
-
-          const finalConfig: ModelConfig = {temperature, topP, topK};
-          updateProcessState({
-            finalProduct: convergedProduct, 
-            currentProduct: convergedProduct,
-            statusMessage: finalStatusMsg,
-            isProcessing: false, 
-            configAtFinalization: finalConfig,
-          });
-          addLogEntry({
-            iteration: nextIterationNumber,
-            product: convergedProduct,
-            status: "Converged by AI",
-            previousProduct: previousProductForLog,
-          });
-        } else {
-          updateProcessState({
-            currentProduct: geminiResponseText,
-            currentIteration: nextIterationNumber,
-            statusMessage: `Iteration ${nextIterationNumber} complete in ${processingMode} mode. Continuing...`,
-          });
-          addLogEntry({
-            iteration: nextIterationNumber,
-            product: geminiResponseText,
-            status: `Iteration ${nextIterationNumber} complete`,
-            previousProduct: previousProductForLog,
-          });
-        }
-      } catch (error) {
-        console.error("Error during iteration:", error);
-        if (active) {
-          const errorMessage = (error instanceof Error) ? error.message : "Unknown error";
-          const finalConfig: ModelConfig = {temperature, topP, topK};
-          updateProcessState({
-            statusMessage: `Error during iteration ${nextIterationNumber}: ${errorMessage}. Stopping process.`,
-            finalProduct: currentProduct, 
-            isProcessing: false, 
-            configAtFinalization: finalConfig,
-          });
-          addLogEntry({
-            iteration: nextIterationNumber, 
-            product: currentProduct, 
-            status: `Error: ${errorMessage}`,
-            previousProduct: previousProductForLog,
-          });
-        }
-      }
-    };
-
-    if (isProcessing && finalProduct === null) {
-      const timeoutId = setTimeout(runIterationCycle, 100); 
-      return () => {
-        active = false;
-        clearTimeout(timeoutId);
-      };
-    } else if (finalProduct !== null && isProcessing) { 
-        updateProcessState({ isProcessing: false });
-    }
-    
-    return () => { active = false; };
-  }, [
-      isProcessing, 
-      currentIteration, 
-      finalProduct, 
-      initialPrompt,
-      currentProduct, 
-      maxIterations, 
-      addLogEntry, 
-      processingMode,
-      temperature, topP, topK,
-      iterationHistory, 
-    ]);
-
-
-  const handleStartProcess = () => {
-    if (!initialPrompt.trim()) {
-      updateProcessState({statusMessage: "Please enter input data or load from file(s)."});
-      return;
-    }
-    
-    let currentApiKeyStatus = 'missing';
-    try {
-        if (geminiService && typeof geminiService.isApiKeyAvailable === 'function') {
-            currentApiKeyStatus = geminiService.isApiKeyAvailable() ? 'loaded' : 'missing';
-        }
-    } catch (e) { console.warn("Could not check API key status from geminiService.", e); }
-
-    if (currentApiKeyStatus === 'missing') {
-      updateProcessState({statusMessage: "API Key is missing. Cannot start process."});
-      return;
-    }
-
-    const isContinuingFromRewind = state.currentIteration > 0 && state.finalProduct === null;
-    
-    let rationalesForStart = state.modelConfigRationales;
-    if (!isContinuingFromRewind) {
-        try {
-            if (geminiService && typeof geminiService.suggestModelParameters === 'function' && initialPrompt.trim()) {
-                rationalesForStart = geminiService.suggestModelParameters(initialPrompt, state.processingMode).rationales;
-            } else {
-                 rationalesForStart = [`Initial settings for '${state.processingMode}' mode.`];
-            }
-        } catch (e) {
-            console.warn("Could not get model parameter rationales from geminiService for start.", e);
-            rationalesForStart = [`Error fetching rationales; using current settings for '${state.processingMode}' mode.`];
-        }
-    }
-
-
-    updateProcessState({ 
-        configAtFinalization: null,
-        modelConfigRationales: rationalesForStart,
-        userManuallyAdjustedSettings: isContinuingFromRewind ? state.userManuallyAdjustedSettings : false,
-    });
-
-    if (!isContinuingFromRewind) {
-      const currentPromptSourceName = state.loadedFiles.length > 0 ? state.loadedFiles[0].name : (initialPrompt.trim() ? "typed_prompt" : null);
-      const initialLogEntryContent = state.initialPrompt;
-      const newInitialLogEntry: IterationLogEntry = {
-        iteration: 0,
-        productSummary: getProductSummary(initialLogEntryContent),
-        status: "Initial state",
-        timestamp: new Date().toLocaleTimeString(),
-        fullProduct: initialLogEntryContent,
-      };
-      updateProcessState({
-        iterationHistory: [newInitialLogEntry],
-        currentProduct: state.initialPrompt,
-        currentIteration: 0,
-        finalProduct: null,
-        isProcessing: true,
-        statusMessage: `Initializing ${state.processingMode} process...`,
-        promptSourceName: currentPromptSourceName,
+        return newTime;
       });
-    } else {
-      updateProcessState({
-        currentProduct: state.initialPrompt, 
-        isProcessing: true,
-        finalProduct: null, 
-        statusMessage: `Continuing ${state.processingMode} process from iteration ${state.currentIteration}...`,
-      });
+    }, 1000) as unknown as number; // Cast to number for browser compatibility
+  }, [clearCooldownTimer, updateProcessState, rateLimitCooldownDuration]);
+
+  useEffect(() => {
+    return () => clearCooldownTimer();
+  }, [clearCooldownTimer]);
+
+  const autoSaveHook = useAutoSave(
+    processStateRef, modelParamsRef, updateProcessState, overwriteUserTemplates,
+    createInitialProcessState(GeminaiService.isApiKeyAvailable() ? 'loaded' : 'missing', GeminaiService.DEFAULT_MODEL_NAME as SelectableModelName),
+    appInitialModelParams, setLoadedModelParametersCallback
+  );
+  const { performAutoSave } = autoSaveHook;
+  
+  const addLogEntryForContext: AddLogEntryType = addLogEntryFromHook as AddLogEntryType;
+
+  const iterativeLogicInstance = useIterativeLogic(
+    processState, updateProcessState, addLogEntryForContext, getCalculatedModelConfigForIteration, performAutoSave,
+    processState.selectedModelName, handleRateLimitErrorEncountered
+  );
+
+  const projectIO = useProjectIO(
+    processStateRef, modelParamsRef, updateProcessState, overwriteUserTemplates,
+    createInitialProcessState(GeminaiService.isApiKeyAvailable() ? 'loaded' : 'missing', GeminaiService.DEFAULT_MODEL_NAME as SelectableModelName),
+    appInitialModelParams, setLoadedModelParametersCallback
+  );
+
+  const [currentModelUIDetails, setCurrentModelUIDetails] = useState<StaticAiModelDetails | null>(null);
+  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    loadUserTemplates();
+    setCurrentModelUIDetails(GeminaiService.getAiModelDetails(processState.selectedModelName || GeminaiService.DEFAULT_MODEL_NAME));
+  }, [loadUserTemplates, processState.selectedModelName]);
+
+
+  useEffect(() => {
+    if (processState.isProcessing) return;
+    const shouldInfer = (processState.projectName === INITIAL_PROJECT_NAME_STATE) ||
+                       (processState.loadedFiles.length === 0 && processState.projectName !== DEFAULT_PROJECT_NAME_FALLBACK && processState.projectName !== INITIAL_PROJECT_NAME_STATE);
+    if (shouldInfer) {
+      const newInferredName = inferProjectNameFromInput(processState.initialPrompt, processState.loadedFiles);
+      updateProcessState({ projectName: newInferredName || (processState.loadedFiles.length === 0 ? INITIAL_PROJECT_NAME_STATE : DEFAULT_PROJECT_NAME_FALLBACK) });
     }
-  };
+  }, [processState.loadedFiles, processState.isProcessing, processState.projectName, processState.initialPrompt, updateProcessState]);
 
-  const handleReset = () => {
-    const currentMode = state.processingMode; 
-    const currentMaxIterations = state.maxIterations; 
-
-    let baseConfig: ModelConfig = { temperature: 0.8, topP: 0.95, topK: 60 }; // Fallback
-    let newApiKeyStatus: 'loaded' | 'missing' = 'missing';
-    let newRationales: string[] = [`Using fallback default settings for '${currentMode}' mode.`];
-
-    try {
-        if (geminiService) {
-             if (typeof geminiService.isApiKeyAvailable === 'function') {
-                newApiKeyStatus = geminiService.isApiKeyAvailable() ? 'loaded' : 'missing';
-             }
-             const defaults = currentMode === 'expansive' ? 
-                               geminiService.EXPANSIVE_MODE_DEFAULTS : 
-                               geminiService.CONVERGENT_MODE_DEFAULTS;
-             if (defaults) {
-                baseConfig = defaults;
-                newRationales = [`Using default settings for '${currentMode}' mode.`];
-             }
-        }
-    } catch (e) {
-        console.warn("Could not access defaults from geminiService on reset.", e);
+  const handleResetApp = useCallback(async () => {
+    const baseConfig = GeminaiService.CREATIVE_DEFAULTS;
+    await processStateResetHook(
+        baseConfig,
+        GeminaiService.getModelParameterGuidance(baseConfig, true).advice,
+        ["Settings reset to creative starting defaults for Global Mode."],
+        savedPlanTemplates
+    );
+    resetModelParametersToDefaults(baseConfig);
+    if (autoSaveHook.showRestorePrompt) {
+        await autoSaveHook.handleClearAutoSaveAndDismiss();
     }
-    
+    updateProcessState({promptChangedByFileLoad: false, selectedModelName: GeminaiService.DEFAULT_MODEL_NAME as SelectableModelName, stagnationNudgeEnabled: true});
+    clearCooldownTimer();
+    setIsApiRateLimitedLocal(false);
+    setRateLimitCooldownActiveSecondsLocal(0);
+  }, [processStateResetHook, resetModelParametersToDefaults, savedPlanTemplates, autoSaveHook.showRestorePrompt, autoSaveHook.handleClearAutoSaveAndDismiss, updateProcessState, clearCooldownTimer]);
+
+  const handleRewind = useCallback(async (iterationNumber: number) => {
+    if (processState.isProcessing) {
+      updateProcessState({ statusMessage: "Cannot rewind while processing." }); return;
+    }
+    const targetHistory = processState.iterationHistory.filter(entry => entry.iteration <= iterationNumber);
+    if (targetHistory.length === 0 && iterationNumber !== 0) {
+      updateProcessState({ statusMessage: `No history found for iteration ${iterationNumber} to rewind to.` }); return;
+    }
+    const { product: reconstructedProductValue, error: reconstructionError } = reconstructProduct(iterationNumber, targetHistory, processState.initialPrompt);
+    if (reconstructionError) {
+      updateProcessState({ statusMessage: `Error rewinding to iteration ${iterationNumber}: ${reconstructionError}` }); return;
+    }
     updateProcessState({
-      ...initialProcessState, 
-      processingMode: currentMode, 
-      maxIterations: currentMaxIterations, 
-      apiKeyStatus: newApiKeyStatus,
-      temperature: baseConfig.temperature, 
-      topP: baseConfig.topP,
-      topK: baseConfig.topK,
-      settingsSuggestionSource: 'mode', 
-      userManuallyAdjustedSettings: false, 
-      modelConfigRationales: newRationales,
-      statusMessage: "Process reset. Configure model, enter input data or load file(s).",
-      configAtFinalization: null,
+      currentProduct: reconstructedProductValue, iterationHistory: targetHistory, currentIteration: iterationNumber,
+      finalProduct: null, isProcessing: false, currentPlanStageIndex: null, currentStageIteration: 0,
+      statusMessage: `Rewound to Iteration ${iterationNumber}. Resume or start new process.`,
+      isApiRateLimited: false, rateLimitCooldownActiveSeconds: 0,
     });
+    clearCooldownTimer();
+    await performAutoSave();
+  }, [processState.isProcessing, processState.iterationHistory, processState.initialPrompt, updateProcessState, performAutoSave, clearCooldownTimer]);
+
+  const handleExportIterationMarkdown = useCallback((iterationNumber: number) => {
+    const logEntry = processState.iterationHistory.find(entry => entry.iteration === iterationNumber);
+    if (!logEntry) { updateProcessState({ statusMessage: `Log entry for iter ${iterationNumber} not found.` }); return; }
+    const { product: reconstructedProductValue, error: reconstructionError } = reconstructProduct(iterationNumber, processState.iterationHistory, processState.initialPrompt);
+    if (reconstructionError) { updateProcessState({ statusMessage: `Error reconstructing product for iter ${iterationNumber} export: ${reconstructionError}` }); return; }
+    const fileName = generateFileName(processState.projectName, "iter_snapshot", "md", iterationNumber);
+    const blob = new Blob([`---\niteration: ${iterationNumber}\n---\n\n${reconstructedProductValue}`], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.download = fileName;
+    document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url);
+    updateProcessState({ statusMessage: `Exported Markdown for Iteration ${iterationNumber}.` });
+  }, [processState.iterationHistory, processState.initialPrompt, processState.projectName, updateProcessState]);
+
+  const handleSelectedModelChange = (modelName: SelectableModelName) => {
+    updateProcessState({ selectedModelName: modelName });
+    setIsModelDropdownOpen(false);
   };
   
-  const handleLoadedFilesChange = (newFiles: LoadedFile[]) => {
-    let newInitialPrompt = "";
-    let newPromptSourceName = null;
-
-    if (newFiles.length > 0) {
-        newInitialPrompt = newFiles.map(file => 
-            `--- START FILE: ${file.name} ---\n${file.content}\n--- END FILE: ${file.name} ---`
-        ).join('\n\n');
-        newPromptSourceName = newFiles[0].name; 
-    }
-    
-    let suggestedConfig: ModelConfig = { temperature: state.temperature, topP: state.topP, topK: state.topK };
-    let suggestedRationales: string[] = state.modelConfigRationales;
-
+  const onFileSelectedForImport = async (file: File) => {
+    updateProcessState({ statusMessage: `Processing ${file.name}...` });
     try {
-        if (geminiService && typeof geminiService.suggestModelParameters === 'function') {
-            const suggested = geminiService.suggestModelParameters(newInitialPrompt, state.processingMode);
-            suggestedConfig = suggested.config;
-            suggestedRationales = suggested.rationales;
-        } else {
-            console.warn("geminiService.suggestModelParameters not available for file load. Using current settings.");
+      const fileNameLower = file.name.toLowerCase();
+      const fileContent = await file.text();
+
+      if (fileNameLower.endsWith('.autologos.json')) {
+        const projectFile = JSON.parse(fileContent) as AutologosProjectFile;
+        if (projectFile.header && projectFile.header.fileFormatVersion === AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION) {
+          projectIO.handleImportProjectData(projectFile);
+          return;
         }
-    } catch (e) {
-        console.error("Error suggesting model parameters on file load.", e);
-    }
-
-
-    updateProcessState({ 
-      loadedFiles: newFiles,
-      initialPrompt: newInitialPrompt,
-      promptSourceName: newPromptSourceName,
-      temperature: suggestedConfig.temperature, 
-      topP: suggestedConfig.topP,            
-      topK: suggestedConfig.topK,            
-      settingsSuggestionSource: 'input',      
-      userManuallyAdjustedSettings: false,    
-      modelConfigRationales: suggestedRationales,
-      currentProduct: null, 
-      finalProduct: null, 
-      iterationHistory: [], 
-      currentIteration: 0, 
-      configAtFinalization: null,
-    });
-    setPromptChangedByFileLoad(true); 
-  };
-
-  const handleInitialPromptChange = (prompt: string) => {
-    const isModifyingLoadedContent = loadedFiles.length > 0 && 
-                                   prompt !== loadedFiles.map(f => `--- START FILE: ${f.name} ---\n${f.content}\n--- END FILE: ${f.name} ---`).join('\n\n');
-
-    updateProcessState({ 
-      initialPrompt: prompt,
-      userManuallyAdjustedSettings: false, 
-      loadedFiles: isModifyingLoadedContent ? [] : loadedFiles, 
-      promptSourceName: isModifyingLoadedContent ? null : promptSourceName,
-    });
-    setPromptChangedByFileLoad(false); 
-  };
-
-  const handleProcessingModeChange = (mode: ProcessingMode) => {
-    updateProcessState({ 
-      processingMode: mode,
-      userManuallyAdjustedSettings: false, 
-    });
-  };
-
-  const handleTemperatureChange = useCallback((val: number) => {
-    updateProcessState({ temperature: val, userManuallyAdjustedSettings: true, settingsSuggestionSource: 'manual', modelConfigRationales: [] });
-    setPromptChangedByFileLoad(false);
-  }, []);
-  const handleTopPChange = useCallback((val: number) => {
-    updateProcessState({ topP: val, userManuallyAdjustedSettings: true, settingsSuggestionSource: 'manual', modelConfigRationales: [] });
-    setPromptChangedByFileLoad(false);
-  }, []);
-  const handleTopKChange = useCallback((val: number) => {
-    updateProcessState({ topK: val, userManuallyAdjustedSettings: true, settingsSuggestionSource: 'manual', modelConfigRationales: [] });
-    setPromptChangedByFileLoad(false);
-  }, []);
-
-  const handleRewindToIteration = useCallback((iterationNum: number) => {
-    const logEntry = state.iterationHistory.find(entry => entry.iteration === iterationNum);
-    if (logEntry && logEntry.fullProduct) {
-      const newHistory = state.iterationHistory.slice(0, state.iterationHistory.findIndex(entry => entry.iteration === iterationNum) + 1);
+      } else if (fileNameLower.endsWith('.json')) {
+        const jsonData = JSON.parse(fileContent);
+        if (jsonData.portableDiffsVersion && jsonData.portableDiffsVersion === PORTABLE_DIFFS_FILE_FORMAT_VERSION && jsonData.initialPromptManifest !== undefined && Array.isArray(jsonData.diffs)) {
+          projectIO.handleImportPortableDiffsData(jsonData as PortableDiffsFile);
+          return;
+        }
+        // If not a portable diffs file, treat as generic JSON data file
+        const base64Data = btoa(unescape(encodeURIComponent(fileContent)));
+        handleLoadedFilesChange([{
+          name: file.name,
+          mimeType: file.type || 'application/json',
+          base64Data,
+          size: file.size,
+        }]);
+        return;
+      }
       
-      updateProcessState({
-        initialPrompt: logEntry.fullProduct, 
-        currentProduct: logEntry.fullProduct,
-        iterationHistory: newHistory,
-        currentIteration: logEntry.iteration,
-        finalProduct: null,
-        isProcessing: false,
-        statusMessage: `Rewound to Iteration ${logEntry.iteration}. Modify input or settings, then click "Continue..." to proceed.`,
-        promptSourceName: `Rewound_from_Iter_${logEntry.iteration}`,
-        userManuallyAdjustedSettings: true, 
-        settingsSuggestionSource: 'manual', 
-        modelConfigRationales: ["Settings manually controlled after rewind."],
-        configAtFinalization: null,
-      });
-      setPromptChangedByFileLoad(false); 
-    }
-  }, [state.iterationHistory]); 
+      // Default: treat as other data file (txt, md, image, etc.)
+      // For images/binary, need to re-read as DataURL. For text, can use fileContent.
+      if (file.type.startsWith("image/") || file.type === "application/pdf" || !file.type.startsWith("text/")) {
+         const reader = new FileReader();
+         reader.onload = (e_reader) => {
+             const dataUrl = e_reader.target?.result as string;
+             const base64Data = dataUrl.substring(dataUrl.indexOf(',') + 1);
+             handleLoadedFilesChange([{ name: file.name, mimeType: file.type || 'application/octet-stream', base64Data, size: file.size }]);
+         };
+         reader.onerror = () => updateProcessState({ statusMessage: `Error reading file ${file.name}` });
+         reader.readAsDataURL(file);
+      } else { // Text-based files
+          const base64Data = btoa(unescape(encodeURIComponent(fileContent)));
+          handleLoadedFilesChange([{ name: file.name, mimeType: file.type || 'text/plain', base64Data, size: file.size }]);
+      }
 
-
-  const getStartButtonText = (): string => {
-    if (isProcessing && finalProduct === null) return "Processing..."; 
-    
-    if (currentIteration > 0 && finalProduct === null) { 
-        return `Continue from Iteration ${currentIteration}`;
+    } catch (error: any) {
+      console.error("Error importing/loading file:", error);
+      updateProcessState({ statusMessage: `Error processing file ${file.name}: ${error.message}` });
     }
-    if (finalProduct !== null) { 
-        return "Start New Process";
-    }
-    return "Start Process"; 
   };
 
-  const displayAreaProps: DisplayAreaExternalProps & Omit<Parameters<typeof DisplayArea>[0], keyof DisplayAreaExternalProps> = {
-      statusMessage,
-      currentProduct,
-      finalProduct,
-      iterationHistory,
-      currentIteration,
-      maxIterations,
-      isProcessing: isProcessing && finalProduct === null, 
-      promptSourceName,
-      processingMode,
-      onRewind: handleRewindToIteration,
-      initialPromptForYAML: initialPrompt, 
-      configAtFinalizationForYAML: configAtFinalization,
-      staticAiModelDetailsForYAML: staticAiModelDetails,
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) setIsModelDropdownOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const applicationContextValue = {
+    apiKeyStatus: processState.apiKeyStatus, selectedModelName: processState.selectedModelName,
+    projectName: processState.projectName, projectId: processState.projectId,
+    isApiRateLimited: isApiRateLimitedLocal, rateLimitCooldownActiveSeconds: rateLimitCooldownActiveSecondsLocal,
+    updateProcessState: updateProcessState as any, 
+    handleImportProjectData: projectIO.handleImportProjectData, // Pass the correct handler
+    handleExportProject: projectIO.handleExportProject, 
+    handleExportPortableDiffs: projectIO.handleExportPortableDiffs, 
+    handleRateLimitErrorEncountered,
+    staticAiModelDetails: currentModelUIDetails, onSelectedModelChange: handleSelectedModelChange,
+    onFileSelectedForImport, // Provide the new unified handler
+  };
+
+  const processContextValue = {
+    ...processState, 
+    updateProcessState: updateProcessState as any, 
+    handleLoadedFilesChange, addLogEntry: addLogEntryForContext, handleResetApp,
+    handleStartProcess: iterativeLogicInstance.handleStart, handleHaltProcess: iterativeLogicInstance.handleHalt,
+    handleRewind, handleExportIterationMarkdown,
+    reconstructProductCallback: (iter: number, hist: IterationLogEntry[], base: string) => reconstructProduct(iter, hist, base),
+  };
+
+  const modelConfigContextValue = {
+    temperature, topP, topK, maxIterations: maxIterationsForContext, settingsSuggestionSource, userManuallyAdjustedSettings,
+    modelConfigRationales, modelParameterAdvice, modelConfigWarnings,
+    handleTemperatureChange, handleTopPChange, handleTopKChange, onMaxIterationsChange: onMaxIterationsChangeForContext,
+    setUserManuallyAdjustedSettings,
+  };
+
+  const planContextValue = {
+    isPlanActive: processState.isPlanActive, planStages: processState.planStages,
+    currentPlanStageIndex: processState.currentPlanStageIndex, currentStageIteration: processState.currentStageIteration,
+    savedPlanTemplates, planTemplateStatus: planTemplateStatusMessage,
+    updateProcessState: updateProcessState as any, 
+    onIsPlanActiveChange: (isActive: boolean) => updateProcessState({ isPlanActive: isActive }),
+    onPlanStagesChange: (stages: PlanStage[]) => updateProcessState({ planStages: stages }),
+    handleSavePlanAsTemplate, handleDeletePlanTemplate, clearPlanTemplateStatus: clearPlanTemplateStatusMessage,
+    onLoadPlanTemplate: (template: PlanTemplate) => {
+      updateProcessState({ planStages: template.stages.map(s => ({...s, id: `stage_${Date.now()}_${Math.random().toString(36).substring(2,7)}`})), isPlanActive: true, currentPlanStageIndex:0, currentStageIteration:0 });
+      if(planTemplateStatusMessage) clearPlanTemplateStatusMessage();
+    },
+  };
+  
+  const commonControlProps: CommonControlProps = {
+    commonInputClasses: "w-full p-3 bg-slate-50/80 dark:bg-white/5 border border-slate-300 dark:border-white/10 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 placeholder-slate-500 dark:placeholder-slate-400 text-slate-700 dark:text-slate-100",
+    commonSelectClasses: "w-full p-2.5 bg-slate-50/80 dark:bg-white/5 border border-slate-300 dark:border-white/10 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 text-slate-700 dark:text-slate-100 text-sm",
+    commonCheckboxLabelClasses: "flex items-center text-sm text-primary-600 dark:text-primary-400",
+    commonCheckboxInputClasses: "h-4 w-4 text-primary-600 border-slate-300 dark:border-white/20 rounded focus:ring-primary-500 dark:bg-white/10 dark:checked:bg-primary-500 dark:focus:ring-offset-black/50",
+    commonButtonClasses: "flex-1 inline-flex items-center justify-center px-4 py-2 border border-slate-300 dark:border-white/20 text-sm font-medium rounded-md shadow-sm text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
   };
 
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-sky-900">
-      <header className="w-full py-6 sm:py-8">
-        <div className="max-w-4xl mx-auto px-4 sm:px-8 text-center">
-          <h1 className="text-4xl sm:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-500">
-            Automated Process Engine
-          </h1>
-          <p className="mt-2 text-slate-300 text-sm sm:text-base">
-            Configure model, input data, select a mode, and let the AI iteratively process it.
-          </p>
-        </div>
-      </header>
+    <ApplicationProvider value={applicationContextValue}>
+      <ProcessProvider value={processContextValue}>
+        <ModelConfigProvider value={modelConfigContextValue}>
+          <PlanProvider value={planContextValue}>
+            <ErrorBoundary>
+              <div className="min-h-screen bg-slate-200 dark:bg-slate-900 text-slate-800 dark:text-slate-200 transition-colors duration-300 flex flex-col">
+                <header className="bg-slate-800 dark:bg-black/50 text-white p-4 shadow-md flex justify-between items-center">
+                  <h1 className="text-2xl font-semibold text-primary-300">Autologos Iterative Engine</h1>
+                  <div className="flex items-center text-xs text-slate-400">
+                    <span className="mr-2">Model:</span>
+                    <div className="relative" ref={modelDropdownRef}>
+                      <button
+                        onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
+                        className="flex items-center px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        aria-haspopup="true"
+                        aria-expanded={isModelDropdownOpen}
+                        disabled={processState.isProcessing || isApiRateLimitedLocal}
+                      >
+                        {currentModelUIDetails?.modelName || 'Select Model'}
+                        <span className="ml-1.5 text-xs">{isModelDropdownOpen ? '▲' : '▼'}</span>
+                      </button>
+                      {isModelDropdownOpen && (
+                        <div className="absolute right-0 mt-1.5 w-60 bg-slate-700 rounded-md shadow-lg z-20 border border-slate-600">
+                          {SELECTABLE_MODELS.map((model) => (
+                            <button
+                              key={model.name}
+                              onClick={() => handleSelectedModelChange(model.name)}
+                              className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-600
+                                          ${processState.selectedModelName === model.name ? 'text-primary-300 font-semibold' : 'text-slate-300'}`}
+                            >
+                              {model.displayName} {processState.selectedModelName === model.name ? ' (Current)' : ''}
+                              <span className="block text-xxs text-slate-400">{model.description}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {autoSaveHook.autoSaveStatus !== 'idle' && autoSaveHook.autoSaveStatus !== 'found_autosave' && autoSaveHook.autoSaveStatus !== 'cleared' && (
+                      <span className={`ml-3 px-2 py-0.5 rounded-full text-xs
+                          ${autoSaveHook.autoSaveStatus === 'saving' ? 'bg-blue-500/70 text-white' : ''}
+                          ${autoSaveHook.autoSaveStatus === 'saved' ? 'bg-green-500/70 text-white' : ''}
+                          ${autoSaveHook.autoSaveStatus === 'error' ? 'bg-red-500/70 text-white' : ''}
+                          ${autoSaveHook.autoSaveStatus === 'loaded' ? 'bg-teal-500/70 text-white' : ''}
+                          ${autoSaveHook.autoSaveStatus === 'not_found' ? 'bg-slate-500/70 text-white' : ''}
+                      `}>
+                          Autosave: {autoSaveHook.autoSaveStatus.replace('_', ' ')}
+                      </span>
+                    )}
+                  </div>
+                </header>
 
-      <main className="w-full flex-grow px-4 sm:px-8 pb-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          <section className="lg:col-span-4">
-            <Controls
-              initialPromptFromApp={initialPrompt}
-              onInitialPromptChange={handleInitialPromptChange}
-              maxIterations={maxIterations}
-              onMaxIterationsChange={(val) => updateProcessState({maxIterations: val})}
-              isProcessing={isProcessing} 
-              onStart={handleStartProcess}
-              onReset={handleReset}
-              apiKeyAvailable={apiKeyStatus === 'loaded'}
-              finalProduct={finalProduct}
-              loadedFilesFromApp={loadedFiles}
-              onLoadedFilesChange={handleLoadedFilesChange}
-              processingMode={processingMode}
-              onProcessingModeChange={handleProcessingModeChange}
-              temperature={temperature}
-              onTemperatureChange={handleTemperatureChange}
-              topP={topP}
-              onTopPChange={handleTopPChange}
-              topK={topK}
-              onTopKChange={handleTopKChange}
-              settingsSuggestionSource={settingsSuggestionSource}
-              modelConfigWarnings={modelConfigWarnings}
-              modelConfigRationales={modelConfigRationales}
-              modelParameterAdvice={modelParameterAdvice}
-              startProcessButtonText={getStartButtonText()}
-            />
-          </section>
-          
-          <section className="lg:col-span-8">
-            <DisplayArea {...displayAreaProps} />
-          </section>
-        </div>
-      </main>
+                <div className="flex-grow flex flex-col md:flex-row overflow-hidden">
+                  <aside className="w-full md:w-[420px] lg:w-[480px] h-auto md:h-full md:overflow-y-auto bg-white/70 dark:bg-slate-800/70 p-0 border-r border-slate-300 dark:border-white/10 shadow-lg flex-shrink-0">
+                    <ErrorBoundary>
+                      <Controls commonControlProps={commonControlProps} />
+                    </ErrorBoundary>
+                  </aside>
+                  <main className="flex-grow h-auto md:h-full md:overflow-y-auto bg-slate-100/50 dark:bg-slate-900/50">
+                    <ErrorBoundary>
+                      <DisplayArea />
+                    </ErrorBoundary>
+                  </main>
+                </div>
 
-       <footer className="w-full py-6 sm:py-8">
-        <div className="max-w-4xl mx-auto px-4 sm:px-8 text-center">
-          <p className="text-xs text-slate-500">
-            Powered by Google Gemini. API Key status: 
-            <span className={apiKeyStatus === 'loaded' ? 'text-green-400' : 'text-red-400'}>
-              {apiKeyStatus === 'loaded' ? ' Loaded' : ' Missing'}
-            </span>.
-            Current Mode: <span className="text-sky-400">{processingMode.charAt(0).toUpperCase() + processingMode.slice(1)}</span>.
-          </p>
-          {staticAiModelDetails && (
-            <p className="text-xs text-slate-500 mt-1">
-              Model: <span className="text-slate-400">{staticAiModelDetails.modelName}</span> | 
-              Temp: <span className="text-slate-400">{temperature.toFixed(2)}</span> | 
-              TopP: <span className="text-slate-400">{topP.toFixed(2)}</span> | 
-              TopK: <span className="text-slate-400">{topK}</span> | 
-              Tools: <span className="text-slate-400">{staticAiModelDetails.tools}</span>
-            </p>
-          )}
-          <p className="text-xs text-slate-600 mt-1">
-              Note: File operations (load/save) are handled client-side in your browser.
-          </p>
-        </div>
-      </footer>
-    </div>
+                {autoSaveHook.showRestorePrompt && autoSaveHook.restorableStateInfo && (
+                  <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100] p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="restore-dialog-title">
+                    <div className="bg-white dark:bg-slate-800 p-6 rounded-lg shadow-xl max-w-md w-full border border-primary-500/50">
+                      <h2 id="restore-dialog-title" className="text-lg font-semibold text-primary-600 dark:text-primary-300 mb-3">Autosaved Session Found</h2>
+                      <p className="text-sm text-slate-600 dark:text-slate-300 mb-1">Project: <strong>{autoSaveHook.restorableStateInfo.projectName || DEFAULT_PROJECT_NAME_FALLBACK}</strong></p>
+                      {autoSaveHook.restorableStateInfo.lastAutoSavedAt && <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">Saved: {new Date(autoSaveHook.restorableStateInfo.lastAutoSavedAt).toLocaleString()}</p>}
+                      <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">Do you want to restore this session?</p>
+                      <div className="flex justify-end space-x-3">
+                        <button
+                          onClick={autoSaveHook.handleClearAutoSaveAndDismiss}
+                          className="px-4 py-2 text-sm rounded-md border border-slate-300 dark:border-white/20 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 transition-colors"
+                        >
+                          Dismiss & Clear
+                        </button>
+                        <button
+                          onClick={autoSaveHook.handleRestoreAutoSave}
+                          className="px-4 py-2 text-sm rounded-md bg-primary-600 text-white hover:bg-primary-700 transition-colors focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800"
+                        >
+                          Restore Session
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </ErrorBoundary>
+          </PlanProvider>
+        </ModelConfigProvider>
+      </ProcessProvider>
+    </ApplicationProvider>
   );
 };
-
 export default App;
+export type { ReconstructedProductResult };

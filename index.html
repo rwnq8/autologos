@@ -1,22 +1,67 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Automated ML Process Engine</title>
+  <title>Autologos Iterative Process Engine</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
-      darkMode: 'class', // or 'media'
+      darkMode: 'media', // Use 'media' for OS-level dark mode preference
       theme: {
         extend: {
           colors: {
-            primary: {"50":"#eff6ff","100":"#dbeafe","200":"#bfdbfe","300":"#93c5fd","400":"#60a5fa","500":"#3b82f6","600":"#2563eb","700":"#1d4ed8","800":"#1e40af","900":"#1e3a8a","950":"#172554"}
+            primary: { "50": "#f0f9ff", "100": "#e0f2fe", "200": "#bae6fd", "300": "#7dd3fc", "400": "#38bdf8", "500": "#0ea5e9", "600": "#0284c7", "700": "#0369a1", "800": "#075985", "900": "#0c4a6e", "950": "#082f49" }
           }
         }
       }
     }
   </script>
+<style>
+  @keyframes autologosGradientAnimation {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  .autologos-gradient-background {
+    background: linear-gradient(45deg, #00b0ff, #00ffb3, #b3ff00, #ffb300, #ff00b3, #00b0ff);
+    background-size: 300% 300%;
+    animation: autologosGradientAnimation 30s ease infinite;
+  }
+
+  /* Adaptive Scrollbar Styles */
+  /* For Webkit browsers (Chrome, Safari, Edge) */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  /* Light Theme Scrollbar */
+  html:not(.dark) ::-webkit-scrollbar-track {
+    background: #e2e8f0; /* slate-200 */
+    border-radius: 10px;
+  }
+  html:not(.dark) ::-webkit-scrollbar-thumb {
+    background: #94a3b8; /* slate-400 */
+    border-radius: 10px;
+  }
+  html:not(.dark) ::-webkit-scrollbar-thumb:hover {
+    background: #64748b; /* slate-500 */
+  }
+
+  /* Dark Theme Scrollbar */
+  html.dark ::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05); /* Light track on dark */
+    border-radius: 10px;
+  }
+  html.dark ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2); /* Lighter thumb */
+    border-radius: 10px;
+  }
+  html.dark ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3); /* Even lighter thumb on hover */
+  }
+</style>
 <script type="importmap">
 {
   "imports": {
@@ -30,8 +75,9 @@
 </script>
 <link rel="stylesheet" href="/index.css">
 </head>
-<body class="bg-slate-900 text-slate-100 antialiased">
+<body class="text-slate-700 dark:text-slate-100 antialiased">
   <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
+  <script type="module" src="./index.tsx"></script>
+<script type="module" src="/index.tsx"></script>
 </body>
 </html>
