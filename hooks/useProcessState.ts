@@ -211,6 +211,9 @@ export const useProcessState = () => {
     apiStreamDetails?: ApiStreamCallDetail[];
     modelConfigUsed?: ModelConfig;
     readabilityScoreFlesch?: number;
+    lexicalDensity?: number; // New
+    avgSentenceLength?: number; // New
+    typeTokenRatio?: number; // New
     fileProcessingInfo: FileProcessingInfo;
     aiValidationInfo?: AiResponseValidationInfo;
     directAiResponseHead?: string;
@@ -267,6 +270,9 @@ export const useProcessState = () => {
       linesAdded: linesAdded > 0 ? linesAdded : (logData.iteration === 0 && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
       linesRemoved: linesRemoved > 0 ? linesRemoved : undefined,
       readabilityScoreFlesch: logData.readabilityScoreFlesch,
+      lexicalDensity: logData.lexicalDensity, // New
+      avgSentenceLength: logData.avgSentenceLength, // New
+      typeTokenRatio: logData.typeTokenRatio, // New
       fileProcessingInfo: logData.fileProcessingInfo,
       promptSystemInstructionSent: logData.promptSystemInstructionSent,
       promptCoreUserInstructionsSent: logData.promptCoreUserInstructionsSent,

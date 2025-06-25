@@ -1,4 +1,3 @@
-
 // Basic word count based on splitting by space.
 export const countWords = (text: string): number => {
   if (!text || !text.trim()) {
@@ -92,34 +91,59 @@ export const calculateFleschReadingEase = (text: string | null | undefined): num
   return parseFloat(score.toFixed(2)); 
 };
 
-// Basic list of English stop words for Jaccard similarity
-const STOP_WORDS = new Set([
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has', 'he',
-    'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the', 'to', 'was', 'were',
-    'will', 'with', 'i', 'you', 'your', 'me', 'my', 'mine', 'they', 'them', 'their', 
-    'we', 'us', 'our', 'ours', 'she', 'her', 'hers', 'him', 'his', 'this', 'these',
-    'those', 'am', 'been', 'being', 'have', 'had', 'do', 'does', 'did', 'but',
-    'if', 'or', 'because', 'while', 'through', 'nor', 'not', 'so', 'just', 'can',
-    'could', 'should', 'would', 'may', 'might', 'must', 'about', 'above', 'after',
-    'again', 'against', 'all', 'any', 'both', 'each', 'few', 'further', 'here',
-    'how', 'into', 'more', 'most', 'no', 'once', 'only', 'other', 'out', 'over',
-    'own', 'same', 'some', 'such', 'than', 'then', 'too', 'under', 'until', 'up',
-    'very', 'what', 'when', 'where', 'which', 'who', 'why', 's', 't'
+const COMPREHENSIVE_STOP_WORDS = new Set([
+    'a', 'about', 'above', 'after', 'again', 'against', 'all', 'am', 'an', 'and', 'any', 'are', 'aren\'t', 'as', 'at', 
+    'be', 'because', 'been', 'before', 'being', 'below', 'between', 'both', 'but', 'by', 
+    'can\'t', 'cannot', 'could', 'couldn\'t', 'did', 'didn\'t', 'do', 'does', 'doesn\'t', 'doing', 'don\'t', 'down', 'during', 
+    'each', 'few', 'for', 'from', 'further', 
+    'had', 'hadn\'t', 'has', 'hasn\'t', 'have', 'haven\'t', 'having', 'he', 'he\'d', 'he\'ll', 'he\'s', 'her', 'here', 'here\'s', 'hers', 'herself', 'him', 'himself', 'his', 'how', 'how\'s', 
+    'i', 'i\'d', 'i\'ll', 'i\'m', 'i\'ve', 'if', 'in', 'into', 'is', 'isn\'t', 'it', 'it\'s', 'its', 'itself', 
+    'let\'s', 'me', 'more', 'most', 'mustn\'t', 'my', 'myself', 
+    'no', 'nor', 'not', 
+    'of', 'off', 'on', 'once', 'only', 'or', 'other', 'ought', 'our', 'ours', 'ourselves', 'out', 'over', 'own', 
+    'same', 'shan\'t', 'she', 'she\'d', 'she\'ll', 'she\'s', 'should', 'shouldn\'t', 'so', 'some', 'such', 
+    'than', 'that', 'that\'s', 'the', 'their', 'theirs', 'them', 'themselves', 'then', 'there', 'there\'s', 'these', 'they', 'they\'d', 'they\'ll', 'they\'re', 'they\'ve', 'this', 'those', 'through', 'to', 'too', 
+    'under', 'until', 'up', 'very', 
+    'was', 'wasn\'t', 'we', 'we\'d', 'we\'ll', 'we\'re', 'we\'ve', 'were', 'weren\'t', 'what', 'what\'s', 'when', 'when\'s', 'where', 'where\'s', 'which', 'while', 'who', 'who\'s', 'whom', 'why', 'why\'s', 'with', 'won\'t', 'would', 'wouldn\'t', 
+    'you', 'you\'d', 'you\'ll', 'you\'re', 'you\'ve', 'your', 'yours', 'yourself', 'yourselves',
+    // Consider adding very common verbs like 'get', 'make', 'go', 'know', 'see', 'use', 'find', 'tell', 'ask', 'work', 'seem', 'feel', 'try', 'leave', 'call'
+    // Depending on the domain, some of these might be content words.
+    'e.g.', 'i.e.', 'etc', 'also'
 ]);
 
+
+const TOKENIZE_REGEX = /\b[a-zA-Z0-9]+(?:['’][a-zA-Z0-9]+)*\b/g;
+
+
 /**
- * Tokenizes text, removes stop words, and converts to lowercase.
+ * Tokenizes text into words.
+ * @param text The input text.
+ * @param toLowerCase Convert tokens to lowercase.
+ * @returns An array of tokens.
+ */
+const getTokens = (text: string, toLowerCase: boolean = true): string[] => {
+    if (!text || !text.trim()) {
+        return [];
+    }
+    const processedText = toLowerCase ? text.toLowerCase() : text;
+    return processedText.match(TOKENIZE_REGEX) || [];
+};
+
+
+/**
+ * Tokenizes text, removes stop words (optional), and converts to lowercase (optional).
+ * This version is specifically for Jaccard and might be slightly different from a general tokenizer.
  * @param text The input text.
  * @returns A Set of unique, processed tokens.
  */
-const getProcessedTokens = (text: string): Set<string> => {
+const getProcessedTokensForJaccard = (text: string): Set<string> => {
     if (!text || !text.trim()) {
         return new Set();
     }
     const tokens = text.toLowerCase()
         .replace(/[^\w\s'-]/g, '') // Remove punctuation except apostrophes and hyphens within words
         .split(/\s+/) // Split by whitespace
-        .filter(token => token.length > 0 && !STOP_WORDS.has(token));
+        .filter(token => token.length > 0 && !COMPREHENSIVE_STOP_WORDS.has(token)); // Use comprehensive list for Jaccard
     return new Set(tokens);
 };
 
@@ -133,25 +157,79 @@ const getProcessedTokens = (text: string): Set<string> => {
  */
 export const calculateJaccardSimilarity = (textA: string | null | undefined, textB: string | null | undefined): number => {
     if (!textA || !textB || !textA.trim() || !textB.trim()) {
-        return 0; // Or 1 if both are empty/null and considered "similar" in that sense
+        return 0; 
     }
 
-    const tokensA = getProcessedTokens(textA);
-    const tokensB = getProcessedTokens(textB);
+    const tokensA = getProcessedTokensForJaccard(textA);
+    const tokensB = getProcessedTokensForJaccard(textB);
 
     if (tokensA.size === 0 && tokensB.size === 0) {
-        return 1; // Both effectively empty after processing, so identical in terms of content words
+        return 1; 
     }
     if (tokensA.size === 0 || tokensB.size === 0) {
-        return 0; // One is empty, the other is not
+        return 0; 
     }
     
     const intersection = new Set([...tokensA].filter(token => tokensB.has(token)));
     const union = new Set([...tokensA, ...tokensB]);
 
     if (union.size === 0) {
-        return 1; // Should not happen if tokensA/B sizes were > 0, but defensive.
+        return 1; 
     }
 
     return intersection.size / union.size;
+};
+
+/**
+ * Calculates Lexical Density.
+ * Lexical Density = (Number of Content Words / Total Number of Words)
+ * Content words are non-stop words.
+ * @param text The input text.
+ * @returns Lexical density score (0-1), or undefined if no words.
+ */
+export const calculateLexicalDensity = (text: string | null | undefined): number | undefined => {
+    if (!text || !text.trim()) return undefined;
+
+    const allTokens = getTokens(text, true);
+    if (allTokens.length === 0) return undefined;
+
+    const contentTokens = allTokens.filter(token => !COMPREHENSIVE_STOP_WORDS.has(token));
+    
+    const density = contentTokens.length / allTokens.length;
+    return parseFloat(density.toFixed(3));
+};
+
+/**
+ * Calculates Average Sentence Length.
+ * Avg Sentence Length = (Total Words / Total Sentences)
+ * @param text The input text.
+ * @returns Average sentence length, or undefined if no words/sentences.
+ */
+export const calculateAvgSentenceLength = (text: string | null | undefined): number | undefined => {
+    if (!text || !text.trim()) return undefined;
+
+    const totalWords = countWords(text);
+    const totalSentences = countSentences(text);
+
+    if (totalWords === 0 || totalSentences === 0) return undefined;
+
+    const avgLength = totalWords / totalSentences;
+    return parseFloat(avgLength.toFixed(2));
+};
+
+/**
+ * Calculates Type-Token Ratio (TTR).
+ * TTR = (Number of Unique Words / Total Number of Words)
+ * @param text The input text.
+ * @returns TTR score (0-1), or undefined if no words.
+ */
+export const calculateSimpleTTR = (text: string | null | undefined): number | undefined => {
+    if (!text || !text.trim()) return undefined;
+
+    const allTokens = getTokens(text, true);
+    if (allTokens.length === 0) return undefined;
+
+    const uniqueTokens = new Set(allTokens);
+    const ttr = uniqueTokens.size / allTokens.length;
+    return parseFloat(ttr.toFixed(3));
 };

@@ -136,6 +136,9 @@ export interface IterationLogEntry {
   linesAdded?: number;
   linesRemoved?: number;
   readabilityScoreFlesch?: number;
+  lexicalDensity?: number;      // New
+  avgSentenceLength?: number;   // New
+  typeTokenRatio?: number;      // New
   fileProcessingInfo: FileProcessingInfo;
   promptSystemInstructionSent?: string;
   promptCoreUserInstructionsSent?: string;

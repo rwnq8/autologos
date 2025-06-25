@@ -282,7 +282,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
             </h4>
             {(logEntry.promptSystemInstructionSent || logEntry.promptCoreUserInstructionsSent || logEntry.promptFullUserPromptSent || (logEntry.apiStreamDetails && logEntry.apiStreamDetails.length > 0) || logEntry.modelConfigUsed || logEntry.readabilityScoreFlesch !== undefined || logEntry.fileProcessingInfo || logEntry.aiValidationInfo || logEntry.directAiResponseHead || logEntry.processedProductHead || logEntry.strategyRationale || logEntry.activeMetaInstruction) ? (
               <div className="space-y-2 text-xs">
-                {logEntry.strategyRationale && (
+                 {logEntry.strategyRationale && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`strategy_rationale_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
                       Strategy Rationale <span className="ml-1">{expandedDiagnostics[`strategy_rationale_${logEntry.iteration}`] ? '▲' : '▼'}</span>
@@ -419,17 +419,34 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     )}
                   </div>
                 )}
-
-                {logEntry.readabilityScoreFlesch !== undefined && (
+                {(logEntry.readabilityScoreFlesch !== undefined || logEntry.lexicalDensity !== undefined || logEntry.avgSentenceLength !== undefined || logEntry.typeTokenRatio !== undefined) && (
                   <div>
-                    <button onClick={() => toggleDiagnosticSection(`readability_score_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      Readability (Flesch) <span className="ml-1">{expandedDiagnostics[`readability_score_${logEntry.iteration}`] ? '▲' : '▼'}</span>
+                    <button onClick={() => toggleDiagnosticSection(`text_metrics_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
+                      Textual Metrics <span className="ml-1">{expandedDiagnostics[`text_metrics_${logEntry.iteration}`] ? '▲' : '▼'}</span>
                     </button>
-                    {expandedDiagnostics[`readability_score_${logEntry.iteration}`] && logEntry.readabilityScoreFlesch !== undefined && (
-                      <p className="mt-1 text-slate-600 dark:text-slate-400">
-                        Score: {logEntry.readabilityScoreFlesch.toFixed(1)}
-                        <span className="italic text-slate-500 dark:text-slate-500">{getReadabilityInterpretation(logEntry.readabilityScoreFlesch)}</span>
-                      </p>
+                    {expandedDiagnostics[`text_metrics_${logEntry.iteration}`] && (
+                      <div className="mt-1 space-y-0.5 bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400">
+                        {logEntry.readabilityScoreFlesch !== undefined && (
+                          <p>Readability (Flesch): {logEntry.readabilityScoreFlesch.toFixed(1)}
+                            <span className="italic text-slate-500 dark:text-slate-500">{getReadabilityInterpretation(logEntry.readabilityScoreFlesch)}</span>
+                          </p>
+                        )}
+                        {logEntry.lexicalDensity !== undefined && (
+                          <p title="Proportion of content words to total words. Higher indicates more informational content.">
+                            Lexical Density: {logEntry.lexicalDensity.toFixed(3)}
+                          </p>
+                        )}
+                        {logEntry.avgSentenceLength !== undefined && (
+                          <p title="Average number of words per sentence. Can indicate syntactic complexity.">
+                            Avg. Sentence Length: {logEntry.avgSentenceLength.toFixed(1)} words
+                          </p>
+                        )}
+                        {logEntry.typeTokenRatio !== undefined && (
+                          <p title="Ratio of unique words to total words. Higher indicates greater vocabulary diversity.">
+                            Type-Token Ratio (TTR): {logEntry.typeTokenRatio.toFixed(3)}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}

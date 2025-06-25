@@ -171,7 +171,15 @@ export const reevaluateStrategy = async (
         const recentSummariesCount = Math.min(3, iterationHistory.length);
         const recentIterationSummaries: string[] = iterationHistory
             .slice(-recentSummariesCount)
-            .map(entry => `Iter ${entry.iteration} (Status: ${entry.status}, Valid: ${entry.aiValidationInfo?.passed ?? 'N/A'} - Reason: ${entry.aiValidationInfo?.reason || 'OK'}, Changes: +${entry.linesAdded || 0}/-${entry.linesRemoved || 0}): ${entry.productSummary || 'N/A'}`)
+            .map(entry => {
+                let summary = `Iter ${entry.iteration} (Status: ${entry.status}, Valid: ${entry.aiValidationInfo?.passed ?? 'N/A'} - Reason: ${entry.aiValidationInfo?.reason || 'OK'}, Changes: +${entry.linesAdded || 0}/-${entry.linesRemoved || 0}`;
+                if (entry.readabilityScoreFlesch !== undefined) summary += `, ReadF: ${entry.readabilityScoreFlesch.toFixed(1)}`;
+                if (entry.lexicalDensity !== undefined) summary += `, LexD: ${entry.lexicalDensity.toFixed(3)}`;
+                if (entry.avgSentenceLength !== undefined) summary += `, ASL: ${entry.avgSentenceLength.toFixed(1)}`;
+                if (entry.typeTokenRatio !== undefined) summary += `, TTR: ${entry.typeTokenRatio.toFixed(3)}`;
+                summary += `): ${entry.productSummary || 'N/A'}`;
+                return summary;
+            })
             .filter(summary => summary.length > 0);
         
         const currentProductLength = currentProduct ? currentProduct.length : 0;

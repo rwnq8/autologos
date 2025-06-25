@@ -5,7 +5,7 @@ import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, 
 import * as GeminaiService from '../services/geminiService';
 import { determineInitialStrategy, reevaluateStrategy } from '../services/ModelStrategyService';
 import { isLikelyAiErrorResponse, getProductSummary, parseAndCleanJsonOutput, CONVERGED_PREFIX } from '../services/iterationUtils';
-import { calculateFleschReadingEase, calculateJaccardSimilarity } from '../services/textAnalysisService';
+import { calculateFleschReadingEase, calculateJaccardSimilarity, calculateLexicalDensity, calculateAvgSentenceLength, calculateSimpleTTR } from '../services/textAnalysisService';
 import { DETERMINISTIC_TARGET_ITERATION } from '../hooks/useModelParameters';
 import * as Diff from 'diff';
 
@@ -44,6 +44,9 @@ export const useIterativeLogic = (
     apiStreamDetails?: ApiStreamCallDetail[];
     modelConfigUsed?: ModelConfig;
     readabilityScoreFlesch?: number;
+    lexicalDensity?: number; // New
+    avgSentenceLength?: number; // New
+    typeTokenRatio?: number; // New
     fileProcessingInfo: FileProcessingInfo;
     aiValidationInfo?: AiResponseValidationInfo;
     directAiResponseHead?: string;
@@ -103,7 +106,10 @@ export const useIterativeLogic = (
       promptFullUserPromptSent: apiResult?.promptFullUserPromptSent,
       apiStreamDetails: apiResult?.apiStreamDetails,
       modelConfigUsed: modelConfigUsed,
-      readabilityScoreFlesch: calculateFleschReadingEase(finalProductForSummary), 
+      readabilityScoreFlesch: calculateFleschReadingEase(finalProductForSummary),
+      lexicalDensity: calculateLexicalDensity(finalProductForSummary),
+      avgSentenceLength: calculateAvgSentenceLength(finalProductForSummary),
+      typeTokenRatio: calculateSimpleTTR(finalProductForSummary),
       fileProcessingInfo: fileProcessingInfoForLog || { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0, loadedFilesForIterationContext: [] },
       aiValidationInfo,
       directAiResponseHead: directResponseHead,

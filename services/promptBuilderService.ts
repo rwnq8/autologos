@@ -46,7 +46,7 @@ export const getUserPromptComponents = (
   retryContext?: RetryContext,
   stagnationNudgeStrategy?: NudgeStrategy,
   initialOutlineForIter1?: OutlineGenerationResult,
-  loadedFilesForContext?: LoadedFile[], 
+  loadedFilesForContext?: LoadedFile[],
   activeMetaInstruction?: string
 ): { systemInstruction: string, coreUserInstructions: string } => {
   let systemInstructionParts: string[] = [
@@ -68,28 +68,41 @@ Output Structure: Produce ONLY the new, modified textual product. Do NOT include
 Convergence: If you determine that the product cannot be meaningfully improved further according to the current iteration's goals, OR if your generated product is identical to the 'Current State of Product' you received, prefix your ENTIRE response with "${CONVERGED_PREFIX}". Do this sparingly and only when truly converged. This means the topic is **thoroughly explored, conceptually well-developed, and further iterations would genuinely add no significant conceptual value (i.e., only minor stylistic tweaks on an already mature document) or would likely degrade quality.** Premature convergence on underdeveloped ideas is undesirable. However, if the document is mature and multiple recent iterations have yielded only negligible changes where the 'cost' of further iteration outweighs the benefit, you SHOULD declare convergence. Unless the product is identical or the goal is unachievable, attempt refinement. A 'meaningful improvement' involves addressing specific aspects like clarity, coherence, depth, or structure as per the iteration's goal. If the task requires significant content generation or transformation, ensure this is substantially completed before considering convergence. Do not converge if simply unsure how to proceed; instead, attempt an alternative refinement strategy if the current one seems to stall.
 File Usage: Base all refinements on the full content of the originally provided input files. The 'File Manifest' in the prompt is a reminder of these files.
 Error Handling: If you cannot fulfill a request due to ambiguity or impossibility, explain briefly and then output "${CONVERGED_PREFIX}" followed by the original unchanged product. Do not attempt to guess if instructions are critically unclear.
-Content Integrity: Preserve core information. Aggressively identify and consolidate duplicative content from multiple files into a single, synthesized representation. Unless specific instructions for summarization (e.g., 'shorter' length, 'key_points' format) or significant restructuring are provided for the current iteration, avoid unrequested deletions of unique information. However, merging and pruning redundant information is a critical part of maintaining integrity and producing a refined product.`
+Content Integrity: Preserve core information and aim for comprehensive coverage of the source material's intent, especially during initial synthesis. Aggressively identify and consolidate duplicative content from multiple files into a single, synthesized representation. Unless specific instructions for summarization (e.g., 'shorter' length, 'key_points' format) or significant restructuring are provided for the current iteration, avoid unrequested deletions of unique information. While merging and pruning redundant information is critical, if in doubt about whether content is merely redundant vs. a nuanced variation or supporting detail, err on the side of preserving it, particularly in earlier iterations. Subsequent iterations or specific plan stages can focus on more aggressive condensation if the product becomes too verbose or if explicitly instructed.`
   );
 
 
   if (currentIterationOverall === 1 && initialOutlineForIter1) {
     systemInstructionParts.push(
-`CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files using Pre-Generated Outline): The 'Current State of Product' is an AI-generated outline and redundancy analysis. Your task for this first iteration is to:
-1. Use this outline AND the "Identified Redundancies" list (both provided in the user prompt below) as a STRONG GUIDE.
-2. Refer to the FULL ORIGINAL FILE DATA (provided in this API call) to flesh out this outline into a complete, coherent, and de-duplicated document.
-3. Resolve the identified redundancies.
-4. Produce a SINGLE, WELL-STRUCTURED document. This is your ONLY output for this iteration.
-Your primary success metric is adherence to the outline structure while ensuring comprehensive coverage from original files and robust de-duplication.`
+`CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files using Pre-Generated Outline):
+The 'Current State of Product' (provided below the main instructions) is an AI-generated outline and a list of identified redundancies. You also have access to the FULL ORIGINAL FILE DATA from the input files (provided in this API call). Your task for this FIRST iteration is to synthesize a COMPLETE and **SUBSTANTIVE** DOCUMENT.
+
+**Core Objective: Transform the Outline into a COMPREHENSIVE Document by POPULATING IT with DETAILED CONTENT from the ORIGINAL FILES.**
+Your operational procedure for EACH outline item should be:
+1.  **Understand the Outline Item's Scope:** Read the current outline item.
+2.  **Scan ALL Original Files:** Actively search through ALL provided original files to find ALL passages, paragraphs, and sections that correspond to this specific outline item.
+3.  **Extract Relevant Detailed Text:** Identify and extract the most detailed and informative text segments from the files related to the outline item. **Do not summarize these segments at this extraction stage.**
+4.  **Synthesize and Integrate (Without Loss of Detail):** Combine the extracted detailed text segments. If there's overlapping information or different versions of the same point, synthesize them into a coherent narrative for that outline section. **The goal is to PRESERVE and COMBINE existing detail, not to replace it with a shorter summary.** If multiple versions exist, prioritize the most complete or recent version as the base, integrating unique, substantive details from other versions.
+5.  **Ensure Substantiveness:** The content generated for each outline section should reflect the **maximum level of detail available in the source files for that topic**. If an outline point is brief, but the files contain extensive relevant text, your output for that point MUST be detailed and incorporate that extensive text.
+6.  **Address Redundancies:** Use the "Identified Redundancies" list to guide your synthesis, ensuring that duplicative information is merged rather than repeated.
+
+**CRITICAL DIRECTIVES:**
+-   **The Outline is for STRUCTURE, NOT a Target for Brevity:** Do NOT treat the outline's conciseness as an instruction to produce brief content. Your output must be as detailed as the source material allows for each point.
+-   **VALUE ADD IS PRESERVING AND ORGANIZING EXISTING DETAIL:** You are adding value by structuring and coherently presenting the *existing richness* found in the files. Discarding detailed written content in favor of brief summaries, or generating new, less detailed content where rich source material exists, is a failure of this task.
+-   **Output a SINGLE, Coherent Document:** This synthesized, detailed document is your ONLY output.
+
+**Example:** If an outline point is "2.1.1 Definition of X", and FileA has a 2-paragraph definition of X, and FileB has a similar 3-paragraph definition with an extra example, your output for section 2.1.1 should be a synthesized 3-4 paragraph section combining the details from both, not a new 1-paragraph summary.
+Your primary success metric is adherence to the outline structure WHILE ensuring maximum incorporation and synthesis of the detailed content from the original files, resolving redundancies appropriately.`
     );
   } else if (isInitialProductEmptyAndFilesLoaded && currentIterationOverall === 1) {
     systemInstructionParts.push(
 `CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files): The 'Current State of Product' is empty, and multiple files have been provided (summarized in File Manifest). Your IMMEDIATE and PRIMARY task for this first iteration is NOT to simply list or concatenate content. You MUST:
 1. Analyze ALL provided original file data (provided in this API call).
 2. Identify common themes, chapters, sections, and any versioning patterns.
-3. AGGRESSIVELY de-duplicate and consolidate information.
-4. Produce a SINGLE, COHERENT, WELL-STRUCTURED initial document that synthetically represents the core, essential information from ALL files.
+3. AGGRESSIVELY de-duplicate and consolidate information, BUT prioritize capturing the full breadth and depth of unique content from the source files.
+4. Produce a SINGLE, COHERENT, WELL-STRUCTURED initial document that synthetically represents the core, essential information from ALL files. Avoid losing valuable details through over-summarization at this stage.
 Your output for this iteration MUST be a de-duplicated synthesis. DO NOT output raw concatenated content or a simple list of all information from the files. Severe redundancy in your output will be considered a failure to meet the primary task.
-The primary metric of success for this specific iteration is the quality of synthesis and de-duplication, not just raw output length. This synthesized document is your ONLY output for this iteration. It should be a high-quality, consolidated first draft.`
+The primary metric of success for this specific iteration is the quality of synthesis and de-duplication, aiming for comprehensive initial coverage. This synthesized document is your ONLY output for this iteration. It should be a high-quality, consolidated first draft.`
     );
   }
 
@@ -111,7 +124,7 @@ The primary metric of success for this specific iteration is the quality of synt
     if (isInitialProductEmptyAndFilesLoaded && currentIterationOverall === 1 && !initialOutlineForIter1) {
       coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.\nTask: Initial Document Synthesis from Files.\nBased on the full content of all provided files (sent in this API call), your SOLE objective is to create a single, comprehensive, coherent, and de-duplicated initial document. Follow the 'CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files)' system instruction. This synthesized document will be the 'Current State of Product' for Iteration 2.\nOutput: Provide ONLY this new, synthesized document.`;
     } else if (currentIterationOverall === 1 && initialOutlineForIter1) {
-        coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.\nTask: Initial Document Synthesis from Outline.\nThe 'Current State of Product' (below) contains an AI-generated outline and a list of identified redundancies.\nYour task is to:\n1. Use this outline and redundancy list as a strong guide.\n2. Referencing the full original file data (provided to you in this API call), flesh out this outline into a complete, coherent, and de-duplicated document.\n3. Ensure all identified redundancies are resolved.\n4. Produce a single, well-structured document.\nThis synthesized document will be the 'Current State of Product' for Iteration 2.\nOutput: Provide ONLY this new, synthesized document.`;
+        coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.\nTask: Initial Document Synthesis from Outline.\nThe 'Current State of Product' (below) contains an AI-generated outline and a list of identified redundancies.\nYour task is to:\n1. Use this outline and redundancy list as a strong guide for STRUCTURE and to RESOLVE REDUNDANCIES.\n2. Referencing the full original file data (provided to you in this API call), **extract and integrate detailed textual content from these files to comprehensively flesh out EACH section of the outline.**\n3. **Ensure your output reflects the richness and depth of the original files, not just the brevity of the outline. The outline is for organization; the content detail comes from the files.**\n4. Produce a single, well-structured, and detailed document.\nThis synthesized document will be the 'Current State of Product' for Iteration 2.\nOutput: Provide ONLY this new, synthesized document.`;
     }
      else {
       coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.

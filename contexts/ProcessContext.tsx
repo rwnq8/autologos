@@ -1,3 +1,4 @@
+// contexts/ProcessContext.tsx
 
 
 import React, { createContext, useContext } from 'react';
@@ -28,6 +29,9 @@ export type AddLogEntryType = (logData: {
   apiStreamDetails?: ApiStreamCallDetail[];
   modelConfigUsed?: ModelConfig;
   readabilityScoreFlesch?: number;
+  lexicalDensity?: number; // New
+  avgSentenceLength?: number; // New
+  typeTokenRatio?: number; // New
   fileProcessingInfo: FileProcessingInfo;
   aiValidationInfo?: AiResponseValidationInfo;
   activeMetaInstruction?: string;

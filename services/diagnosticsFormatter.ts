@@ -26,6 +26,16 @@ export const formatLogEntryDiagnostics = (
   if (logEntry.readabilityScoreFlesch !== undefined) {
     diagString += `Readability (Flesch): ${logEntry.readabilityScoreFlesch.toFixed(1)}\n`;
   }
+  if (logEntry.lexicalDensity !== undefined) {
+    diagString += `Lexical Density: ${logEntry.lexicalDensity.toFixed(3)}\n`;
+  }
+  if (logEntry.avgSentenceLength !== undefined) {
+    diagString += `Avg Sentence Length: ${logEntry.avgSentenceLength.toFixed(1)} words\n`;
+  }
+  if (logEntry.typeTokenRatio !== undefined) {
+    diagString += `Type-Token Ratio (TTR): ${logEntry.typeTokenRatio.toFixed(3)}\n`;
+  }
+
 
   if (logEntry.aiValidationInfo) {
     diagString += `\n== AI Response Validation (${logEntry.aiValidationInfo.checkName}) ==\n`;
