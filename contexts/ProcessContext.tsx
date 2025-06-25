@@ -15,11 +15,13 @@ import type {
   PlanStage,
   SelectableModelName,
   StagnationInfo, 
-  PlanTemplate
+  PlanTemplate,
+  IterationEntryType // Added
 } from '../types';
 
 export type AddLogEntryType = (logData: {
   iteration: number;
+  entryType?: IterationEntryType; // Added
   currentFullProduct: string | null;
   status: string;
   previousFullProduct?: string | null;
@@ -29,9 +31,9 @@ export type AddLogEntryType = (logData: {
   apiStreamDetails?: ApiStreamCallDetail[];
   modelConfigUsed?: ModelConfig;
   readabilityScoreFlesch?: number;
-  lexicalDensity?: number; // New
-  avgSentenceLength?: number; // New
-  typeTokenRatio?: number; // New
+  lexicalDensity?: number; 
+  avgSentenceLength?: number; 
+  typeTokenRatio?: number; 
   fileProcessingInfo: FileProcessingInfo;
   aiValidationInfo?: AiResponseValidationInfo;
   activeMetaInstruction?: string;
@@ -44,6 +46,10 @@ export type AddLogEntryType = (logData: {
   processedProductHead?: string;
   processedProductTail?: string;
   processedProductLengthChars?: number;
+  isSegmentedSynthesis?: boolean; // Added for backward compatibility with useIterativeLogic for now
+  isTargetedRefinement?: boolean; // Added for backward compatibility
+  targetedSelection?: string; // Added for backward compatibility
+  targetedRefinementInstructions?: string; // Added for backward compatibility
 }) => void;
 
 
@@ -55,13 +61,16 @@ export interface ProcessContextType extends Omit<ProcessState,
   updateProcessState: (updates: Partial<ProcessState>) => void; 
   handleLoadedFilesChange: (files: LoadedFile[], action?: 'add' | 'remove' | 'clear') => void;
   addLogEntry: AddLogEntryType;
-  handleResetApp: () => Promise<void>; // Updated to match App.tsx's signature
-  handleStartProcess: () => Promise<void>;
+  handleResetApp: () => Promise<void>; 
+  handleStartProcess: (options?: { isTargetedRefinement?: boolean; targetedSelection?: string; targetedInstructions?: string; }) => Promise<void>;
   handleHaltProcess: () => void;
   handleRewind: (iterationNumber: number) => void;
   handleExportIterationMarkdown: (iterationNumber: number) => void;
   reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[], basePrompt: string) => ReconstructedProductResult;
   handleInitialPromptChange: (newPromptText: string) => void;
+  openTargetedRefinementModal: (selectedText: string) => void;
+  toggleEditMode: (forceOff?: boolean) => void; // New
+  saveManualEdits: () => Promise<void>; // New
 
   initialPrompt: string;
   currentProduct: string | null;
@@ -96,6 +105,8 @@ export interface ProcessContextType extends Omit<ProcessState,
   activeMetaInstructionForNextIter?: string;
   strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
+  isEditingCurrentProduct?: boolean; // New from ProcessState
+  editedProductBuffer?: string | null; // New from ProcessState
 }
 
 const ProcessContext = createContext<ProcessContextType | undefined>(undefined);

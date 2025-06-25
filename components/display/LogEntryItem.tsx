@@ -1,6 +1,6 @@
 
 import React, { useState, useContext } from 'react';
-import type { IterationLogEntry, ReconstructedProductResult, ModelConfig, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, SelectableModelName } from '../../types.ts';
+import type { IterationLogEntry, ReconstructedProductResult, ModelConfig, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, SelectableModelName, IterationEntryType } from '../../types.ts';
 import * as GeminaiDiff from 'diff';
 import { useProcessContext } from '../../contexts/ProcessContext';
 import { countWords } from '../../services/textAnalysisService';
@@ -80,6 +80,8 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
   let diffDisplayComponent: JSX.Element[] | null = null;
   let netWordChange: number | undefined = undefined;
 
+  const isAiEntry = !logEntry.entryType || logEntry.entryType === 'ai_iteration' || logEntry.entryType === 'targeted_refinement' || logEntry.entryType === 'segmented_synthesis_milestone';
+
 
   if (isExpanded) {
     try {
@@ -89,29 +91,47 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
 
       newTextResult = reconstructProductCallback(logEntry.iteration, iterationHistory);
 
-      if (logEntry.iteration === 0) {
-         oldTextResult = { product: "", error: undefined };
+      if (logEntry.iteration === 0 && logEntry.entryType === 'initial_state') {
+         oldTextResult = { product: "", error: undefined }; // Diff initial state from empty
       } else {
-        oldTextResult = reconstructProductCallback(logEntry.iteration - 1, iterationHistory);
+        // Find the true previous textual state, skipping non-textual or intermediate log entries if needed
+        let previousMeaningfulIter = logEntry.iteration -1;
+        if(logEntry.entryType === 'manual_edit' || logEntry.entryType === 'ai_iteration' || logEntry.entryType === 'targeted_refinement' || logEntry.entryType === 'segmented_synthesis_milestone') {
+            // For manual edit, diff against the product of the same iteration number but previous entryType (likely 'ai_iteration' or 'initial_state')
+            // Or if it's an AI iter, diff against the actual previous iteration number's final state.
+            // This logic might need refinement if multiple non-AI entries can occur for the same iter number.
+            // For simplicity, for now, a manual edit at iter X diffs from product of AI iter X-1 or initial state.
+            // AI iter X diffs from product of Manual Edit iter X or AI iter X-1 etc.
+            // The reconstructProduct should handle finding the correct state based on the iteration number.
+             oldTextResult = reconstructProductCallback(logEntry.iteration -1 , iterationHistory); // Default to iter-1
+             const sameIterPrevEntries = iterationHistory.filter(e => e.iteration === logEntry.iteration && e.timestamp < logEntry.timestamp);
+             if (sameIterPrevEntries.length > 0) {
+                 // If there's a previous entry for the same iteration number (e.g. AI iter, then manual edit)
+                 // this logic is simplified because reconstructProduct(iter) gives the state *after* iter.
+                 // So for a manual edit at iter X, we need the product *before* this manual edit,
+                 // which is effectively the product of iter X from the AI or iter X-1 if no prior iter X entry.
+                 // This current diff logic might show diffs from iter X-1 for a manual edit at iter X, which is acceptable for showing overall change.
+             }
+        } else {
+            oldTextResult = reconstructProductCallback(logEntry.iteration -1 , iterationHistory);
+        }
       }
 
-      if (newTextResult.error && oldTextResult.error && logEntry.iteration > 0) overallReconstructionError = `Error reconstructing Iter. ${logEntry.iteration}: ${newTextResult.error}\nError reconstructing Prev. Iter. (${logEntry.iteration - 1}): ${oldTextResult.error}`;
+      if (newTextResult.error && oldTextResult.error && !(logEntry.iteration === 0 && logEntry.entryType === 'initial_state')) overallReconstructionError = `Error reconstructing Iter. ${logEntry.iteration}: ${newTextResult.error}\nError reconstructing Prev. Iter. (${logEntry.iteration - 1}): ${oldTextResult.error}`;
       else if (newTextResult.error) overallReconstructionError = `Error reconstructing Iteration ${logEntry.iteration}: ${newTextResult.error}`;
-      else if (oldTextResult.error && logEntry.iteration > 0) overallReconstructionError = `Error reconstructing Previous Iteration (${logEntry.iteration - 1}): ${oldTextResult.error}`;
+      else if (oldTextResult.error && !(logEntry.iteration === 0 && logEntry.entryType === 'initial_state')) overallReconstructionError = `Error reconstructing Previous Iteration (${logEntry.iteration - 1}): ${oldTextResult.error}`;
 
 
       if (overallReconstructionError) {
         diffDisplayComponent = [<span key="recon_error" className="text-red-500 dark:text-red-400 block whitespace-pre-wrap">{overallReconstructionError}</span>];
-      } else if (logEntry.iteration > 0 && !logEntry.productDiff && !overallReconstructionError) {
+      } else if (logEntry.iteration > 0 && !logEntry.productDiff && !overallReconstructionError && logEntry.entryType !== 'initial_state') {
         const productToShow = typeof newTextResult.product === 'string' ? newTextResult.product : "Content unavailable";
         diffDisplayComponent = [<span key="no_change" className="text-slate-600 dark:text-slate-300 block">No textual changes recorded from Iteration ${logEntry.iteration - 1}.<br />Current Content:<br />{productToShow}</span>];
       } else if (!overallReconstructionError && typeof oldTextResult.product === 'string' && typeof newTextResult.product === 'string') {
         diffDisplayComponent = renderWordDiffDisplay(oldTextResult.product, newTextResult.product);
-
         const prevWords = countWords(oldTextResult.product);
         const currentWords = countWords(newTextResult.product);
         netWordChange = currentWords - prevWords;
-
       } else {
         diffDisplayComponent = [<span key="unknown_error" className="text-orange-500 dark:text-orange-400 block">Could not display diff due to an unknown reconstruction issue.</span>];
       }
@@ -135,7 +155,17 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
 
   const modelUsedDisplayName = logEntry.currentModelForIteration
     ? SELECTABLE_MODELS.find(m => m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration
-    : "N/A";
+    : (logEntry.entryType === 'manual_edit' ? "N/A (Manual Edit)" : "N/A");
+    
+  const entryTypeDisplay: Record<IterationEntryType, string> = {
+    'initial_state': "Initial State",
+    'ai_iteration': "AI Iteration",
+    'manual_edit': "Manual Edit",
+    'segmented_synthesis_milestone': "Segmented Synthesis",
+    'targeted_refinement': "Targeted Refinement"
+  };
+  const displayEntryType = entryTypeDisplay[logEntry.entryType || 'ai_iteration'];
+
 
   const renderStrategyRationale = (rationale: string | undefined) => {
     if (!rationale) return <p className="mt-1 text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-black/40 p-1.5 rounded">No specific strategy rationale logged.</p>;
@@ -193,7 +223,8 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
         >
           <div>
             <p className="font-medium text-primary-600 dark:text-primary-400">
-              Iteration {logEntry.iteration === 0 ? "Initial State" : logEntry.iteration}
+              Iteration {logEntry.iteration}
+              <span className="text-xs text-slate-500 dark:text-slate-400 ml-1">({displayEntryType})</span>
               <span className="ml-2 text-xs text-slate-500 dark:text-slate-400">({new Date(logEntry.timestamp).toLocaleTimeString()})</span>
             </p>
             <p className="text-sm text-slate-600 dark:text-slate-300 break-words">{logEntry.status}</p>
@@ -208,7 +239,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     {logEntry.linesRemoved !== undefined ? <span className="text-red-600 dark:text-red-400">-{logEntry.linesRemoved} lines</span> : ''}
                   </>
                 )}
-                {logEntry.currentModelForIteration && <span className="ml-2 text-slate-500 dark:text-slate-400">Model: {SELECTABLE_MODELS.find(m=>m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration}</span>}
+                {isAiEntry && logEntry.currentModelForIteration && <span className="ml-2 text-slate-500 dark:text-slate-400">Model: {SELECTABLE_MODELS.find(m=>m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration}</span>}
               </p>
             )}
             {isExpanded && (
@@ -268,7 +299,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
             <div>
               <div className="flex justify-between items-center mb-2">
                 <h4 className="text-sm font-semibold text-primary-600 dark:text-primary-300">
-                  {logEntry.iteration === 0 ? "Initial Content (Diff from Empty):" : "Word Changes from Previous Iteration:"}
+                  {logEntry.iteration === 0 && logEntry.entryType === 'initial_state' ? "Initial Content (Diff from Empty):" : "Word Changes from Previous Meaningful State:"}
                 </h4>
               </div>
               <pre className="whitespace-pre-wrap break-words text-xs bg-slate-100/80 dark:bg-black/40 p-2 rounded max-h-96 overflow-y-auto text-slate-700 dark:text-slate-200">
@@ -278,11 +309,11 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
           )}
           <div className="pt-3 border-t border-slate-300/70 dark:border-white/10">
             <h4 className="text-sm font-semibold text-primary-600 dark:text-primary-300 mb-2">
-               AI Interaction Diagnostics
+               Interaction Diagnostics
             </h4>
-            {(logEntry.promptSystemInstructionSent || logEntry.promptCoreUserInstructionsSent || logEntry.promptFullUserPromptSent || (logEntry.apiStreamDetails && logEntry.apiStreamDetails.length > 0) || logEntry.modelConfigUsed || logEntry.readabilityScoreFlesch !== undefined || logEntry.fileProcessingInfo || logEntry.aiValidationInfo || logEntry.directAiResponseHead || logEntry.processedProductHead || logEntry.strategyRationale || logEntry.activeMetaInstruction) ? (
+            {(isAiEntry || logEntry.fileProcessingInfo || logEntry.readabilityScoreFlesch !== undefined) ? (
               <div className="space-y-2 text-xs">
-                 {logEntry.strategyRationale && (
+                 {isAiEntry && logEntry.strategyRationale && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`strategy_rationale_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
                       Strategy Rationale <span className="ml-1">{expandedDiagnostics[`strategy_rationale_${logEntry.iteration}`] ? '▲' : '▼'}</span>
@@ -290,7 +321,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     {expandedDiagnostics[`strategy_rationale_${logEntry.iteration}`] && renderStrategyRationale(logEntry.strategyRationale)}
                   </div>
                 )}
-                 {logEntry.activeMetaInstruction && (
+                 {isAiEntry && logEntry.activeMetaInstruction && (
                   <div className="mt-1.5">
                     <h5 className="font-semibold text-slate-700 dark:text-slate-300 text-xs mb-0.5">
                       Active Meta-Instruction Applied:
@@ -300,7 +331,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     </p>
                   </div>
                 )}
-                {logEntry.currentModelForIteration && (
+                {isAiEntry && logEntry.currentModelForIteration && (
                   <div className="mt-1.5">
                      <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">
                        Model Used for Iteration:
@@ -310,7 +341,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                      </p>
                   </div>
                 )}
-                 {logEntry.modelConfigUsed && (
+                 {isAiEntry && logEntry.modelConfigUsed && (
                   <div className="mt-1">
                      <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">
                        Applied Parameters:
@@ -341,7 +372,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     )}
                   </div>
                 )}
-                {logEntry.directAiResponseHead && (logEntry.directAiResponseHead !== logEntry.processedProductHead || logEntry.directAiResponseTail !== logEntry.processedProductTail || logEntry.directAiResponseLengthChars !== logEntry.processedProductLengthChars) && (
+                {isAiEntry && logEntry.directAiResponseHead && (logEntry.directAiResponseHead !== logEntry.processedProductHead || logEntry.directAiResponseTail !== logEntry.processedProductTail || logEntry.directAiResponseLengthChars !== logEntry.processedProductLengthChars) && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`direct_ai_response_info_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
                       Direct AI Response Details (if different) <span className="ml-1">{expandedDiagnostics[`direct_ai_response_info_${logEntry.iteration}`] ? '▲' : '▼'}</span>
@@ -388,7 +419,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     )}
                   </div>
                 )}
-                 {logEntry.aiValidationInfo && (
+                 {isAiEntry && logEntry.aiValidationInfo && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`ai_validation_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
                        AI Response Validation ({logEntry.aiValidationInfo.checkName}) <span className={`ml-1 ${logEntry.aiValidationInfo.passed ? 'text-green-500' : 'text-red-500 font-bold'}`}>{expandedDiagnostics[`ai_validation_${logEntry.iteration}`] ? '▲' : '▼'}</span>
@@ -450,7 +481,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     )}
                   </div>
                 )}
-                {logEntry.promptSystemInstructionSent && (
+                {isAiEntry && logEntry.promptSystemInstructionSent && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`sys_instr_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
                       System Instruction Sent <span className="ml-1">{expandedDiagnostics[`sys_instr_${logEntry.iteration}`] ? '▲' : '▼'}</span>
@@ -458,7 +489,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     {expandedDiagnostics[`sys_instr_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-48 overflow-y-auto">{truncateForDisplay(logEntry.promptSystemInstructionSent, 1000)}</pre>}
                   </div>
                 )}
-                 {logEntry.promptCoreUserInstructionsSent && (
+                 {isAiEntry && logEntry.promptCoreUserInstructionsSent && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`core_instr_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
                         Core User Instructions Sent <span className="ml-1">{expandedDiagnostics[`core_instr_${logEntry.iteration}`] ? '▲' : '▼'}</span>
@@ -466,21 +497,28 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     {expandedDiagnostics[`core_instr_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-48 overflow-y-auto">{truncateForDisplay(logEntry.promptCoreUserInstructionsSent, 1000)}</pre>}
                   </div>
                 )}
-                {logEntry.promptFullUserPromptSent && (
+                {isAiEntry && logEntry.promptFullUserPromptSent && (
                   <div>
                     <button onClick={() => toggleDiagnosticSection(`full_prompt_init_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      Initial Full User Prompt Sent (for Iteration) <span className="ml-1">{expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] ? '▲' : '▼'}</span>
+                      {logEntry.isSegmentedSynthesis && logEntry.iteration === 1 ? "Overall Iteration 1 Synthesis Summary " : "Initial Full User Prompt Sent (for Iteration's First/Only API Call) "}
+                       <span className="ml-1">{expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] ? '▲' : '▼'}</span>
                     </button>
-                    {expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-72 overflow-y-auto">{truncateForDisplay(logEntry.promptFullUserPromptSent)}</pre>}
+                     {expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-72 overflow-y-auto">{truncateForDisplay(logEntry.promptFullUserPromptSent)}</pre>}
                   </div>
                 )}
-                {logEntry.apiStreamDetails && logEntry.apiStreamDetails.length > 0 && (
+                {isAiEntry && logEntry.apiStreamDetails && logEntry.apiStreamDetails.length > 0 && (
                   <div>
                     <p className="font-semibold text-slate-700 dark:text-slate-300 mt-2 mb-1 text-xs">API Stream Call Details (within this Iteration):</p>
                     <div className="space-y-1.5 max-h-96 overflow-y-auto">
                       {logEntry.apiStreamDetails.map((detail, index) => (
                         <div key={index} className="bg-slate-100/70 dark:bg-black/30 p-1.5 rounded border border-slate-200 dark:border-slate-700">
-                          <p><strong>API Call {detail.callCount}:</strong> {detail.isContinuation ? '(Continuation)' : '(Initial Call for Iteration)'}</p>
+                           {logEntry.isSegmentedSynthesis && detail.segmentTitle && (
+                             <h5 className="font-medium text-primary-700 dark:text-primary-300 text-xs mb-0.5">
+                               Segment {detail.segmentIndex !== undefined ? detail.segmentIndex + 1 : 'N/A'}: {detail.segmentTitle} (API Call {detail.callCount})
+                             </h5>
+                           )}
+                           {!logEntry.isSegmentedSynthesis && <p><strong>API Call {detail.callCount}:</strong> {detail.isContinuation ? '(Continuation)' : '(Initial Call for Iteration)'}</p> }
+
                           <p>Finish Reason: <span className="font-mono text-primary-700 dark:text-primary-300">{detail.finishReason || 'N/A'}</span></p>
                           <p>Text Length This Call: {detail.textLengthThisCall} chars</p>
                           {detail.safetyRatings && <p>Safety Ratings: <span className="font-mono text-orange-600 dark:text-orange-400">{JSON.stringify(detail.safetyRatings)}</span></p>}
@@ -499,7 +537,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                 )}
               </div>
             ) : (
-              <p className="text-slate-500 dark:text-slate-400 italic">No detailed AI interaction diagnostics available for this entry.</p>
+              <p className="text-slate-500 dark:text-slate-400 italic">No detailed diagnostics available for this entry type.</p>
             )}
           </div>
         </div>

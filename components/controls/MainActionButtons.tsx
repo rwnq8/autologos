@@ -23,7 +23,7 @@ const MainActionButtons: React.FC<CommonControlProps> = ({
     <div className="flex flex-col space-y-3 pt-4">
       {!processCtx.isProcessing ? (
         <button
-          onClick={processCtx.handleStartProcess}
+          onClick={() => processCtx.handleStartProcess()}
           disabled={appCtx.apiKeyStatus !== 'loaded' || processCtx.loadedFiles.length === 0 || (planCtx.isPlanActive && planCtx.planStages.length === 0) || appCtx.isApiRateLimited}
           className="w-full inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 disabled:bg-slate-400 dark:disabled:bg-slate-600/70 disabled:cursor-not-allowed transition-colors"
           aria-label={startProcessButtonTextValue}

@@ -18,6 +18,8 @@ export interface ApiStreamCallDetail {
   safetyRatings: any | null;
   textLengthThisCall: number;
   isContinuation: boolean;
+  segmentIndex?: number; // For segmented synthesis
+  segmentTitle?: string; // For segmented synthesis
 }
 
 export interface SuggestedParamsResponse {
@@ -127,8 +129,11 @@ export interface ProjectFileHeader {
   appManifest?: AppManifestEntry[];
 }
 
+export type IterationEntryType = 'initial_state' | 'ai_iteration' | 'manual_edit' | 'segmented_synthesis_milestone' | 'targeted_refinement';
+
 export interface IterationLogEntry {
   iteration: number;
+  entryType?: IterationEntryType; // New field
   productSummary: string;
   status: string;
   timestamp: number;
@@ -136,9 +141,9 @@ export interface IterationLogEntry {
   linesAdded?: number;
   linesRemoved?: number;
   readabilityScoreFlesch?: number;
-  lexicalDensity?: number;      // New
-  avgSentenceLength?: number;   // New
-  typeTokenRatio?: number;      // New
+  lexicalDensity?: number;
+  avgSentenceLength?: number;
+  typeTokenRatio?: number;
   fileProcessingInfo: FileProcessingInfo;
   promptSystemInstructionSent?: string;
   promptCoreUserInstructionsSent?: string;
@@ -156,6 +161,10 @@ export interface IterationLogEntry {
   strategyRationale?: string;
   currentModelForIteration?: SelectableModelName;
   activeMetaInstruction?: string;
+  isSegmentedSynthesis?: boolean; // For Iteration 1 segmented synthesis (True if entryType is 'segmented_synthesis_milestone')
+  isTargetedRefinement?: boolean; // For targeted section refinement (True if entryType is 'targeted_refinement')
+  targetedSelection?: string;
+  targetedRefinementInstructions?: string;
 }
 
 export interface AutologosIterativeEngineData {
@@ -253,15 +262,15 @@ export interface AiResponseValidationInfo {
       | 'empty_json'
       | 'invalid_json'
       | 'passed'
-      | 'extreme_reduction_error' // Uninstructed extreme reduction
-      | 'drastic_reduction_error_plan_mode' // Uninstructed drastic reduction in plan mode
-      | 'drastic_reduction_tolerated_global_mode' // Uninstructed drastic reduction tolerated in global mode
+      | 'extreme_reduction_error'
+      | 'drastic_reduction_error_plan_mode'
+      | 'drastic_reduction_tolerated_global_mode'
       | 'prompt_leakage'
-      | 'extreme_reduction_tolerated_global_mode' // Instructed extreme reduction tolerated
-      | 'error_phrase_with_significant_reduction' // Error phrase + significant reduction (>20%)
-      | 'extreme_reduction_instructed_but_with_error_phrase' // Instructed to shorten, but also has error phrase
-      | 'drastic_reduction_with_error_phrase' // Drastic reduction + error phrase
-      | 'initial_synthesis_failed_large_output' // Iteration 1 output is excessively large relative to input
+      | 'extreme_reduction_tolerated_global_mode'
+      | 'error_phrase_with_significant_reduction'
+      | 'extreme_reduction_instructed_but_with_error_phrase'
+      | 'drastic_reduction_with_error_phrase'
+      | 'initial_synthesis_failed_large_output'
       | 'catastrophic_collapse'; 
     value?: string | ReductionDetailValue | PromptLeakageDetailValue | { [key: string]: any };
   };
@@ -327,6 +336,11 @@ export interface ProcessState {
   activeMetaInstructionForNextIter?: string;
   strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
+  isTargetedRefinementModalOpen?: boolean;
+  currentTextSelectionForRefinement?: string | null;
+  instructionsForSelectionRefinement?: string;
+  isEditingCurrentProduct?: boolean; // New: For manual edit mode UI
+  editedProductBuffer?: string | null; // New: Buffer for manual edits
 }
 
 export interface IsLikelyAiErrorResponseResult {

@@ -1,6 +1,6 @@
 
 import { useState, useCallback } from 'react';
-import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, ParameterAdvice, PlanTemplate, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo } from '../types.ts';
+import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, ParameterAdvice, PlanTemplate, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType } from '../types.ts';
 import * as geminiService from '../services/geminiService';
 import * as storageService from '../services/storageService';
 import { INITIAL_PROJECT_NAME_STATE } from '../services/utils';
@@ -60,6 +60,11 @@ export const createInitialProcessState = (
   activeMetaInstructionForNextIter: undefined,
   strategistInfluenceLevel: 'OVERRIDE_FULL',
   stagnationNudgeAggressiveness: 'MEDIUM',
+  isTargetedRefinementModalOpen: false,
+  currentTextSelectionForRefinement: null,
+  instructionsForSelectionRefinement: "",
+  isEditingCurrentProduct: false, // New
+  editedProductBuffer: null,    // New
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
@@ -71,6 +76,40 @@ const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile
   if (loadedFiles.length <= 3 && totalFilesSize < 200 * 1024 && promptTextLength < 5000) return 'MODERATE';
   return 'COMPLEX';
 };
+
+export type AddLogEntryParams = {
+  iteration: number;
+  entryType?: IterationEntryType;
+  currentFullProduct: string | null;
+  status: string;
+  previousFullProduct?: string | null;
+  promptSystemInstructionSent?: string;
+  promptCoreUserInstructionsSent?: string;
+  promptFullUserPromptSent?: string;
+  apiStreamDetails?: ApiStreamCallDetail[];
+  modelConfigUsed?: ModelConfig;
+  readabilityScoreFlesch?: number;
+  lexicalDensity?: number;
+  avgSentenceLength?: number;
+  typeTokenRatio?: number;
+  fileProcessingInfo: FileProcessingInfo;
+  aiValidationInfo?: AiResponseValidationInfo;
+  directAiResponseHead?: string;
+  directAiResponseTail?: string;
+  directAiResponseLengthChars?: number;
+  processedProductHead?: string;
+  processedProductTail?: string;
+  processedProductLengthChars?: number;
+  attemptCount?: number;
+  strategyRationale?: string;
+  currentModelForIteration?: SelectableModelName;
+  activeMetaInstruction?: string;
+  isSegmentedSynthesis?: boolean;
+  isTargetedRefinement?: boolean;
+  targetedSelection?: string;
+  targetedRefinementInstructions?: string;
+};
+
 
 export const useProcessState = () => {
   const [state, setState] = useState<ProcessState>(
@@ -156,7 +195,7 @@ export const useProcessState = () => {
         updates.iterationHistory = [];
         updates.finalProduct = null;
         updates.currentIteration = 0;
-        updates.projectName = INITIAL_PROJECT_NAME_STATE; // Reset project name if all files cleared or first files added
+        updates.projectName = INITIAL_PROJECT_NAME_STATE; 
         updates.stagnationInfo = { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none', consecutiveLowValueIterations: 0, lastProductLengthForStagnation: undefined };
         updates.currentProductBeforeHalt = null;
         updates.currentIterationBeforeHalt = undefined;
@@ -165,6 +204,8 @@ export const useProcessState = () => {
         updates.planStages = [];
         updates.currentPlanStageIndex = null;
         updates.currentStageIteration = 0;
+        updates.isEditingCurrentProduct = false; // Reset edit mode
+        updates.editedProductBuffer = null;    // Clear edit buffer
       }
       return { ...prev, ...updates };
     });
@@ -172,7 +213,7 @@ export const useProcessState = () => {
 
   const handleInitialPromptChange = useCallback((newPromptText: string) => {
       setState(prev => {
-          if (prev.loadedFiles.length > 0) { // If files are loaded, initialPrompt is manifest, not user-editable
+          if (prev.loadedFiles.length > 0) { 
             return prev;
           }
           const newComplexity = calculateInputComplexity(newPromptText, prev.loadedFiles);
@@ -180,9 +221,8 @@ export const useProcessState = () => {
               ...prev,
               initialPrompt: newPromptText,
               inputComplexity: newComplexity,
-              promptChangedByFileLoad: true, // Treat as if a "new input" for model param suggestions
+              promptChangedByFileLoad: true, 
               promptSourceName: newPromptText.trim() ? "direct_text" : null,
-              // Reset iterative state if prompt changes significantly and no files are loaded
               currentProduct: null,
               iterationHistory: [],
               finalProduct: null,
@@ -195,41 +235,18 @@ export const useProcessState = () => {
               planStages: [],
               currentPlanStageIndex: null,
               currentStageIteration: 0,
+              isEditingCurrentProduct: false, 
+              editedProductBuffer: null,   
           };
       });
   }, []);
 
 
-  const addLogEntry = useCallback((logData: {
-    iteration: number;
-    currentFullProduct: string | null;
-    status: string;
-    previousFullProduct?: string | null;
-    promptSystemInstructionSent?: string;
-    promptCoreUserInstructionsSent?: string;
-    promptFullUserPromptSent?: string;
-    apiStreamDetails?: ApiStreamCallDetail[];
-    modelConfigUsed?: ModelConfig;
-    readabilityScoreFlesch?: number;
-    lexicalDensity?: number; // New
-    avgSentenceLength?: number; // New
-    typeTokenRatio?: number; // New
-    fileProcessingInfo: FileProcessingInfo;
-    aiValidationInfo?: AiResponseValidationInfo;
-    directAiResponseHead?: string;
-    directAiResponseTail?: string; 
-    directAiResponseLengthChars?: number;
-    processedProductHead?: string;
-    processedProductTail?: string; 
-    processedProductLengthChars?: number;
-    attemptCount?: number;
-    strategyRationale?: string;
-    currentModelForIteration?: SelectableModelName;
-    activeMetaInstruction?: string;
-  }) => {
+  const addLogEntry = useCallback((logData: AddLogEntryParams) => {
     let productDiff: string | undefined = undefined;
     let linesAdded = 0;
     let linesRemoved = 0;
+    const entryType = logData.entryType || 'ai_iteration';
 
     const normalizeNewlines = (str: string | null | undefined): string => (str || "").replace(/\r\n/g, '\n');
 
@@ -243,16 +260,17 @@ export const useProcessState = () => {
             ? (logData.previousFullProduct ?? "").substring(CONVERGED_PREFIX.length)
             : (logData.previousFullProduct ?? "")
     );
-
-    if (logData.iteration === 0 || currentPForDiff !== previousPForDiff) {
+    
+    // For initial state, diff from empty. For manual edit or AI iter, diff from previous.
+    if (entryType === 'initial_state' || currentPForDiff !== previousPForDiff) {
         productDiff = Diff.createTwoFilesPatch(
             `iteration_content_prev.txt`,
             `iteration_content_curr.txt`,
-            previousPForDiff,
+            entryType === 'initial_state' && !previousPForDiff ? "" : previousPForDiff, // Diff from empty for initial state
             currentPForDiff,
             undefined, undefined, { context: 3 }
         );
-        const lineChanges = Diff.diffLines(previousPForDiff, currentPForDiff, { newlineIsToken: true, ignoreWhitespace: false });
+        const lineChanges = Diff.diffLines(entryType === 'initial_state' && !previousPForDiff ? "" : previousPForDiff, currentPForDiff, { newlineIsToken: true, ignoreWhitespace: false });
         lineChanges.forEach(part => {
             if (part.added) linesAdded += part.count || 0;
             if (part.removed) linesRemoved += part.count || 0;
@@ -263,6 +281,7 @@ export const useProcessState = () => {
 
     const newEntry: IterationLogEntry = {
       iteration: logData.iteration,
+      entryType: entryType,
       productSummary: getProductSummary(logData.currentFullProduct),
       status: logData.status,
       timestamp: Date.now(),
@@ -270,9 +289,9 @@ export const useProcessState = () => {
       linesAdded: linesAdded > 0 ? linesAdded : (logData.iteration === 0 && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
       linesRemoved: linesRemoved > 0 ? linesRemoved : undefined,
       readabilityScoreFlesch: logData.readabilityScoreFlesch,
-      lexicalDensity: logData.lexicalDensity, // New
-      avgSentenceLength: logData.avgSentenceLength, // New
-      typeTokenRatio: logData.typeTokenRatio, // New
+      lexicalDensity: logData.lexicalDensity, 
+      avgSentenceLength: logData.avgSentenceLength, 
+      typeTokenRatio: logData.typeTokenRatio, 
       fileProcessingInfo: logData.fileProcessingInfo,
       promptSystemInstructionSent: logData.promptSystemInstructionSent,
       promptCoreUserInstructionsSent: logData.promptCoreUserInstructionsSent,
@@ -290,10 +309,19 @@ export const useProcessState = () => {
       strategyRationale: logData.strategyRationale,
       currentModelForIteration: logData.currentModelForIteration,
       activeMetaInstruction: logData.activeMetaInstruction,
+      isSegmentedSynthesis: entryType === 'segmented_synthesis_milestone' || logData.isSegmentedSynthesis,
+      isTargetedRefinement: entryType === 'targeted_refinement' || logData.isTargetedRefinement,
+      targetedSelection: logData.targetedSelection,
+      targetedRefinementInstructions: logData.targetedRefinementInstructions,
     };
 
     setState(prev => {
-        const existingEntryIndex = prev.iterationHistory.findIndex(entry => entry.iteration === newEntry.iteration && entry.attemptCount === newEntry.attemptCount);
+        // Ensure log entries are unique based on iteration AND entry type if multiple entries per iter exist
+        const existingEntryIndex = prev.iterationHistory.findIndex(entry => 
+            entry.iteration === newEntry.iteration && 
+            entry.entryType === newEntry.entryType &&
+            entry.attemptCount === newEntry.attemptCount 
+        );
         let updatedHistory;
         if (existingEntryIndex !== -1) {
             updatedHistory = [...prev.iterationHistory];
@@ -302,8 +330,13 @@ export const useProcessState = () => {
             updatedHistory = [...prev.iterationHistory, newEntry];
         }
         updatedHistory.sort((a, b) => {
-            if (a.iteration === b.iteration) return (a.attemptCount || 0) - (b.attemptCount || 0);
-            return a.iteration - b.iteration;
+            if (a.iteration !== b.iteration) return a.iteration - b.iteration;
+            // Define order for entry types within the same iteration if needed, e.g., initial, then ai, then manual
+            const typeOrder: Record<IterationEntryType, number> = { 'initial_state': 0, 'segmented_synthesis_milestone': 1, 'ai_iteration': 2, 'targeted_refinement': 3, 'manual_edit': 4 };
+            const aTypeOrder = typeOrder[a.entryType || 'ai_iteration'];
+            const bTypeOrder = typeOrder[b.entryType || 'ai_iteration'];
+            if (aTypeOrder !== bTypeOrder) return aTypeOrder - bTypeOrder;
+            return (a.attemptCount || 0) - (b.attemptCount || 0);
         });
         return { ...prev, iterationHistory: updatedHistory };
     });
@@ -342,6 +375,11 @@ export const useProcessState = () => {
             consecutiveLowValueIterations: 0,
             lastProductLengthForStagnation: undefined 
         },
+        isTargetedRefinementModalOpen: false,
+        currentTextSelectionForRefinement: null,
+        instructionsForSelectionRefinement: "",
+        isEditingCurrentProduct: false, 
+        editedProductBuffer: null, 
     };
     setState(resetState);
 
@@ -357,3 +395,9 @@ export const useProcessState = () => {
     handleInitialPromptChange,
   };
 };
+
+declare module '../types.ts' {
+  interface IterationLogEntry {
+    entryType?: IterationEntryType;
+  }
+}

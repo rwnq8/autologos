@@ -22,9 +22,25 @@ const ProcessStatusDisplay: React.FC = () => {
 
   let progressPercentValue = 0;
   let progressText = "";
+  let statusMessageForDisplay = processCtx.statusMessage;
 
   if (processCtx.isProcessing) {
-    if (planCtx.isPlanActive && planCtx.planStages.length > 0 && planCtx.currentPlanStageIndex != null) {
+    const iter1LogEntry = processCtx.iterationHistory.find(e => e.iteration === 1 && e.isSegmentedSynthesis);
+    if (iter1LogEntry && processCtx.currentIteration === 0) { // Special case: currentIter is 0 during segmented Iter 1 processing
+        // Extract current segment info from statusMessage if it's there
+        const segmentMatch = processCtx.statusMessage.match(/Segmented Iteration 1 \((\d+)\/(\d+)\): Synthesizing "(.*?)"\.\.\./);
+        if (segmentMatch) {
+            const currentSegmentNum = parseInt(segmentMatch[1], 10);
+            const totalSegments = parseInt(segmentMatch[2], 10);
+            progressPercentValue = totalSegments > 0 ? (currentSegmentNum / totalSegments) * 100 : 0;
+            progressText = `Iter. 1 (Segment ${currentSegmentNum}/${totalSegments}) | Overall ${Math.round(progressPercentValue)}%`;
+            statusMessageForDisplay = `Iteration 1 (Segmented): Processing segment ${currentSegmentNum}/${totalSegments} - "${segmentMatch[3]}"...`;
+        } else {
+            // Fallback if statusMessage format doesn't match expected for segments
+            progressPercentValue = 0; // Or some other heuristic
+            progressText = `Iter. 1 (Segmented Processing)`;
+        }
+    } else if (planCtx.isPlanActive && planCtx.planStages.length > 0 && planCtx.currentPlanStageIndex != null) {
       const currentStage = planCtx.planStages[planCtx.currentPlanStageIndex];
       const totalPlanIterations = planCtx.planStages.reduce((sum, stage) => sum + stage.stageIterations, 0);
       let completedIterationsInPreviousStages = 0;
@@ -115,10 +131,12 @@ const ProcessStatusDisplay: React.FC = () => {
   const lastLogEntry = processCtx.iterationHistory.length > 0 ? processCtx.iterationHistory[processCtx.iterationHistory.length - 1] : null;
 
   if (processCtx.isProcessing) {
-    if (lastLogEntry && lastLogEntry.iteration === processCtx.currentIteration) { // For the iteration *just completed* or currently being logged
+    if (lastLogEntry && lastLogEntry.iteration === processCtx.currentIteration) { 
         strategyRationaleText = lastLogEntry.strategyRationale || processCtx.aiProcessInsight || 'Evaluating strategy...';
-    } else if (lastLogEntry && lastLogEntry.iteration === processCtx.currentIteration -1) { // For the *next* iteration about to run, use current aiProcessInsight
+    } else if (lastLogEntry && lastLogEntry.iteration === processCtx.currentIteration -1 && processCtx.currentIteration > 0) { 
         strategyRationaleText = processCtx.aiProcessInsight || 'Preparing next strategy...';
+    } else if (processCtx.currentIteration === 0 && processCtx.statusMessage.startsWith("Segmented Iteration 1")) { // During segmented Iter 1
+        strategyRationaleText = processCtx.aiProcessInsight || 'Segmented synthesis in progress...';
     }
 
 
@@ -145,16 +163,23 @@ const ProcessStatusDisplay: React.FC = () => {
           break;
       }
     }
-    const iterationNumberForDisplay = processCtx.currentIteration + 1;
-    const modeText = planCtx.isPlanActive ? `Plan Mode (Next: Stage ${ (processCtx.currentPlanStageIndex ?? -1) +1}, Iter ${processCtx.currentStageIteration + 1}).` 
-                                        : `Global Mode (Next: Iter ${iterationNumberForDisplay}/${modelConfigCtx.maxIterations}).`;
+    const iterationNumberForDisplay = processCtx.currentIteration + 1; // For non-segmented display
+    let modeText = "";
+    if (processCtx.currentIteration === 0 && processCtx.statusMessage.startsWith("Segmented Iteration 1")) {
+        modeText = "Segmented Iteration 1.";
+    } else if (planCtx.isPlanActive) {
+        modeText = `Plan Mode (Next: Stage ${ (processCtx.currentPlanStageIndex ?? -1) +1}, Iter ${processCtx.currentStageIteration + 1}).`;
+    } else {
+        modeText = `Global Mode (Next: Iter ${iterationNumberForDisplay}/${modelConfigCtx.maxIterations}).`;
+    }
+    
     dynamicInsightText = `${modeText} ${modelDetails}${nudgeInfo ? ' ' + nudgeInfo : ''}. Strategy: ${strategyRationaleText}`;
 
   } else if (processCtx.finalProduct) {
       dynamicInsightText = `Process completed. Final product generated. Input Complexity: ${processCtx.inputComplexity || 'N/A'}. ${strategyRationaleText}`;
   } else if (processCtx.currentProductBeforeHalt) {
       dynamicInsightText = `Process Halted. Input Complexity: ${processCtx.inputComplexity || 'N/A'}. ${strategyRationaleText}`;
-  } else { // Idle state
+  } else { 
       const initialStrategyArgs: Pick<ProcessState, 'inputComplexity' | 'initialPrompt' | 'loadedFiles' | 'selectedModelName' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness'> = {
         inputComplexity: processCtx.inputComplexity, initialPrompt: processCtx.initialPrompt, loadedFiles: processCtx.loadedFiles, selectedModelName: appCtx.selectedModelName, strategistInfluenceLevel: processCtx.strategistInfluenceLevel, stagnationNudgeAggressiveness: processCtx.stagnationNudgeAggressiveness
       };
@@ -188,7 +213,7 @@ const ProcessStatusDisplay: React.FC = () => {
         </div>
       </div>
       <p className="text-slate-600 dark:text-slate-300 min-h-[1.5em] break-words mb-1" aria-live="polite">
-        {processCtx.statusMessage}
+        {statusMessageForDisplay}
       </p>
 
       {quotaErrorDisplay ? quotaErrorDisplay : (

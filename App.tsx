@@ -1,13 +1,14 @@
 
 import React, { useEffect, useCallback, useRef, useState } from 'react';
-import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile } from './types.ts';
+import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType } from './types.ts';
 import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION } from './types.ts';
 import * as GeminaiService from './services/geminiService';
 import { DEFAULT_PROJECT_NAME_FALLBACK, INITIAL_PROJECT_NAME_STATE, generateFileName } from './services/utils';
 import Controls from './components/Controls';
 import DisplayArea from './components/DisplayArea';
+import TargetedRefinementModal from './components/modals/TargetedRefinementModal.tsx';
 import { usePlanTemplates } from './hooks/usePlanTemplates';
-import { useProcessState, createInitialProcessState } from './hooks/useProcessState';
+import { useProcessState, createInitialProcessState, AddLogEntryParams } from './hooks/useProcessState';
 import { useModelParameters } from './hooks/useModelParameters';
 import { useIterativeLogic } from './hooks/useIterativeLogic';
 import { useProjectIO } from './hooks/useProjectIO';
@@ -15,9 +16,10 @@ import { useAutoSave } from './hooks/useAutoSave';
 import { reconstructProduct } from './services/diffService';
 import { inferProjectNameFromInput } from './services/projectUtils';
 import { useDebounce } from './hooks/useDebounce';
+import { getProductSummary } from './services/iterationUtils.ts';
 
 import { ApplicationProvider, type ApplicationContextType } from './contexts/ApplicationContext';
-import type { AddLogEntryType, ProcessContextType } from './contexts/ProcessContext';
+import type { AddLogEntryType as ContextAddLogEntryType, ProcessContextType } from './contexts/ProcessContext'; // Renamed to avoid conflict
 import { ProcessProvider } from './contexts/ProcessContext';
 import { ModelConfigProvider, type ModelConfigContextType } from './contexts/ModelConfigContext';
 import { PlanProvider, type PlanContextType } from './contexts/PlanContext';
@@ -137,10 +139,10 @@ const App: React.FC = () => {
   );
   const { performAutoSave } = autoSaveHook;
 
-  const addLogEntryForContext: AddLogEntryType = addLogEntryFromHook as any;
+  const addLogEntryForContext: ContextAddLogEntryType = addLogEntryFromHook as any;
 
   const iterativeLogicInstance = useIterativeLogic(
-    processState, updateProcessState, addLogEntryForContext,
+    processState, updateProcessState, addLogEntryForContext as any, // Cast to internal type
     getUserSetBaseConfig, 
     performAutoSave,
     handleRateLimitErrorEncountered
@@ -191,6 +193,11 @@ const App: React.FC = () => {
         selectedModelName: GeminaiService.DEFAULT_MODEL_NAME,
         currentModelForIteration: GeminaiService.DEFAULT_MODEL_NAME,
         currentAppliedModelConfig: baseConfigForReset, 
+        isTargetedRefinementModalOpen: false,
+        currentTextSelectionForRefinement: null,
+        instructionsForSelectionRefinement: "",
+        isEditingCurrentProduct: false, // Reset manual edit state
+        editedProductBuffer: null,    // Reset manual edit state
     });
     clearCooldownTimer();
     setIsApiRateLimitedLocal(false);
@@ -229,7 +236,10 @@ const App: React.FC = () => {
         nudgeStrategyApplied: 'none',
         consecutiveLowValueIterations: 0,
         lastProductLengthForStagnation: (reconstructedProductValue || "").length
-      } 
+      },
+      isTargetedRefinementModalOpen: false, 
+      isEditingCurrentProduct: false, 
+      editedProductBuffer: null,    
     });
     if (configForRewind) {
         setLoadedModelParametersCallback({
@@ -268,7 +278,6 @@ const App: React.FC = () => {
 
     updateProcessState({ statusMessage: `Processing ${files.length} file(s)...` });
     try {
-      // const loadedFilesArray: LoadedFile[] = []; // This line seems unused
       const filePromises = Array.from(files).map(async (file) => {
         const fileNameLower = file.name.toLowerCase();
 
@@ -289,7 +298,7 @@ const App: React.FC = () => {
             const parsedJson = JSON.parse(fileContent);
             if (Array.isArray(parsedJson) && parsedJson.length > 0 && 'iteration' in parsedJson[0] && 'productSummary' in parsedJson[0] && 'timestamp' in parsedJson[0]) {
               projectIO.handleImportIterationLogData(parsedJson as IterationLogEntry[], file.name);
-              return null; // Indicate this file was handled as a log import
+              return null; 
             }
           } catch(e) { /* Fall through */ }
         }
@@ -316,9 +325,8 @@ const App: React.FC = () => {
       const newValidLoadedFiles = results.filter(result => result !== null) as LoadedFile[];
 
       if (newValidLoadedFiles.length > 0) {
-        handleLoadedFilesChange(newValidLoadedFiles, 'add'); // Explicitly 'add'
+        handleLoadedFilesChange(newValidLoadedFiles, 'add'); 
       } else if (files.length === 1 && results[0] === null) {
-        // Project file or log file loaded and handled
       } else {
          updateProcessState({ statusMessage: "No new data files were added."});
       }
@@ -341,11 +349,86 @@ const App: React.FC = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  const openTargetedRefinementModal = (selectedText: string) => {
+    updateProcessState({
+      currentTextSelectionForRefinement: selectedText,
+      instructionsForSelectionRefinement: "",
+      isTargetedRefinementModalOpen: true,
+    });
+  };
+
+  const closeTargetedRefinementModal = () => {
+    updateProcessState({
+      isTargetedRefinementModalOpen: false,
+      currentTextSelectionForRefinement: null,
+      instructionsForSelectionRefinement: "",
+    });
+  };
+
+  const submitTargetedRefinement = () => {
+    if (processState.currentTextSelectionForRefinement && processState.instructionsForSelectionRefinement) {
+      iterativeLogicInstance.handleStart({
+        isTargetedRefinement: true,
+        targetedSelection: processState.currentTextSelectionForRefinement,
+        targetedInstructions: processState.instructionsForSelectionRefinement,
+      });
+    }
+    closeTargetedRefinementModal();
+  };
+
+  const toggleEditMode = useCallback((forceOff?: boolean) => {
+    if (forceOff === true || processState.isEditingCurrentProduct) {
+      updateProcessState({ isEditingCurrentProduct: false, editedProductBuffer: null });
+    } else if (processState.currentProduct && !processState.isProcessing && !processState.finalProduct) {
+      updateProcessState({ isEditingCurrentProduct: true, editedProductBuffer: processState.currentProduct });
+    }
+  }, [processState.isEditingCurrentProduct, processState.currentProduct, processState.isProcessing, processState.finalProduct, updateProcessState]);
+
+  const saveManualEdits = useCallback(async () => {
+    if (processState.editedProductBuffer === null || processState.editedProductBuffer === processState.currentProduct) {
+      updateProcessState({ statusMessage: "No changes to save.", isEditingCurrentProduct: false, editedProductBuffer: null });
+      return;
+    }
+
+    const previousProductForDiff = processState.currentProduct || "";
+    const newCurrentProduct = processState.editedProductBuffer;
+
+    const manualEditLogEntry: AddLogEntryParams = {
+      iteration: processState.currentIteration,
+      entryType: 'manual_edit',
+      currentFullProduct: newCurrentProduct,
+      previousFullProduct: previousProductForDiff,
+      status: "Manual Edit Applied",
+      fileProcessingInfo: { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0 },
+      modelConfigUsed: undefined, 
+      apiStreamDetails: undefined,
+      promptSystemInstructionSent: "(Manual Edit - Not Applicable)",
+      promptCoreUserInstructionsSent: "(Manual Edit - Not Applicable)",
+      promptFullUserPromptSent: "(Manual Edit - Not Applicable)",
+      processedProductLengthChars: newCurrentProduct.length,
+      processedProductHead: getProductSummary(newCurrentProduct),
+    };
+    
+    addLogEntryForContext(manualEditLogEntry as any); // Cast to ContextAddLogEntryType which is AddLogEntryParams
+
+    updateProcessState({
+      currentProduct: newCurrentProduct,
+      isEditingCurrentProduct: false,
+      editedProductBuffer: null,
+      statusMessage: "Manual edits saved.",
+      aiProcessInsight: `Manual edit applied to Iteration ${processState.currentIteration}'s product.`,
+      // If manual edits should advance iteration count:
+      // currentIteration: processState.currentIteration + 1, 
+    });
+    await performAutoSave();
+  }, [processState.editedProductBuffer, processState.currentProduct, processState.currentIteration, addLogEntryForContext, updateProcessState, performAutoSave]);
+
+
   const applicationContextValue: ApplicationContextType = {
     apiKeyStatus: processState.apiKeyStatus, selectedModelName: processState.selectedModelName,
     projectName: processState.projectName, projectId: processState.projectId,
     isApiRateLimited: isApiRateLimitedLocal, rateLimitCooldownActiveSeconds: rateLimitCooldownActiveSecondsLocal,
-    updateProcessState: updateProcessState as any, // Cast for broader partial updates from this context
+    updateProcessState: updateProcessState as any, 
     handleImportProjectData: projectIO.handleImportProjectData,
     handleImportIterationLogData: projectIO.handleImportIterationLogData,
     handleExportProject: projectIO.handleExportProject,
@@ -361,9 +444,13 @@ const App: React.FC = () => {
     handleLoadedFilesChange,
     handleInitialPromptChange,
     addLogEntry: addLogEntryForContext, handleResetApp,
-    handleStartProcess: iterativeLogicInstance.handleStart, handleHaltProcess: iterativeLogicInstance.handleHalt,
+    handleStartProcess: (options?: { isTargetedRefinement?: boolean; targetedSelection?: string; targetedInstructions?: string; }) => iterativeLogicInstance.handleStart(options),
+    handleHaltProcess: iterativeLogicInstance.handleHalt,
     handleRewind, handleExportIterationMarkdown,
     reconstructProductCallback: (iter: number, hist: IterationLogEntry[], base: string) => reconstructProduct(iter, hist, base),
+    openTargetedRefinementModal,
+    toggleEditMode, // New handler for manual edit
+    saveManualEdits, // New handler for manual edit
   };
 
   const modelConfigContextValue: ModelConfigContextType = {
@@ -460,31 +547,43 @@ const App: React.FC = () => {
                     </ErrorBoundary>
                   </main>
                 </div>
-
-                {autoSaveHook.showRestorePrompt && autoSaveHook.restorableStateInfo && (
-                  <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100] p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="restore-dialog-title">
-                    <div className="bg-white dark:bg-slate-800 p-6 rounded-lg shadow-xl max-w-md w-full border border-primary-500/50">
-                      <h2 id="restore-dialog-title" className="text-lg font-semibold text-primary-600 dark:text-primary-300 mb-3">Autosaved Session Found</h2>
-                      <p className="text-sm text-slate-600 dark:text-slate-300 mb-1">Project: <strong>{autoSaveHook.restorableStateInfo.projectName || DEFAULT_PROJECT_NAME_FALLBACK}</strong></p>
-                      {autoSaveHook.restorableStateInfo.lastAutoSavedAt && <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">Saved: {new Date(autoSaveHook.restorableStateInfo.lastAutoSavedAt).toLocaleString()}</p>}
-                      <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">Do you want to restore this session?</p>
-                      <div className="flex justify-end space-x-3">
-                        <button
-                          onClick={autoSaveHook.handleClearAutoSaveAndDismiss}
-                          className="px-4 py-2 text-sm rounded-md border border-slate-300 dark:border-white/20 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 transition-colors"
-                        >
-                          Dismiss & Clear
-                        </button>
-                        <button
-                          onClick={autoSaveHook.handleRestoreAutoSave}
-                          className="px-4 py-2 text-sm rounded-md bg-primary-600 text-white hover:bg-primary-700 transition-colors focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800"
-                        >
-                          Restore Session
-                        </button>
+                
+                <div id="modal-container">
+                  {autoSaveHook.showRestorePrompt && autoSaveHook.restorableStateInfo && (
+                    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100] p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="restore-dialog-title">
+                      <div className="bg-white dark:bg-slate-800 p-6 rounded-lg shadow-xl max-w-md w-full border border-primary-500/50">
+                        <h2 id="restore-dialog-title" className="text-lg font-semibold text-primary-600 dark:text-primary-300 mb-3">Autosaved Session Found</h2>
+                        <p className="text-sm text-slate-600 dark:text-slate-300 mb-1">Project: <strong>{autoSaveHook.restorableStateInfo.projectName || DEFAULT_PROJECT_NAME_FALLBACK}</strong></p>
+                        {autoSaveHook.restorableStateInfo.lastAutoSavedAt && <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">Saved: {new Date(autoSaveHook.restorableStateInfo.lastAutoSavedAt).toLocaleString()}</p>}
+                        <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">Do you want to restore this session?</p>
+                        <div className="flex justify-end space-x-3">
+                          <button
+                            onClick={autoSaveHook.handleClearAutoSaveAndDismiss}
+                            className="px-4 py-2 text-sm rounded-md border border-slate-300 dark:border-white/20 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 transition-colors"
+                          >
+                            Dismiss & Clear
+                          </button>
+                          <button
+                            onClick={autoSaveHook.handleRestoreAutoSave}
+                            className="px-4 py-2 text-sm rounded-md bg-primary-600 text-white hover:bg-primary-700 transition-colors focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800"
+                          >
+                            Restore Session
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                  {processState.isTargetedRefinementModalOpen && (
+                    <TargetedRefinementModal
+                      isOpen={processState.isTargetedRefinementModalOpen}
+                      onClose={closeTargetedRefinementModal}
+                      onSubmit={submitTargetedRefinement}
+                      selectedText={processState.currentTextSelectionForRefinement || ""}
+                      instructions={processState.instructionsForSelectionRefinement || ""}
+                      onInstructionsChange={(value) => updateProcessState({ instructionsForSelectionRefinement: value })}
+                    />
+                  )}
+                </div>
               </div>
             </ErrorBoundary>
           </PlanProvider>

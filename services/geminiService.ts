@@ -342,49 +342,100 @@ export const generateInitialOutline = async (
     }
 };
 
-export const iterateProduct = async (
-  currentProduct: string,
-  currentIterationOverall: number,
-  maxIterationsOverall: number,
-  fileManifest: string, 
-  loadedFiles: LoadedFile[], 
-  activePlanStage: PlanStage | null,
-  outputParagraphShowHeadings: boolean,
-  outputParagraphMaxHeadingDepth: number,
-  outputParagraphNumberedHeadings: boolean,
-  modelConfigToUse: ModelConfig,
-  isGlobalMode: boolean,
-  modelToUse: SelectableModelName,
-  onStreamChunk: (chunkText: string) => void,
-  isHaltSignalled: () => boolean,
-  retryContext?: RetryContext,
-  stagnationNudgeStrategy?: NudgeStrategy,
-  initialOutlineForIter1?: OutlineGenerationResult,
-  activeMetaInstruction?: string
-): Promise<IterateProductResult> => {
+// IterateProductParams interface to define parameters for iterateProduct
+export interface IterateProductParams {
+    currentProduct: string;
+    currentIterationOverall: number; // If 0, signals a segment synthesis sub-call
+    maxIterationsOverall: number;
+    fileManifest: string;
+    loadedFiles: LoadedFile[];
+    activePlanStage: PlanStage | null;
+    outputParagraphShowHeadings: boolean;
+    outputParagraphMaxHeadingDepth: number;
+    outputParagraphNumberedHeadings: boolean;
+    modelConfigToUse: ModelConfig;
+    isGlobalMode: boolean;
+    modelToUse: SelectableModelName;
+    onStreamChunk: (chunkText: string) => void;
+    isHaltSignalled: () => boolean;
+    retryContext?: RetryContext;
+    stagnationNudgeStrategy?: NudgeStrategy;
+    initialOutlineForIter1?: OutlineGenerationResult; // For single-pass Iter 1 or full outline context for segment mode
+    activeMetaInstruction?: string;
+    // New parameters for segmented synthesis
+    operationType?: "full" | "segment_synthesis"; // Default to "full" if not provided
+    currentSegmentOutlineText?: string; // Text of the current segment being synthesized
+    fullOutlineForContext?: string; // The entire original outline for context
+    // New parameters for targeted refinement
+    isTargetedRefinementMode?: boolean;
+    targetedSelectionText?: string;
+    targetedRefinementInstructions?: string;
+}
+
+
+export const iterateProduct = async ({
+  currentProduct,
+  currentIterationOverall, // If 0, it's a segment synthesis sub-call
+  maxIterationsOverall,
+  fileManifest,
+  loadedFiles,
+  activePlanStage,
+  outputParagraphShowHeadings,
+  outputParagraphMaxHeadingDepth,
+  outputParagraphNumberedHeadings,
+  modelConfigToUse,
+  isGlobalMode,
+  modelToUse,
+  onStreamChunk,
+  isHaltSignalled,
+  retryContext,
+  stagnationNudgeStrategy,
+  initialOutlineForIter1, // Full outline if in segment mode, or outline for single-pass Iter 1
+  activeMetaInstruction,
+  operationType = "full", // Default to "full" operation
+  currentSegmentOutlineText, // For segment synthesis
+  fullOutlineForContext, // For segment synthesis
+  isTargetedRefinementMode, // For targeted refinement
+  targetedSelectionText, // For targeted refinement
+  targetedRefinementInstructions // For targeted refinement
+}: IterateProductParams): Promise<IterateProductResult> => {
   if (!ai || !apiKeyAvailable) {
     return { product: currentProduct, status: 'ERROR', errorMessage: "Gemini API client not initialized or API key missing." };
   }
+  
+  const isSegmentedCall = operationType === "segment_synthesis" && currentIterationOverall === 0;
 
   const { systemInstruction, coreUserInstructions } = getUserPromptComponents(
-    currentIterationOverall, maxIterationsOverall,
+    currentIterationOverall, // If 0, promptBuilder knows it's for segment synthesis
+    maxIterationsOverall,
     activePlanStage,
     outputParagraphShowHeadings, outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings,
     isGlobalMode,
-    currentIterationOverall === 1 && loadedFiles.length > 0 && !initialOutlineForIter1, // isInitialProductEmptyAndFilesLoaded
+    // For single-pass synthesis: (Iter 1, files exist, no outline provided before, not segmented)
+    currentIterationOverall === 1 && loadedFiles.length > 0 && !initialOutlineForIter1 && !isSegmentedCall && !isTargetedRefinementMode,
     retryContext,
     stagnationNudgeStrategy,
-    initialOutlineForIter1,
-    loadedFiles, 
-    activeMetaInstruction
+    initialOutlineForIter1, // This is the full outline for context in segment mode
+    loadedFiles,
+    activeMetaInstruction,
+    // Segment specific params for promptBuilder
+    isSegmentedCall,
+    currentSegmentOutlineText,
+    fullOutlineForContext, // This is the same as initialOutlineForIter1 when isSegmentedCall is true
+    // Targeted refinement params
+    isTargetedRefinementMode,
+    targetedSelectionText,
+    targetedRefinementInstructions
   );
   
   const promptTextForFullIterationLogged = buildTextualPromptPart(
-      currentProduct,
+      currentProduct, // For segment mode, this might be empty or a placeholder. For targeted, it's the full product.
       fileManifest, 
       coreUserInstructions,
       currentIterationOverall,
-      initialOutlineForIter1
+      initialOutlineForIter1, // Full outline for context in segment mode
+      isSegmentedCall,
+      isTargetedRefinementMode // Pass this to buildTextualPromptPart
   );
 
   let accumulatedTextFromAllSegments = "";
@@ -395,35 +446,44 @@ export const iterateProduct = async (
   let promptTextForThisApiSegmentCall: string = "";
 
   try {
-    if (currentIterationOverall === 1 && loadedFiles.length > 0 && !initialOutlineForIter1) {
-        // This is the "direct synthesis without pre-outline" path for Iteration 1
+     if (isSegmentedCall) {
+        // Segmented Synthesis Call (special Iteration 0 marker)
+        const segmentUserParts: Part[] = [{ text: coreUserInstructions }];
+        loadedFiles.forEach(file => { segmentUserParts.push({ inlineData: { mimeType: file.mimeType, data: file.base64Data } }); });
+        
+        currentConversationHistoryForApi.push({ role: "user", parts: segmentUserParts });
+        currentConversationHistoryForApi.push({ role: "model", parts: [{ text: "Instructions for this segment and all file data noted. I will synthesize content for this specific outline segment based on the full file context." }] });
+        currentConversationHistoryForApi.push({ role: "user", parts: [{ text: "(Synthesize content for the current segment based on files and instructions provided above.)" }] });
+        promptTextForThisApiSegmentCall = coreUserInstructions; 
+
+    } else if (currentIterationOverall === 1 && loadedFiles.length > 0 && !initialOutlineForIter1 && !isSegmentedCall && !isTargetedRefinementMode) {
+        // This is the "direct synthesis without pre-outline" path for Iteration 1 (single call)
         const initialParts: Part[] = [];
         loadedFiles.forEach(file => { initialParts.push({ inlineData: { mimeType: file.mimeType, data: file.base64Data } }); });
         initialParts.push({ text: coreUserInstructions });
         currentConversationHistoryForApi.push({ role: "user", parts: initialParts });
         promptTextForThisApiSegmentCall = coreUserInstructions; 
-    } else {
-        // This path is for:
-        // 1. Iteration 1 WITH a pre-generated outline
-        // 2. All subsequent iterations (Iter > 1)
-
+    } else { // This path covers: Iter 1 (single call from outline), Targeted Refinement, and all subsequent iterations (Iter > 1)
         let firstUserTurnParts: Part[] = [{ text: coreUserInstructions }];
-        // If it's Iteration 1 AND an outline is provided AND files exist, prepend file data to the first user turn.
-        if (currentIterationOverall === 1 && initialOutlineForIter1 && loadedFiles.length > 0) {
+        // If it's Iteration 1 AND an outline is provided AND files exist (and NOT segmented/targeted), prepend file data.
+        if (currentIterationOverall === 1 && initialOutlineForIter1 && loadedFiles.length > 0 && !isSegmentedCall && !isTargetedRefinementMode) {
             const filePartsFromLoaded: Part[] = [];
             loadedFiles.forEach(file => { filePartsFromLoaded.push({ inlineData: { mimeType: file.mimeType, data: file.base64Data } }); });
             firstUserTurnParts = [...filePartsFromLoaded, ...firstUserTurnParts];
         }
         currentConversationHistoryForApi.push({ role: "user", parts: firstUserTurnParts });
         
-        // Turn 2: Model (Simulated Acknowledgement)
         currentConversationHistoryForApi.push({ role: "model", parts: [{ text: "Instructions noted. I will apply them to the following content." }] });
         
-        // Turn 3: User Content (This is the current product, or the outline if Iter 1 with outline)
-        const productInputContent = (currentIterationOverall === 1 && initialOutlineForIter1)
-            ? (initialOutlineForIter1.outline + (initialOutlineForIter1.identifiedRedundancies ? `\n\nIdentified Redundancies to address:\n${initialOutlineForIter1.identifiedRedundancies}` : ""))
-            : (currentProduct || ""); // currentProduct is null for iter 1 start, so this correctly passes empty string or actual product.
-        
+        // Determine productInputContent:
+        // - For Iter 1 from outline: use the outline + redundancies.
+        // - For targeted refinement: use currentProduct (which is the full product).
+        // - For other iterations: use currentProduct.
+        let productInputContent = currentProduct || ""; // Default for most cases, including targeted refinement
+        if (currentIterationOverall === 1 && initialOutlineForIter1 && !isSegmentedCall && !isTargetedRefinementMode) {
+            productInputContent = (initialOutlineForIter1.outline + (initialOutlineForIter1.identifiedRedundancies ? `\n\nIdentified Redundancies to address:\n${initialOutlineForIter1.identifiedRedundancies}` : ""));
+        }
+            
         const truncatedProductContent = productInputContent.length > MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT
             ? `${productInputContent.substring(0, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT / 2)}...\n...(Product content truncated for prompt view)...\n...${productInputContent.substring(productInputContent.length - MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT / 2)}`
             : productInputContent;
@@ -534,7 +594,7 @@ export const iterateProduct = async (
     }
 
     const lastUserPromptInFailedSegment = currentConversationHistoryForApi.length > 0 ?
-        currentConversationHistoryForApi.slice().reverse().find(c => c.role === 'user')?.parts[0]?.text || "N/A (Error prompt capture issue)"
+        currentConversationHistoryForApi.slice().reverse().find(c => c.role === 'user')?.parts.map(p => (p as any).text || "[non-text part]").join("\n") || "N/A (Error prompt capture issue)"
         : (promptTextForFullIterationLogged || "N/A (Error before/during stream start or prompt capture)");
 
     if (apiStreamDetails.length === 0 || apiStreamDetails[apiStreamDetails.length-1].callCount !== (streamCallCount > 0 ? streamCallCount : 1)) {
