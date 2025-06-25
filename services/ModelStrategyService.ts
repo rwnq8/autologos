@@ -1,9 +1,17 @@
 
 import type { ProcessState, ModelConfig, SelectableModelName, IterationLogEntry, PlanStage, StagnationInfo, ModelStrategy, LoadedFile, StrategistAdvice, AiResponseValidationInfo } from '../types.ts';
-import { CREATIVE_DEFAULTS, FOCUSED_END_DEFAULTS, GENERAL_BALANCED_DEFAULTS, DEFAULT_MODEL_NAME, getStrategicAdviceFromLLM } from './geminiService';
+import { CREATIVE_DEFAULTS, GENERAL_BALANCED_DEFAULTS, DEFAULT_MODEL_NAME, getStrategicAdviceFromLLM } from './geminiService';
 import { CONVERGED_PREFIX } from './promptBuilderService'; 
-import { DETERMINISTIC_TARGET_ITERATION, STAGNATION_TEMP_NUDGE_LIGHT, STAGNATION_TOPP_NUDGE_LIGHT, STAGNATION_TOPK_NUDGE_FACTOR_LIGHT, STAGNATION_TEMP_NUDGE_HEAVY, STAGNATION_TOPP_NUDGE_HEAVY, STAGNATION_TOPK_NUDGE_FACTOR_HEAVY } from '../hooks/useModelParameters';
+import { STAGNATION_TEMP_NUDGE_LIGHT, STAGNATION_TOPP_NUDGE_LIGHT, STAGNATION_TOPK_NUDGE_FACTOR_LIGHT, STAGNATION_TEMP_NUDGE_HEAVY, STAGNATION_TOPP_NUDGE_HEAVY, STAGNATION_TOPK_NUDGE_FACTOR_HEAVY } from '../hooks/useModelParameters';
 import { SELECTABLE_MODELS } from '../types.ts';
+
+// Changed from 20 to 5 for a much faster sweep to deterministic values, especially temperature.
+export const DETERMINISTIC_TARGET_ITERATION = 5; 
+
+// Set temperature to 0.0 for absolute determinism target.
+// Nudges will temporarily make temperature > 0 for topP/topK to have effect.
+export const FOCUSED_END_DEFAULTS: ModelConfig = { temperature: 0.0, topP: 0.90, topK: 5 };
+
 
 const sanitizeConfig = (config: ModelConfig, rationaleParts: string[]): ModelConfig => {
     const originalConf = {...config};
@@ -36,30 +44,30 @@ export const determineInitialStrategy = (
 
     switch (processState.inputComplexity) {
         case 'SIMPLE':
-            modelName = 'gemini-2.5-pro';
+            modelName = 'gemini-2.5-pro'; // Consider Pro for potentially higher quality initial simple outputs
             rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Pro for simple input, aiming for high-quality initial output. User preferences applied.");
             break;
         case 'MODERATE':
             modelName = 'gemini-2.5-flash-preview-04-17';
-            thinkingBudget = 1;
+            thinkingBudget = 1; // Default to thinking enabled for Flash
             rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Flash Preview (thinking enabled) for moderate input, balancing capability and efficiency. User preferences applied.");
             break;
         case 'COMPLEX':
             modelName = 'gemini-2.5-flash-preview-04-17'; 
-            thinkingBudget = 1;
+            thinkingBudget = 1; // Default to thinking enabled for Flash
             rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Flash Preview (thinking enabled) for complex/large input, focusing on efficient processing. User preferences applied.");
             break;
         default: 
             modelName = processState.selectedModelName || DEFAULT_MODEL_NAME;
             rationales.push("Heuristic: Initial Strategy - Defaulting to user-selected model or application default. User preferences applied.");
-            if (modelName === 'gemini-2.5-flash-preview-04-17') thinkingBudget = 1;
+            if (modelName === 'gemini-2.5-flash-preview-04-17') thinkingBudget = 1; // Default to thinking for Flash
             break;
     }
     
     if (thinkingBudget !== undefined && modelName === 'gemini-2.5-flash-preview-04-17') {
         config.thinkingConfig = { thinkingBudget };
     } else {
-        delete config.thinkingConfig;
+        delete config.thinkingConfig; // Ensure no thinkingConfig if not Flash or not specified
     }
     return { modelName, config: sanitizeConfig(config, rationales), rationale: rationales.join(' | '), activeMetaInstruction: undefined };
 };
@@ -75,28 +83,32 @@ export const reevaluateStrategy = async (
     const rationales: string[] = [];
     let activeMetaInstructionForThisIteration: string | undefined = undefined;
 
+    // --- Parameter Sweep Logic (Global Mode Only) ---
     if (isPlanActive) {
-        nextConfig = { ...baseUserConfig }; 
+        nextConfig = { ...baseUserConfig }; // Use fixed user-set base for plan stages
         rationales.push("Plan Mode: Using fixed parameters set by user for all plan stages.");
     } else { 
-        const startCreativeConfig = { ...baseUserConfig }; 
-        const focusedEndConfig = FOCUSED_END_DEFAULTS;
-        const safeCurrentIteration = Math.max(1, currentIteration + 1); 
+        // Global Mode: Dynamic parameter sweep
+        const startCreativeConfig = { ...baseUserConfig }; // User's settings are the "creative" start
+        // const focusedEndConfig = FOCUSED_END_DEFAULTS; // Target deterministic settings (now { temp: 0.0, topP: 0.9, topK: 5 }) - This was the error source line if FOCUSED_END_DEFAULTS was intended
+        const safeCurrentIteration = Math.max(1, currentIteration + 1); // Iteration number for calculation (1-based)
+        
         const sweepEffectiveDuration = Math.min(maxIterations, DETERMINISTIC_TARGET_ITERATION);
-        const effectiveMaxSweepIter = Math.max(1, sweepEffectiveDuration);
+        const effectiveMaxSweepIter = Math.max(1, sweepEffectiveDuration); 
         
         let interpolationFactor = 0;
         if (effectiveMaxSweepIter <= 1) interpolationFactor = 1.0; 
         else if (safeCurrentIteration >= effectiveMaxSweepIter) interpolationFactor = 1.0; 
-        else interpolationFactor = (safeCurrentIteration - 1) / (effectiveMaxSweepIter - 1);
+        else interpolationFactor = (safeCurrentIteration - 1) / (effectiveMaxSweepIter - 1); 
 
         nextConfig = {
-            temperature: startCreativeConfig.temperature - interpolationFactor * (startCreativeConfig.temperature - focusedEndConfig.temperature),
-            topP: startCreativeConfig.topP - interpolationFactor * (startCreativeConfig.topP - focusedEndConfig.topP),
-            topK: Math.max(1, Math.round(startCreativeConfig.topK - interpolationFactor * (startCreativeConfig.topK - focusedEndConfig.topK)))
+            temperature: startCreativeConfig.temperature - interpolationFactor * (startCreativeConfig.temperature - FOCUSED_END_DEFAULTS.temperature),
+            topP: startCreativeConfig.topP - interpolationFactor * (startCreativeConfig.topP - FOCUSED_END_DEFAULTS.topP),
+            topK: Math.max(1, Math.round(startCreativeConfig.topK - interpolationFactor * (startCreativeConfig.topK - FOCUSED_END_DEFAULTS.topK)))
         };
-        rationales.push(`Heuristic Sweep: Iter ${safeCurrentIteration}/${maxIterations} (Target for Determinism: ${DETERMINISTIC_TARGET_ITERATION}). User Base: T:${baseUserConfig.temperature.toFixed(2)},P:${baseUserConfig.topP.toFixed(2)},K:${baseUserConfig.topK}. Swept to: T:${nextConfig.temperature.toFixed(2)},P:${nextConfig.topP.toFixed(2)},K:${nextConfig.topK}.`);
+        rationales.push(`Heuristic Sweep: Iter ${safeCurrentIteration}/${maxIterations} (Target Det. Iter: ${DETERMINISTIC_TARGET_ITERATION}). User Base: T:${baseUserConfig.temperature.toFixed(2)},P:${baseUserConfig.topP.toFixed(2)},K:${baseUserConfig.topK}. Swept to: T:${nextConfig.temperature.toFixed(2)},P:${nextConfig.topP.toFixed(2)},K:${nextConfig.topK}. Target End: T:${FOCUSED_END_DEFAULTS.temperature.toFixed(2)}, P:${FOCUSED_END_DEFAULTS.topP.toFixed(2)}, K:${FOCUSED_END_DEFAULTS.topK}.`);
 
+        // Stagnation Nudges (only in Global Mode)
         if (stagnationNudgeEnabled && stagnationInfo.isStagnant && (stagnationInfo.nudgeStrategyApplied === 'params_light' || stagnationInfo.nudgeStrategyApplied === 'params_heavy')) {
             let tempNudgeMultiplier = 1.0, pNudgeMultiplier = 1.0, kFactorMultiplier = 1.0;
             if (stagnationNudgeAggressiveness === 'LOW') { tempNudgeMultiplier = 0.6; pNudgeMultiplier = 0.6; kFactorMultiplier = 0.6; }
@@ -105,28 +117,43 @@ export const reevaluateStrategy = async (
             const isLightNudge = stagnationInfo.nudgeStrategyApplied === 'params_light';
             const baseTempNudge = isLightNudge ? STAGNATION_TEMP_NUDGE_LIGHT : STAGNATION_TEMP_NUDGE_HEAVY;
             const basePNudge = isLightNudge ? STAGNATION_TOPP_NUDGE_LIGHT : STAGNATION_TOPP_NUDGE_HEAVY;
-            const baseKFactorChange = (isLightNudge ? STAGNATION_TOPK_NUDGE_FACTOR_LIGHT : STAGNATION_TOPK_NUDGE_FACTOR_HEAVY) - 1.0; 
+            const baseKFactorChange = (isLightNudge ? STAGNATION_TOPK_NUDGE_FACTOR_LIGHT : STAGNATION_TOPK_NUDGE_FACTOR_HEAVY) - 1.0;
 
             const actualTempNudge = baseTempNudge * tempNudgeMultiplier;
             const actualPNudge = basePNudge * pNudgeMultiplier;
             const actualKFactor = 1.0 + (baseKFactorChange * kFactorMultiplier);
-
+            
+            // IMPORTANT: Nudge temperature to be non-zero for topP/topK to have effect if base is 0.0
+            if (nextConfig.temperature === 0.0) nextConfig.temperature = 0.01; // Minimal non-zero
             nextConfig.temperature += actualTempNudge;
             nextConfig.topP += actualPNudge;
             nextConfig.topK = Math.max(1, Math.round(nextConfig.topK * actualKFactor));
             rationales.push(`Heuristic Nudge (Code): Stagnation (${stagnationInfo.consecutiveStagnantIterations}x) triggered '${stagnationInfo.nudgeStrategyApplied}' (Aggressiveness: ${stagnationNudgeAggressiveness}). Applied T+=${actualTempNudge.toFixed(3)}, P+=${actualPNudge.toFixed(3)}, K*=${actualKFactor.toFixed(3)} to swept params.`);
         }
         
+        const productIsLikelyUnderdeveloped = (currentProduct?.length || 0) < 2000 && inputComplexity !== 'SIMPLE';
         if (stagnationNudgeEnabled && stagnationInfo.consecutiveLowValueIterations >= 2 && stagnationInfo.nudgeStrategyApplied !== 'meta_instruct') {
-          nextConfig.temperature = 0.0; 
-          nextConfig.topK = 1;
-          nextConfig.topP = 1.0;
-          rationales.push(`Heuristic Convergence Push (Code): High stagnation (${stagnationInfo.consecutiveLowValueIterations} consecutive low-value iters); aggressively setting params to deterministic (T:0.0, K:1, P:1.0) to confirm convergence.`);
+            if (productIsLikelyUnderdeveloped) {
+                activeMetaInstructionForThisIteration = "The product seems underdeveloped or stuck in minor edits. Please focus on substantial conceptual expansion, adding more details, examples, or exploring new perspectives based on the original source material.";
+                rationales.push(`Heuristic Expansion Push (Code): High low-value iterations (${stagnationInfo.consecutiveLowValueIterations}) on a potentially underdeveloped product. Applying expansionary meta-instruction.`);
+                if (nextConfig.temperature < 0.2) {
+                    nextConfig.temperature = Math.min(0.3, baseUserConfig.temperature < 0.1 ? 0.2 : baseUserConfig.temperature * 0.5); // Ensure it's not too low if base was 0
+                    if (nextConfig.temperature === 0.0) nextConfig.temperature = 0.1; // Ensure non-zero for expansion nudge
+                    rationales.push(`Heuristic Expansion Push (Code): Temporarily nudging temperature to ${nextConfig.temperature.toFixed(2)} to aid expansion.`);
+                }
+            } else {
+                // If product is substantial, then push for convergence
+                nextConfig.temperature = FOCUSED_END_DEFAULTS.temperature; 
+                nextConfig.topK = FOCUSED_END_DEFAULTS.topK; 
+                nextConfig.topP = FOCUSED_END_DEFAULTS.topP; 
+                rationales.push(`Heuristic Convergence Push (Code): High low-value iterations (${stagnationInfo.consecutiveLowValueIterations}); aggressively setting params to focused targets (T:${nextConfig.temperature.toFixed(2)}, K:${nextConfig.topK}, P:${nextConfig.topP.toFixed(2)}) to confirm convergence.`);
+            }
         } else if (stagnationNudgeEnabled && stagnationInfo.isStagnant && stagnationInfo.consecutiveStagnantIterations >= (stagnationNudgeAggressiveness === 'HIGH' ? 2 : 3) && stagnationInfo.nudgeStrategyApplied !== 'meta_instruct' && (currentIteration + 1) > (maxIterations / 2) && (currentIteration +1) > DETERMINISTIC_TARGET_ITERATION ) {
-          nextConfig.temperature = Math.min(nextConfig.temperature, 0.05); 
-          nextConfig.topK = Math.max(1, Math.min(nextConfig.topK, 3));
-          nextConfig.topP = 1.0; // Ensure TopP is 1.0 for deterministic output with low temp/topK
-          rationales.push(`Heuristic Convergence Push (Code): High stagnation (${stagnationInfo.consecutiveStagnantIterations}x) late in process; aggressively pushing params towards deterministic: T->${nextConfig.temperature.toFixed(2)}, K->${nextConfig.topK}, P->${nextConfig.topP.toFixed(2)}.`);
+            nextConfig.temperature = Math.min(nextConfig.temperature, FOCUSED_END_DEFAULTS.temperature + 0.05); // slightly above target end (0.0 to 0.05)
+            if (nextConfig.temperature === 0.0 && FOCUSED_END_DEFAULTS.temperature === 0.0) nextConfig.temperature = 0.01; // If still 0, make it tiny non-zero
+            nextConfig.topK = Math.max(FOCUSED_END_DEFAULTS.topK, Math.min(nextConfig.topK, FOCUSED_END_DEFAULTS.topK + 2)); // close to target
+            nextConfig.topP = FOCUSED_END_DEFAULTS.topP; 
+            rationales.push(`Heuristic Convergence Push (Code): High stagnation (${stagnationInfo.consecutiveStagnantIterations}x) late in process; aggressively pushing params towards focused targets: T->${nextConfig.temperature.toFixed(2)}, K->${nextConfig.topK}, P->${nextConfig.topP.toFixed(2)}.`);
         }
     }
 
@@ -137,17 +164,17 @@ export const reevaluateStrategy = async (
         if (stagnationNudgeEnabled && stagnationInfo.consecutiveStagnantIterations >= stagnationTriggerCount ) {
             if (lastModelUsed.includes('flash') || lastModelUsed.includes('lite') || lastModelUsed === 'gemini-pro') {
                 nextModelName = 'gemini-2.5-pro'; 
-                rationales.push(`Heuristic Model Switch (Code): Stagnation (${stagnationInfo.consecutiveStagnantIterations}x with ${lastModelUsed}); switching to Gemini 2.5 Pro.`);
+                rationales.push(`Heuristic Model Switch (Code): Stagnation (${stagnationInfo.consecutiveStagnantIterations}x with ${lastModelUsed}); switching to Gemini 2.5 Pro for potentially higher reasoning.`);
             } else if (lastModelUsed.includes('pro') && inputComplexity === 'COMPLEX') { 
                 nextModelName = 'gemini-2.5-flash-preview-04-17';
-                rationales.push(`Heuristic Model Switch (Code): Stagnation on ${lastModelUsed} with complex input; switching to Flash Preview for a different approach.`);
+                rationales.push(`Heuristic Model Switch (Code): Stagnation on ${lastModelUsed} with complex input; switching to Flash Preview for a different approach (cost/speed focus).`);
             }
         } else if (stagnationNudgeEnabled && stagnationInfo.consecutiveStagnantIterations === 0 && lastModelUsed.includes('pro') && inputComplexity === 'COMPLEX' && currentIteration > 3) {
              if (iterationHistory.length > 0) {
                 const prevLog = iterationHistory[iterationHistory.length - 1];
                 if (prevLog && ((prevLog.linesAdded || 0) - (prevLog.linesRemoved || 0) > 20) && (prevLog.aiValidationInfo?.passed ?? true) && (stagnationInfo.similarityWithPrevious ?? 1.0) < 0.90) {
                     nextModelName = 'gemini-2.5-flash-preview-04-17';
-                    rationales.push(`Heuristic Model Switch (Code): Good progress with ${lastModelUsed} on complex input; switching to Flash Preview for efficiency.`);
+                    rationales.push(`Heuristic Model Switch (Code): Good progress with ${lastModelUsed} on complex input; switching to Flash Preview for efficiency now that structure might be established.`);
                 }
             }
         }
@@ -159,6 +186,8 @@ export const reevaluateStrategy = async (
       currentRefinementFocusHint = "Polish/Convergence Attempt";
     } else if (activeMetaInstructionForThisIteration?.toLowerCase().includes("expand") || activeMetaInstructionForThisIteration?.toLowerCase().includes("elaborate")) {
       currentRefinementFocusHint = "Expansion";
+    } else if (currentProduct && currentProduct.length < 2000 && inputComplexity !== 'SIMPLE') {
+      currentRefinementFocusHint = "Expansion (Product appears underdeveloped)";
     }
     
     if (strategistInfluenceLevel !== 'OFF') {
@@ -187,7 +216,7 @@ export const reevaluateStrategy = async (
         strategistAdvice = await getStrategicAdviceFromLLM(
             currentIteration, maxIterations, inputComplexity, 
             currentModelForIteration, currentAppliedModelConfig, 
-            stagnationInfo, // Includes consecutiveLowValueIterations
+            stagnationInfo, 
             lastLogEntry?.aiValidationInfo, 
             currentGoal, recentIterationSummaries, currentProductLength,
             currentRefinementFocusHint
@@ -198,7 +227,6 @@ export const reevaluateStrategy = async (
 
     if (strategistAdvice) {
         rationales.push(`Strategist LLM Advice Received: "${strategistAdvice.rationale}"`);
-
         const canStrategistInfluenceModel = strategistInfluenceLevel === 'ADVISE_PARAMS_ONLY' || strategistInfluenceLevel === 'OVERRIDE_FULL';
         const canStrategistInfluenceCoreParams = strategistInfluenceLevel === 'OVERRIDE_FULL';
         const canStrategistInfluenceMeta = (strategistInfluenceLevel === 'ADVISE_PARAMS_ONLY' || strategistInfluenceLevel === 'OVERRIDE_FULL'); 
@@ -250,13 +278,14 @@ export const reevaluateStrategy = async (
         
         const strategistSignalConvergence = (strategistAdvice.suggestedMetaInstruction && strategistAdvice.suggestedMetaInstruction.toUpperCase().includes(CONVERGED_PREFIX)) || strategistAdvice.rationale.toLowerCase().includes("convergence") || (stagnationInfo.consecutiveLowValueIterations >=2 && strategistAdvice.rationale.toLowerCase().includes("minimal value"));
 
-        if (strategistSignalConvergence && canStrategistInfluenceCoreParams) {
-             nextConfig.temperature = 0.0; nextConfig.topK = 1; nextConfig.topP = 1.0;
-             rationales.push("Strategist advice strongly signals convergence; setting highly deterministic parameters for main AI to confirm/output convergence.");
-        } else if (canStrategistInfluenceCoreParams && strategistParamChangeDetails.length > 0) { // Apply other param changes if not explicitly converging
+        if (strategistSignalConvergence && canStrategistInfluenceCoreParams && !isPlanActive) { // Don't let strategist force converge plan stages, only global mode
+             nextConfig.temperature = FOCUSED_END_DEFAULTS.temperature; 
+             nextConfig.topK = FOCUSED_END_DEFAULTS.topK;
+             nextConfig.topP = FOCUSED_END_DEFAULTS.topP;
+             rationales.push(`Strategist advice strongly signals convergence; setting params to focused end targets (T:${nextConfig.temperature.toFixed(2)}, K:${nextConfig.topK}, P:${nextConfig.topP.toFixed(2)}) to confirm/output convergence.`);
+        } else if (canStrategistInfluenceCoreParams && strategistParamChangeDetails.length > 0) {
             rationales.push(`Strategist adjusted core parameters: ${strategistParamChangeDetails.join(', ')}.`);
         }
-
 
         if (canStrategistInfluenceMeta && strategistAdvice.suggestedMetaInstruction && strategistAdvice.suggestedMetaInstruction.trim() !== "") {
             activeMetaInstructionForThisIteration = strategistAdvice.suggestedMetaInstruction.trim();
@@ -270,29 +299,29 @@ export const reevaluateStrategy = async (
         rationales.push("Strategist LLM advice was invalid, empty, or consultation failed; relying solely on code heuristics.");
     }
     
-    // Final model-specific config adjustments
     if (nextModelName === 'gemini-2.5-flash-preview-04-17') {
         if (nextConfig.thinkingConfig === undefined) { 
             let budget = 1; 
             if (!isPlanActive) { 
                 const progressPercent = maxIterations > 0 ? (currentIteration + 1) / maxIterations : 0;
-                if (progressPercent > 0.75 && nextConfig.temperature < 0.3) { 
+                if (progressPercent > 0.75 && nextConfig.temperature < (FOCUSED_END_DEFAULTS.temperature + 0.1)) { // Late stage, focused
                     budget = 0;
-                    rationales.push("Heuristic Fallback (Post-Strategist): Disabling thinking for Flash model in late, focused global iterations.");
+                    rationales.push(`Heuristic Fallback (Post-Strategist): Disabling thinking for Flash model in late, focused global iterations (T: ${nextConfig.temperature.toFixed(2)}).`);
                 } else {
-                    rationales.push("Heuristic Fallback (Post-Strategist): Defaulting to thinking enabled for Flash model.");
+                    rationales.push(`Heuristic Fallback (Post-Strategist): Defaulting to thinking enabled for Flash model.`);
                 }
             } else { 
-                rationales.push("Heuristic Fallback (Post-Strategist): Defaulting to thinking enabled for Flash model in Plan mode.");
+                rationales.push(`Heuristic Fallback (Post-Strategist): Defaulting to thinking enabled for Flash model in Plan mode.`);
             }
             nextConfig.thinkingConfig = { thinkingBudget: budget };
         }
     } else { 
-        if (nextConfig.thinkingConfig) {
+        if (nextConfig.thinkingConfig) { 
             delete nextConfig.thinkingConfig;
-            rationales.push("Heuristic Correction: Removed thinking config as final model chosen does not support it or is not 'gemini-2.5-flash-preview-04-17'.");
+            rationales.push(`Heuristic Correction: Removed thinking config as final model chosen ('${nextModelName}') does not support it or is not 'gemini-2.5-flash-preview-04-17'.`);
         }
     }
     nextConfig = sanitizeConfig(nextConfig, rationales);
+
     return { modelName: nextModelName, config: nextConfig, rationale: rationales.join(' | '), activeMetaInstruction: activeMetaInstructionForThisIteration };
 };

@@ -1,6 +1,5 @@
-
 import { useState, useCallback } from 'react';
-import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, ParameterAdvice, PlanTemplate, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType } from '../types.ts';
+import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, ParameterAdvice, PlanTemplate, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry } from '../types.ts'; // Added DevLogEntry
 import * as geminiService from '../services/geminiService';
 import * as storageService from '../services/storageService';
 import { INITIAL_PROJECT_NAME_STATE } from '../services/utils';
@@ -63,8 +62,9 @@ export const createInitialProcessState = (
   isTargetedRefinementModalOpen: false,
   currentTextSelectionForRefinement: null,
   instructionsForSelectionRefinement: "",
-  isEditingCurrentProduct: false, // New
-  editedProductBuffer: null,    // New
+  isEditingCurrentProduct: false,
+  editedProductBuffer: null,
+  devLog: [], // Initialize devLog as an empty array
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
@@ -204,8 +204,9 @@ export const useProcessState = () => {
         updates.planStages = [];
         updates.currentPlanStageIndex = null;
         updates.currentStageIteration = 0;
-        updates.isEditingCurrentProduct = false; // Reset edit mode
-        updates.editedProductBuffer = null;    // Clear edit buffer
+        updates.isEditingCurrentProduct = false; 
+        updates.editedProductBuffer = null;
+        updates.devLog = []; // Reset devLog when primary input changes significantly
       }
       return { ...prev, ...updates };
     });
@@ -214,6 +215,7 @@ export const useProcessState = () => {
   const handleInitialPromptChange = useCallback((newPromptText: string) => {
       setState(prev => {
           if (prev.loadedFiles.length > 0) { 
+            // If files are loaded, initialPrompt is derived from file manifest and should not be user-editable.
             return prev;
           }
           const newComplexity = calculateInputComplexity(newPromptText, prev.loadedFiles);
@@ -221,8 +223,9 @@ export const useProcessState = () => {
               ...prev,
               initialPrompt: newPromptText,
               inputComplexity: newComplexity,
-              promptChangedByFileLoad: true, 
+              promptChangedByFileLoad: true, // Signify that suggestions might need update
               promptSourceName: newPromptText.trim() ? "direct_text" : null,
+              // Reset process if prompt changes substantially when no files are loaded
               currentProduct: null,
               iterationHistory: [],
               finalProduct: null,
@@ -236,7 +239,8 @@ export const useProcessState = () => {
               currentPlanStageIndex: null,
               currentStageIteration: 0,
               isEditingCurrentProduct: false, 
-              editedProductBuffer: null,   
+              editedProductBuffer: null,
+              devLog: prev.devLog || [], // Keep existing devLog on prompt change
           };
       });
   }, []);
@@ -246,7 +250,7 @@ export const useProcessState = () => {
     let productDiff: string | undefined = undefined;
     let linesAdded = 0;
     let linesRemoved = 0;
-    const entryType = logData.entryType || 'ai_iteration';
+    const entryType = logData.entryType || 'ai_iteration'; // Default to 'ai_iteration' if not specified
 
     const normalizeNewlines = (str: string | null | undefined): string => (str || "").replace(/\r\n/g, '\n');
 
@@ -261,16 +265,19 @@ export const useProcessState = () => {
             : (logData.previousFullProduct ?? "")
     );
     
-    // For initial state, diff from empty. For manual edit or AI iter, diff from previous.
-    if (entryType === 'initial_state' || currentPForDiff !== previousPForDiff) {
+    // For initial state or segmented synthesis milestone, diff from empty or previous state as appropriate.
+    // For other types, diff from previous product.
+    const diffBase = (entryType === 'initial_state' && logData.iteration === 0) ? "" : previousPForDiff;
+
+    if (currentPForDiff !== diffBase) { // Only calculate diff if there's a change or it's an initial entry
         productDiff = Diff.createTwoFilesPatch(
             `iteration_content_prev.txt`,
             `iteration_content_curr.txt`,
-            entryType === 'initial_state' && !previousPForDiff ? "" : previousPForDiff, // Diff from empty for initial state
+            diffBase, 
             currentPForDiff,
             undefined, undefined, { context: 3 }
         );
-        const lineChanges = Diff.diffLines(entryType === 'initial_state' && !previousPForDiff ? "" : previousPForDiff, currentPForDiff, { newlineIsToken: true, ignoreWhitespace: false });
+        const lineChanges = Diff.diffLines(diffBase, currentPForDiff, { newlineIsToken: true, ignoreWhitespace: false });
         lineChanges.forEach(part => {
             if (part.added) linesAdded += part.count || 0;
             if (part.removed) linesRemoved += part.count || 0;
@@ -286,7 +293,7 @@ export const useProcessState = () => {
       status: logData.status,
       timestamp: Date.now(),
       productDiff: productDiff,
-      linesAdded: linesAdded > 0 ? linesAdded : (logData.iteration === 0 && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
+      linesAdded: linesAdded > 0 ? linesAdded : (logData.iteration === 0 && entryType === 'initial_state' && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
       linesRemoved: linesRemoved > 0 ? linesRemoved : undefined,
       readabilityScoreFlesch: logData.readabilityScoreFlesch,
       lexicalDensity: logData.lexicalDensity, 
@@ -309,18 +316,20 @@ export const useProcessState = () => {
       strategyRationale: logData.strategyRationale,
       currentModelForIteration: logData.currentModelForIteration,
       activeMetaInstruction: logData.activeMetaInstruction,
-      isSegmentedSynthesis: entryType === 'segmented_synthesis_milestone' || logData.isSegmentedSynthesis,
-      isTargetedRefinement: entryType === 'targeted_refinement' || logData.isTargetedRefinement,
+      isSegmentedSynthesis: entryType === 'segmented_synthesis_milestone',
+      isTargetedRefinement: entryType === 'targeted_refinement',
       targetedSelection: logData.targetedSelection,
       targetedRefinementInstructions: logData.targetedRefinementInstructions,
     };
 
     setState(prev => {
         // Ensure log entries are unique based on iteration AND entry type if multiple entries per iter exist
+        // Also consider attemptCount for uniqueness if multiple attempts for the same (iter, type) are logged.
         const existingEntryIndex = prev.iterationHistory.findIndex(entry => 
             entry.iteration === newEntry.iteration && 
             entry.entryType === newEntry.entryType &&
-            entry.attemptCount === newEntry.attemptCount 
+            // If attemptCount is logged, it should be part of the uniqueness key
+            (newEntry.attemptCount ? entry.attemptCount === newEntry.attemptCount : true) 
         );
         let updatedHistory;
         if (existingEntryIndex !== -1) {
@@ -329,14 +338,20 @@ export const useProcessState = () => {
         } else {
             updatedHistory = [...prev.iterationHistory, newEntry];
         }
+        // Sort history: iteration ascending, then by entry type order, then by attempt count
         updatedHistory.sort((a, b) => {
             if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-            // Define order for entry types within the same iteration if needed, e.g., initial, then ai, then manual
-            const typeOrder: Record<IterationEntryType, number> = { 'initial_state': 0, 'segmented_synthesis_milestone': 1, 'ai_iteration': 2, 'targeted_refinement': 3, 'manual_edit': 4 };
+            const typeOrder: Record<IterationEntryType, number> = { 
+                'initial_state': 0, 
+                'segmented_synthesis_milestone': 1, 
+                'ai_iteration': 2, 
+                'targeted_refinement': 3, 
+                'manual_edit': 4 
+            };
             const aTypeOrder = typeOrder[a.entryType || 'ai_iteration'];
             const bTypeOrder = typeOrder[b.entryType || 'ai_iteration'];
             if (aTypeOrder !== bTypeOrder) return aTypeOrder - bTypeOrder;
-            return (a.attemptCount || 0) - (b.attemptCount || 0);
+            return (a.attemptCount || 0) - (b.attemptCount || 0); // Sort by attempt if iter and type are same
         });
         return { ...prev, iterationHistory: updatedHistory };
     });
@@ -379,11 +394,42 @@ export const useProcessState = () => {
         currentTextSelectionForRefinement: null,
         instructionsForSelectionRefinement: "",
         isEditingCurrentProduct: false, 
-        editedProductBuffer: null, 
+        editedProductBuffer: null,
+        devLog: [], // Reset devLog on full app reset
     };
     setState(resetState);
 
-  }, [state.projectId]); 
+  }, [state.projectId]);
+
+  // --- DevLog Management Functions ---
+  const addDevLogEntry = useCallback((newEntryData: Omit<DevLogEntry, 'id' | 'timestamp' | 'lastModified'>) => {
+    const newEntry: DevLogEntry = {
+      ...newEntryData,
+      id: `devlog_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      timestamp: Date.now(),
+      lastModified: Date.now(),
+    };
+    setState(prev => ({
+      ...prev,
+      devLog: [...(prev.devLog || []), newEntry].sort((a,b) => b.timestamp - a.timestamp), // Sort newest first
+    }));
+  }, []);
+
+  const updateDevLogEntry = useCallback((updatedEntry: DevLogEntry) => {
+    setState(prev => ({
+      ...prev,
+      devLog: (prev.devLog || []).map(entry =>
+        entry.id === updatedEntry.id ? { ...updatedEntry, lastModified: Date.now() } : entry
+      ).sort((a,b) => b.timestamp - a.timestamp), // Re-sort by original timestamp
+    }));
+  }, []);
+
+  const deleteDevLogEntry = useCallback((entryId: string) => {
+    setState(prev => ({
+      ...prev,
+      devLog: (prev.devLog || []).filter(entry => entry.id !== entryId),
+    }));
+  }, []);
 
 
   return {
@@ -393,6 +439,10 @@ export const useProcessState = () => {
     addLogEntry,
     handleReset,
     handleInitialPromptChange,
+    // DevLog functions
+    addDevLogEntry,
+    updateDevLogEntry,
+    deleteDevLogEntry,
   };
 };
 

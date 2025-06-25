@@ -165,6 +165,24 @@ export interface IterationLogEntry {
   isTargetedRefinement?: boolean; // For targeted section refinement (True if entryType is 'targeted_refinement')
   targetedSelection?: string;
   targetedRefinementInstructions?: string;
+  isCriticalFailure?: boolean; // Added
+}
+
+// Development Log & Roadmap Types
+export type DevLogEntryType = 'issue' | 'fix' | 'feature' | 'decision' | 'note';
+export type DevLogEntryStatus = 'open' | 'in_progress' | 'resolved' | 'implemented' | 'closed' | 'deferred';
+
+export interface DevLogEntry {
+  id: string; // UUID
+  timestamp: number;
+  lastModified: number;
+  type: DevLogEntryType;
+  summary: string; // Short description
+  details?: string; // Longer description, steps to reproduce, proposed solution, etc. (Markdown supported)
+  status: DevLogEntryStatus;
+  relatedIteration?: number; // Optional link to an iteration number
+  tags?: string[]; // e.g., ["UI", "Gemini API", "Performance"]
+  resolution?: string; // For 'fix' or 'resolved' issues
 }
 
 export interface AutologosIterativeEngineData {
@@ -200,12 +218,13 @@ export interface AutologosIterativeEngineData {
   inputComplexity?: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
   strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
+  devLog?: DevLogEntry[]; // Added Development Log
 }
 
 export interface AutologosProjectFile {
   header: ProjectFileHeader;
   applicationData: {
-    [appId: string]: any;
+    [appId: string]: any; // Should be AutologosIterativeEngineData for THIS_APP_ID
   };
 }
 
@@ -254,24 +273,26 @@ export interface PromptLeakageDetailValue {
 
 export interface AiResponseValidationInfo {
   checkName: string;
-  passed: boolean;
+  passed: boolean; // True if validation passed (no error/warning), False if error/warning detected
   reason?: string;
   details?: {
     type:
-      | 'error_phrase'
-      | 'empty_json'
-      | 'invalid_json'
-      | 'passed'
-      | 'extreme_reduction_error'
-      | 'drastic_reduction_error_plan_mode'
-      | 'drastic_reduction_tolerated_global_mode'
-      | 'prompt_leakage'
-      | 'extreme_reduction_tolerated_global_mode'
-      | 'error_phrase_with_significant_reduction'
-      | 'extreme_reduction_instructed_but_with_error_phrase'
-      | 'drastic_reduction_with_error_phrase'
-      | 'initial_synthesis_failed_large_output'
-      | 'catastrophic_collapse'; 
+      | 'error_phrase'                             // Critical: Generic error phrase detected
+      | 'empty_json'                               // Critical: Empty response when JSON expected
+      | 'invalid_json'                             // Critical: Malformed JSON when expected
+      | 'passed'                                   // Info: All checks passed
+      | 'prompt_leakage'                           // Critical: Prompt content detected in response
+      | 'initial_synthesis_failed_large_output'    // Critical: Iteration 1 output too large vs input
+      | 'catastrophic_collapse'                    // Critical: Output became trivially small uninstructed
+      | 'error_phrase_with_significant_reduction'  // Critical: Error phrase + significant uninstructed reduction
+      | 'extreme_reduction_error'                  // Critical: Uninstructed extreme reduction (e.g., Plan Mode)
+      | 'extreme_reduction_instructed_but_with_error_phrase' // Critical: Instructed extreme reduction + error phrase
+      | 'extreme_reduction_tolerated_global_mode'  // Info: Extreme reduction in Global Mode, no other errors
+      | 'extreme_reduction_tolerated_instruction'  // Info: Extreme reduction, but was instructed
+      | 'drastic_reduction_error_plan_mode'        // Critical: Uninstructed drastic reduction in Plan Mode
+      | 'drastic_reduction_with_error_phrase'      // Critical: Drastic reduction + error phrase
+      | 'drastic_reduction_tolerated_global_mode'  // Info: Drastic reduction in Global Mode, no other errors
+      | 'drastic_reduction_tolerated_instruction'; // Info: Drastic reduction, but was instructed
     value?: string | ReductionDetailValue | PromptLeakageDetailValue | { [key: string]: any };
   };
 }
@@ -339,12 +360,13 @@ export interface ProcessState {
   isTargetedRefinementModalOpen?: boolean;
   currentTextSelectionForRefinement?: string | null;
   instructionsForSelectionRefinement?: string;
-  isEditingCurrentProduct?: boolean; // New: For manual edit mode UI
-  editedProductBuffer?: string | null; // New: Buffer for manual edits
+  isEditingCurrentProduct?: boolean; 
+  editedProductBuffer?: string | null; 
+  devLog?: DevLogEntry[]; // Added Development Log
 }
 
 export interface IsLikelyAiErrorResponseResult {
-  isError: boolean;
+  isError: boolean; // True if a validation rule considered it an error that should potentially halt or retry
   reason: string;
   checkDetails: AiResponseValidationInfo['details'];
 }

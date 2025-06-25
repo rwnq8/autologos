@@ -1,6 +1,6 @@
 
 import React, { useContext } from 'react';
-import type { IterationLogEntry, PlanStage } from '../types'; // Removed unused ReconstructedProductResult and DiffViewType
+import type { IterationLogEntry, PlanStage } from '../types.ts'; // Removed unused ReconstructedProductResult and DiffViewType
 import { generateFileName } from '../services/utils';
 import { useApplicationContext } from '../contexts/ApplicationContext';
 import { useProcessContext } from '../contexts/ProcessContext';

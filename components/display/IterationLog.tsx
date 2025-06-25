@@ -1,9 +1,10 @@
 
 
 
+
 import React, { useState, useContext } from 'react';
 import type { IterationLogEntry, ReconstructedProductResult, DiffViewType } from '../../types'; 
-import LogEntryItem from './LogEntryItem';
+import { LogEntryItem } from './LogEntryItem';
 import { useProcessContext } from '../../contexts/ProcessContext';
 import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter'; // Import the new formatter
 
@@ -89,3 +90,4 @@ const IterationLog: React.FC<IterationLogProps> = ({
 };
 
 export default IterationLog;
+    

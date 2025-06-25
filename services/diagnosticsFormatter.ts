@@ -46,13 +46,24 @@ export const formatLogEntryDiagnostics = (
         if (typeof logEntry.aiValidationInfo.details.value === 'string') {
             diagString += `  Details Value: "${logEntry.aiValidationInfo.details.value}"\n`;
         } else if (logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'object') {
-             if ('marker' in logEntry.aiValidationInfo.details.value && 'snippet' in logEntry.aiValidationInfo.details.value) {
-                const promptLeak = logEntry.aiValidationInfo.details.value as PromptLeakageDetailValue;
-                diagString += `  Details Marker: "${promptLeak.marker}"\n`;
-                diagString += `  Details Snippet: "${promptLeak.snippet}"\n`;
-            } else {
-                diagString += `  Details Value: ${JSON.stringify(logEntry.aiValidationInfo.details.value, null, 2)}\n`;
+             const detailsValue = logEntry.aiValidationInfo.details.value as any;
+             if ('marker' in detailsValue && 'snippet' in detailsValue) { // PromptLeakageDetailValue
+                diagString += `    Marker: "${detailsValue.marker}"\n`;
+                diagString += `    Snippet: "${detailsValue.snippet}"\n`;
+            } else if ('previousLengthChars' in detailsValue && 'newLengthChars' in detailsValue) { // ReductionDetailValue
+                diagString += `    Previous Length (Chars): ${detailsValue.previousLengthChars}\n`;
+                diagString += `    New Length (Chars): ${detailsValue.newLengthChars}\n`;
+                diagString += `    Previous Word Count: ${detailsValue.previousWordCount}\n`;
+                diagString += `    New Word Count: ${detailsValue.newWordCount}\n`;
+                diagString += `    Char Change (%): ${detailsValue.percentageCharChange}%\n`;
+                diagString += `    Word Change (%): ${detailsValue.percentageWordChange}%\n`;
+                diagString += `    Threshold Used: ${detailsValue.thresholdUsed}\n`;
+                if (detailsValue.additionalInfo) diagString += `    Additional Info: ${detailsValue.additionalInfo}\n`;
+            } else { // Fallback for other object types
+                diagString += `  Details Value (Object): ${JSON.stringify(logEntry.aiValidationInfo.details.value, null, 2)}\n`;
             }
+        } else {
+            diagString += `  Details Value: N/A or Unhandled Type\n`;
         }
     }
   }

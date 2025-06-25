@@ -1,6 +1,7 @@
 
+
 import React, { useEffect, useCallback, useRef, useState } from 'react';
-import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType } from './types.ts';
+import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType, DevLogEntry } from './types.ts'; // Added DevLogEntry
 import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION } from './types.ts';
 import * as GeminaiService from './services/geminiService';
 import { DEFAULT_PROJECT_NAME_FALLBACK, INITIAL_PROJECT_NAME_STATE, generateFileName } from './services/utils';
@@ -27,7 +28,7 @@ import ErrorBoundary from './components/shared/ErrorBoundary';
 
 
 const App: React.FC = () => {
-  const { state: processState, updateProcessState, handleLoadedFilesChange, addLogEntry: addLogEntryFromHook, handleReset: processStateResetHook, handleInitialPromptChange } = useProcessState();
+  const { state: processState, updateProcessState, handleLoadedFilesChange, addLogEntry: addLogEntryFromHook, handleReset: processStateResetHook, handleInitialPromptChange, addDevLogEntry, updateDevLogEntry, deleteDevLogEntry } = useProcessState(); // Added devLog management functions
   const { savedPlanTemplates, handleSavePlanAsTemplate, handleDeletePlanTemplate, planTemplateStatusMessage, clearPlanTemplateStatusMessage, loadUserTemplates, overwriteUserTemplates } = usePlanTemplates();
 
   const debouncedLoadedFilesCount = useDebounce(processState.loadedFiles.length, 750);
@@ -196,8 +197,9 @@ const App: React.FC = () => {
         isTargetedRefinementModalOpen: false,
         currentTextSelectionForRefinement: null,
         instructionsForSelectionRefinement: "",
-        isEditingCurrentProduct: false, // Reset manual edit state
-        editedProductBuffer: null,    // Reset manual edit state
+        isEditingCurrentProduct: false, 
+        editedProductBuffer: null,
+        devLog: [], // Also reset devLog on full app reset    
     });
     clearCooldownTimer();
     setIsApiRateLimitedLocal(false);
@@ -365,12 +367,13 @@ const App: React.FC = () => {
     });
   };
 
-  const submitTargetedRefinement = () => {
+  const submitTargetedRefinement = async () => {
     if (processState.currentTextSelectionForRefinement && processState.instructionsForSelectionRefinement) {
-      iterativeLogicInstance.handleStart({
+      await iterativeLogicInstance.handleStart({
         isTargetedRefinement: true,
         targetedSelection: processState.currentTextSelectionForRefinement,
         targetedInstructions: processState.instructionsForSelectionRefinement,
+        userRawPromptForContextualizer: processState.instructionsForSelectionRefinement, // Pass refinement instructions for contextualizer
       });
     }
     closeTargetedRefinementModal();
@@ -444,13 +447,22 @@ const App: React.FC = () => {
     handleLoadedFilesChange,
     handleInitialPromptChange,
     addLogEntry: addLogEntryForContext, handleResetApp,
-    handleStartProcess: (options?: { isTargetedRefinement?: boolean; targetedSelection?: string; targetedInstructions?: string; }) => iterativeLogicInstance.handleStart(options),
+    handleStartProcess: async (options?: { isTargetedRefinement?: boolean; targetedSelection?: string; targetedInstructions?: string; userRawPromptForContextualizer?: string}) => {
+      const promptForContextualizer = options?.isTargetedRefinement 
+                                        ? options.targetedInstructions
+                                        : (processState.initialPrompt || "General refinement request");
+      await iterativeLogicInstance.handleStart({...options, userRawPromptForContextualizer: promptForContextualizer });
+    },
     handleHaltProcess: iterativeLogicInstance.handleHalt,
     handleRewind, handleExportIterationMarkdown,
     reconstructProductCallback: (iter: number, hist: IterationLogEntry[], base: string) => reconstructProduct(iter, hist, base),
     openTargetedRefinementModal,
-    toggleEditMode, // New handler for manual edit
-    saveManualEdits, // New handler for manual edit
+    toggleEditMode, 
+    saveManualEdits,
+    // DevLog functions
+    addDevLogEntry,
+    updateDevLogEntry,
+    deleteDevLogEntry,
   };
 
   const modelConfigContextValue: ModelConfigContextType = {

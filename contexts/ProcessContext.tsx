@@ -1,3 +1,4 @@
+
 // contexts/ProcessContext.tsx
 
 
@@ -16,7 +17,8 @@ import type {
   SelectableModelName,
   StagnationInfo, 
   PlanTemplate,
-  IterationEntryType // Added
+  IterationEntryType, // Added
+  DevLogEntry // Added
 } from '../types';
 
 export type AddLogEntryType = (logData: {
@@ -62,15 +64,20 @@ export interface ProcessContextType extends Omit<ProcessState,
   handleLoadedFilesChange: (files: LoadedFile[], action?: 'add' | 'remove' | 'clear') => void;
   addLogEntry: AddLogEntryType;
   handleResetApp: () => Promise<void>; 
-  handleStartProcess: (options?: { isTargetedRefinement?: boolean; targetedSelection?: string; targetedInstructions?: string; }) => Promise<void>;
+  handleStartProcess: (options?: { 
+    isTargetedRefinement?: boolean; 
+    targetedSelection?: string; 
+    targetedInstructions?: string; 
+    userRawPromptForContextualizer?: string; // Added for DevLog context
+  }) => Promise<void>;
   handleHaltProcess: () => void;
   handleRewind: (iterationNumber: number) => void;
   handleExportIterationMarkdown: (iterationNumber: number) => void;
   reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[], basePrompt: string) => ReconstructedProductResult;
   handleInitialPromptChange: (newPromptText: string) => void;
   openTargetedRefinementModal: (selectedText: string) => void;
-  toggleEditMode: (forceOff?: boolean) => void; // New
-  saveManualEdits: () => Promise<void>; // New
+  toggleEditMode: (forceOff?: boolean) => void; 
+  saveManualEdits: () => Promise<void>; 
 
   initialPrompt: string;
   currentProduct: string | null;
@@ -105,8 +112,13 @@ export interface ProcessContextType extends Omit<ProcessState,
   activeMetaInstructionForNextIter?: string;
   strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
-  isEditingCurrentProduct?: boolean; // New from ProcessState
-  editedProductBuffer?: string | null; // New from ProcessState
+  isEditingCurrentProduct?: boolean; 
+  editedProductBuffer?: string | null; 
+  devLog?: DevLogEntry[]; // Added
+  // DevLog management functions
+  addDevLogEntry: (newEntryData: Omit<DevLogEntry, 'id' | 'timestamp' | 'lastModified'>) => void;
+  updateDevLogEntry: (updatedEntry: DevLogEntry) => void;
+  deleteDevLogEntry: (entryId: string) => void;
 }
 
 const ProcessContext = createContext<ProcessContextType | undefined>(undefined);

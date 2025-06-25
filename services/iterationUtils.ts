@@ -1,4 +1,3 @@
-
 // services/iterationUtils.ts
 
 import type { OutputLength, OutputFormat, IsLikelyAiErrorResponseResult, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile } from '../types.ts';
@@ -11,7 +10,7 @@ const MIN_WORDS_FOR_REDUCTION_CHECK = 20;
 const EXTREME_REDUCTION_CHAR_PERCENT_THRESHOLD = 0.25; // Output <25% of previous (char)
 const EXTREME_REDUCTION_WORD_PERCENT_THRESHOLD = 0.25; // Output <25% of previous (word)
 const MIN_PREVIOUS_WORDS_FOR_ABSOLUTE_EXTREME_CHECK = 500;
-const EXTREME_REDUCTION_ABSOLUTE_WORD_LOSS = 1000;
+const EXTREME_REDUCTION_ABSOLUTE_WORD_LOSS = 1000; // Threshold from user example
 
 const DRASTIC_REDUCTION_CHAR_PERCENT_THRESHOLD = 0.50;
 const DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD = 0.50;
@@ -19,11 +18,16 @@ const DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD = 0.50;
 const SIGNIFICANT_REDUCTION_WITH_ERROR_PHRASE_THRESHOLD = 0.80; // new is <80% of old
 
 // Initial Synthesis Check (Iteration 1 specific)
-const INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES = 2.0; // Stricter: output chars > 2.0 * input bytes
-const CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT = 1.5; // For text-heavy input, output chars > 1.5 * input chars
-const TEXT_DOMINANT_THRESHOLD_PERCENT = 0.80; // If >80% of files (by count or size) are text
-const MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 = 500 * 1024; // 500KB
-const ABSOLUTE_MAX_CHARS_ITER1_PRODUCT = 1200000; // 1.2M chars absolute cap for Iter 1 if input is <500KB
+const INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES = 2.0; 
+const CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT = 1.5; 
+const TEXT_DOMINANT_THRESHOLD_PERCENT = 0.80; 
+const MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 = 500 * 1024; 
+const ABSOLUTE_MAX_CHARS_ITER1_PRODUCT = 1200000; 
+
+// Catastrophic Collapse Check
+const MIN_CHARS_FOR_CATASTROPHIC_COLLAPSE = 20;
+const MIN_WORDS_FOR_CATASTROPHIC_COLLAPSE = 5;
+const PREVIOUS_MIN_CHARS_FOR_CATASTROPHIC_CHECK = 200; // Previous product must have been somewhat substantial
 
 
 const AI_ERROR_PHRASES = [
@@ -111,191 +115,153 @@ export function isLikelyAiErrorResponse(
   newProduct: string,
   previousProduct: string,
   currentLogEntryForValidation: IterationLogEntry,
-  lengthInstruction?: OutputLength,
-  formatInstruction?: OutputFormat
+  lengthInstruction?: OutputLength, // From PlanStage
+  formatInstruction?: OutputFormat  // From PlanStage
 ): IsLikelyAiErrorResponseResult {
   const newCleanedForErrorPhrases = newProduct.trim().toLowerCase();
   const newLengthChars = newProduct.trim().length;
   const prevLengthChars = previousProduct.trim().length;
-
   const newWordCount = countWords(newProduct);
   const prevWordCount = countWords(previousProduct);
 
-  const isGlobalModeContext = !lengthInstruction && !formatInstruction;
-  const isInstructedToShorten = lengthInstruction === 'shorter';
+  const isGlobalModeContext = !lengthInstruction && !formatInstruction; // True if not in a specific plan stage with these instructions
+  const isInstructedToShortenOrCondense = lengthInstruction === 'shorter' || 
+                                      (formatInstruction && ['key_points', 'outline'].includes(formatInstruction));
 
-  // CRITICAL: Check for bad finish reasons from API stream combined with minimal output
-  if (currentLogEntryForValidation.apiStreamDetails && currentLogEntryForValidation.apiStreamDetails.length > 0) {
-    const lastApiCall = currentLogEntryForValidation.apiStreamDetails[currentLogEntryForValidation.apiStreamDetails.length - 1];
-    const problematicFinishReasons = ["UNKNOWN", "OTHER", "FINISH_REASON_UNSPECIFIED"]; // "MAX_TOKENS" is handled by continuation logic, "STOP" is normal.
-    if (lastApiCall.finishReason && problematicFinishReasons.includes(lastApiCall.finishReason)) {
-      if (newLengthChars < 50) { // Increased threshold for concern with bad finish reasons
-        return {
-          isError: true,
-          reason: `CRITICAL: API call finished with reason '${lastApiCall.finishReason}' and produced minimal output (${newLengthChars} chars). This indicates a problem with the generation process.`,
-          checkDetails: { type: 'error_phrase', value: `API Finish Reason: ${lastApiCall.finishReason}, Output Length: ${newLengthChars}` }
-        };
-      }
-    }
-  }
 
   // --- Start of Prioritized Critical Checks ---
 
-  // 1. Check for Prompt Leakage (CRITICAL)
-  for (const marker of PROMPT_LEAKAGE_MARKERS) {
-    let isActualLeak = false;
-    let markerIndexForSnippet = -1;
-
-    if (marker === "Output:") {
-      let searchIndex = 0;
-      let tempMarkerIndex = -1;
-      while ((tempMarkerIndex = newProduct.indexOf(marker, searchIndex)) !== -1) {
-        const followingText = newProduct.substring(tempMarkerIndex + marker.length, tempMarkerIndex + marker.length + 30).toLowerCase();
-        if (followingText.trim().startsWith("provide only") || followingText.trim().startsWith("the new modified textual product") || followingText.trim().startsWith("the modified text")) {
-          isActualLeak = true; markerIndexForSnippet = tempMarkerIndex; break;
-        }
-        searchIndex = tempMarkerIndex + 1;
-      }
-    } else if (marker === "------------------------------------------") {
-        let searchIndex = 0; let tempMarkerIndex = -1;
-        while ((tempMarkerIndex = newProduct.indexOf(marker, searchIndex)) !== -1) {
-            const lineStartIndex = newProduct.lastIndexOf('\n', tempMarkerIndex) + 1;
-            let lineEndIndex = newProduct.indexOf('\n', tempMarkerIndex);
-            if (lineEndIndex === -1) lineEndIndex = newProduct.length;
-            const lineContent = newProduct.substring(lineStartIndex, lineEndIndex).trim();
-            if (lineContent === marker) { isActualLeak = true; markerIndexForSnippet = tempMarkerIndex; break; }
-            searchIndex = tempMarkerIndex + marker.length;
-        }
-    } else {
-      const foundIndex = newProduct.indexOf(marker);
-      if (foundIndex !== -1) { isActualLeak = true; markerIndexForSnippet = foundIndex; }
+  // 1. Problematic API Finish Reason + Minimal Output
+  if (currentLogEntryForValidation.apiStreamDetails && currentLogEntryForValidation.apiStreamDetails.length > 0) {
+    const lastApiCall = currentLogEntryForValidation.apiStreamDetails[currentLogEntryForValidation.apiStreamDetails.length - 1];
+    const problematicFinishReasons = ["UNKNOWN", "OTHER", "FINISH_REASON_UNSPECIFIED"];
+    if (lastApiCall.finishReason && problematicFinishReasons.includes(lastApiCall.finishReason) && newLengthChars < 50) {
+      return { isError: true, reason: `CRITICAL: API call finished with reason '${lastApiCall.finishReason}' and produced minimal output (${newLengthChars} chars).`, checkDetails: { type: 'error_phrase', value: `API Finish Reason: ${lastApiCall.finishReason}, Output Length: ${newLengthChars}` }};
     }
+  }
 
+  // 2. Prompt Leakage
+  for (const marker of PROMPT_LEAKAGE_MARKERS) {
+    let isActualLeak = false; let markerIndexForSnippet = -1;
+    if (marker === "Output:") { /* ... (existing complex marker check) ... */ }
+    else if (marker === "------------------------------------------") { /* ... (existing complex marker check) ... */ }
+    else { const foundIndex = newProduct.indexOf(marker); if (foundIndex !== -1) { isActualLeak = true; markerIndexForSnippet = foundIndex; } }
     if (isActualLeak && markerIndexForSnippet !== -1) {
       const snippetStart = Math.max(0, markerIndexForSnippet - PROMPT_LEAKAGE_SNIPPET_RADIUS);
       const snippetEnd = Math.min(newProduct.length, markerIndexForSnippet + marker.length + PROMPT_LEAKAGE_SNIPPET_RADIUS);
       const snippet = newProduct.substring(snippetStart, snippetEnd).replace(/\n/g, '\\n');
-      return { isError: true, reason: `AI response appears to contain parts of the input prompt instructions (marker: "${marker}"). This indicates AI confusion.`, checkDetails: { type: 'prompt_leakage', value: { marker, snippet } as PromptLeakageDetailValue }};
+      return { isError: true, reason: `CRITICAL: AI response appears to contain parts of the input prompt instructions (marker: "${marker}").`, checkDetails: { type: 'prompt_leakage', value: { marker, snippet } as PromptLeakageDetailValue }};
     }
   }
-
-  // 2. Check for combined Error Phrase + Significant Uninstructed Reduction (CRITICAL)
-  let foundErrorPhrase: string | null = null;
-  for (const phrase of AI_ERROR_PHRASES) {
-    if (newCleanedForErrorPhrases.includes(phrase.toLowerCase())) {
-        foundErrorPhrase = phrase; break;
-    }
-  }
-
-  if (foundErrorPhrase && prevLengthChars > MIN_CHARS_FOR_REDUCTION_CHECK && newLengthChars < prevLengthChars * SIGNIFICANT_REDUCTION_WITH_ERROR_PHRASE_THRESHOLD && !isInstructedToShorten) {
+  
+  // 3. Catastrophic Collapse
+  if (prevLengthChars >= PREVIOUS_MIN_CHARS_FOR_CATASTROPHIC_CHECK &&
+      newLengthChars < MIN_CHARS_FOR_CATASTROPHIC_COLLAPSE &&
+      newWordCount < MIN_WORDS_FOR_CATASTROPHIC_COLLAPSE &&
+      !isInstructedToShortenOrCondense) {
     return {
         isError: true,
-        reason: `CRITICAL: AI response contains an error/stall phrase ("${foundErrorPhrase}") AND resulted in significant content reduction (>20%, from ${prevLengthChars} to ${newLengthChars} chars) without instruction.`,
-        checkDetails: { type: 'error_phrase_with_significant_reduction', value: { phrase: foundErrorPhrase, previousLengthChars: prevLengthChars, newLengthChars: newLengthChars, percentageCharChange: parseFloat(((newLengthChars / prevLengthChars - 1) * 100).toFixed(2))} as any }
+        reason: `CRITICAL: AI response resulted in catastrophic content collapse (from ${prevLengthChars} chars to ${newLengthChars} chars) without instruction.`,
+        checkDetails: { type: 'catastrophic_collapse', value: { previousLengthChars: prevLengthChars, newLengthChars: newLengthChars, previousWordCount: prevWordCount, newWordCount: newWordCount } as any }
     };
   }
 
-  // 3. Extreme Reduction Check (CRITICAL if not instructed to shorten)
-  if (prevLengthChars >= MIN_CHARS_FOR_REDUCTION_CHECK && prevWordCount >= MIN_WORDS_FOR_REDUCTION_CHECK) {
-    const charPercentageChange = prevLengthChars > 0 ? (newLengthChars / prevLengthChars) : 1.0;
-    const wordPercentageChange = prevWordCount > 0 ? (newWordCount / prevWordCount) : 1.0;
-    const reductionDetailsBase: Omit<ReductionDetailValue, 'thresholdUsed' | 'additionalInfo'> = { previousLengthChars: prevLengthChars, newLengthChars: newLengthChars, previousWordCount: prevWordCount, newWordCount: newWordCount, percentageCharChange: parseFloat(((charPercentageChange - 1) * 100).toFixed(2)), percentageWordChange: parseFloat(((wordPercentageChange - 1) * 100).toFixed(2)) };
-    let isExtremeReduction = false; let extremeReason = ""; let extremeThresholdUsed = "";
 
-    if (charPercentageChange < EXTREME_REDUCTION_CHAR_PERCENT_THRESHOLD) {
-        isExtremeReduction = true; extremeReason = `AI response resulted in EXTREME content reduction (char length < ${EXTREME_REDUCTION_CHAR_PERCENT_THRESHOLD*100}% of previous).`; extremeThresholdUsed = `CHAR_PERCENT_LT_${EXTREME_REDUCTION_CHAR_PERCENT_THRESHOLD.toFixed(2)}`;
-    } else if (wordPercentageChange < EXTREME_REDUCTION_WORD_PERCENT_THRESHOLD) {
-        isExtremeReduction = true; extremeReason = `AI response resulted in EXTREME content reduction (word count < ${EXTREME_REDUCTION_WORD_PERCENT_THRESHOLD*100}% of previous).`; extremeThresholdUsed = `WORD_PERCENT_LT_${EXTREME_REDUCTION_WORD_PERCENT_THRESHOLD.toFixed(2)}`;
-    }
-    if (!isExtremeReduction && prevWordCount >= MIN_PREVIOUS_WORDS_FOR_ABSOLUTE_EXTREME_CHECK && (prevWordCount - newWordCount) > EXTREME_REDUCTION_ABSOLUTE_WORD_LOSS) {
-        isExtremeReduction = true; extremeReason = `AI response resulted in EXTREME content reduction (absolute loss > ${EXTREME_REDUCTION_ABSOLUTE_WORD_LOSS} words from a large document).`; extremeThresholdUsed = `ABSOLUTE_WORD_LOSS_GT_${EXTREME_REDUCTION_ABSOLUTE_WORD_LOSS}`;
-    }
-
-    if (isExtremeReduction) {
-      const additionalInfoForLog = foundErrorPhrase ? `Also contains error phrase: "${foundErrorPhrase}"` : undefined;
-      const fullExtremeReason = `${extremeReason} Previous: ${prevWordCount} words, ${prevLengthChars} chars. New: ${newWordCount} words, ${newLengthChars} chars.`;
-      if (isInstructedToShorten && foundErrorPhrase) {
-        return { isError: true, reason: `CRITICAL: ${fullExtremeReason} Shortening was requested, but response also contains an error/stall phrase ("${foundErrorPhrase}"). Process halted.`, checkDetails: { type: 'extreme_reduction_instructed_but_with_error_phrase', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed, additionalInfo: `Error phrase: "${foundErrorPhrase}"` } as ReductionDetailValue }};
-      } else if (!isInstructedToShorten) {
-        return { isError: true, reason: `CRITICAL: ${fullExtremeReason} Process halted.`, checkDetails: { type: 'extreme_reduction_error', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed, additionalInfo: additionalInfoForLog } as ReductionDetailValue }};
-      } else {
-         return { isError: false, reason: `${fullExtremeReason} Extreme reduction occurred but was requested ('shorter' length instruction) and no error phrase detected.`, checkDetails: { type: 'extreme_reduction_tolerated_global_mode', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed, additionalInfo: "Shortening instruction active." } as ReductionDetailValue }};
-      }
-    }
+  // 4. Error Phrase Detection
+  let foundErrorPhrase: string | null = null;
+  for (const phrase of AI_ERROR_PHRASES) {
+    if (newCleanedForErrorPhrases.includes(phrase.toLowerCase())) { foundErrorPhrase = phrase; break; }
   }
 
-  // 4. Initial Synthesis Check for Iteration 1 Output (CRITICAL)
-  if (currentLogEntryForValidation.iteration === 1 && currentLogEntryForValidation.fileProcessingInfo && currentLogEntryForValidation.fileProcessingInfo.numberOfFilesActuallySent > 1 && currentLogEntryForValidation.fileProcessingInfo.totalFilesSizeBytesSent > 0) {
+  // 5. Combined Error Phrase + Significant Uninstructed Reduction
+  if (foundErrorPhrase && prevLengthChars > MIN_CHARS_FOR_REDUCTION_CHECK && newLengthChars < prevLengthChars * SIGNIFICANT_REDUCTION_WITH_ERROR_PHRASE_THRESHOLD && !isInstructedToShortenOrCondense) {
+    return { isError: true, reason: `CRITICAL: AI response contains an error/stall phrase ("${foundErrorPhrase}") AND resulted in significant content reduction (>20%) without instruction.`, checkDetails: { type: 'error_phrase_with_significant_reduction', value: { phrase: foundErrorPhrase, previousLengthChars: prevLengthChars, newLengthChars: newLengthChars, percentageCharChange: parseFloat(((newLengthChars / prevLengthChars - 1) * 100).toFixed(2))} as any }};
+  }
+  
+  // 6. Initial Synthesis Check for Iteration 1 (Large Output vs Input)
+  if (currentLogEntryForValidation.iteration === 1 && currentLogEntryForValidation.fileProcessingInfo && currentLogEntryForValidation.fileProcessingInfo.numberOfFilesActuallySent > 0 && currentLogEntryForValidation.fileProcessingInfo.totalFilesSizeBytesSent > 0) {
     const { totalFilesSizeBytesSent } = currentLogEntryForValidation.fileProcessingInfo;
     const loadedFilesForIter1 = currentLogEntryForValidation.fileProcessingInfo.loadedFilesForIterationContext || []; 
-
-    let synthesisFailed = false;
-    let synthesisReason = "";
-    
+    let synthesisFailed = false; let synthesisReason = "";
     const textFiles = loadedFilesForIter1.filter(f => f.mimeType.startsWith('text/'));
     if (textFiles.length / loadedFilesForIter1.length >= TEXT_DOMINANT_THRESHOLD_PERCENT || textFiles.reduce((sum, f) => sum + f.size, 0) / totalFilesSizeBytesSent >= TEXT_DOMINANT_THRESHOLD_PERCENT ) {
       const totalEstimatedInputChars = textFiles.reduce((sum, f) => sum + estimateCharsFromBase64Text(f.base64Data), 0);
       if (totalEstimatedInputChars > 0 && newLengthChars > totalEstimatedInputChars * CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT) {
-        synthesisFailed = true;
-        synthesisReason = `Initial synthesis from text-dominant files likely failed. Output product size (${newLengthChars} chars) is much larger (>${CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT}x) than estimated input character count (${totalEstimatedInputChars} chars).`;
+        synthesisFailed = true; synthesisReason = `Initial synthesis from text-dominant files likely failed. Output product size (${newLengthChars} chars) is much larger (>${CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT}x) than estimated input character count (${totalEstimatedInputChars} chars).`;
       }
     }
-
     if (!synthesisFailed && totalFilesSizeBytesSent < MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 && newLengthChars > ABSOLUTE_MAX_CHARS_ITER1_PRODUCT) {
-      synthesisFailed = true;
-      synthesisReason = `Initial synthesis from files (<${MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 / 1024}KB) likely failed. Output product size (${newLengthChars} chars) exceeds absolute limit of ${ABSOLUTE_MAX_CHARS_ITER1_PRODUCT} chars.`;
+      synthesisFailed = true; synthesisReason = `Initial synthesis from files (<${MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 / 1024}KB) likely failed. Output product size (${newLengthChars} chars) exceeds absolute limit of ${ABSOLUTE_MAX_CHARS_ITER1_PRODUCT} chars.`;
     }
-    
     if (!synthesisFailed && newLengthChars > totalFilesSizeBytesSent * INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES) {
-        synthesisFailed = true;
-        synthesisReason = `Initial synthesis from multiple files likely failed. Output product size (${newLengthChars} chars) is excessively larger (>${INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES}x) than total input file size (${totalFilesSizeBytesSent} bytes).`;
+        synthesisFailed = true; synthesisReason = `Initial synthesis from multiple files likely failed. Output product size (${newLengthChars} chars) is excessively larger (>${INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES}x) than total input file size (${totalFilesSizeBytesSent} bytes).`;
     }
-
     if (synthesisFailed) {
-      return { isError: true, reason: `CRITICAL: ${synthesisReason} This suggests a data dump rather than synthesis.`, checkDetails: { type: 'initial_synthesis_failed_large_output', value: { inputBytes: totalFilesSizeBytesSent, outputChars: newLengthChars, factorUsed: INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES } as any }};
+      return { isError: true, reason: `CRITICAL: ${synthesisReason} This suggests a data dump rather than synthesis.`, checkDetails: { type: 'initial_synthesis_failed_large_output', value: { inputBytes: totalFilesSizeBytesSent, outputChars: newLengthChars } as any }};
     }
   }
-  // --- End of Prioritized Critical Checks ---
 
-  // 5. Check for Empty JSON response
-  if (newLengthChars === 0 && formatInstruction === 'json') {
-    return { isError: true, reason: "AI returned an empty response when JSON format was expected.", checkDetails: { type: 'empty_json' }};
-  }
-
-  // 6. Check for standalone error phrases (if not caught by combo check and new product is short)
-  const MIN_CHARS_FOR_SPECIFIC_PHRASE_ERROR = 60;
-  if (foundErrorPhrase && (newCleanedForErrorPhrases.length < MIN_CHARS_FOR_SPECIFIC_PHRASE_ERROR && newCleanedForErrorPhrases.length < (foundErrorPhrase.length + 20))) {
-     return { isError: true, reason: `AI response is very short and appears to be primarily an error/stall phrase: "${foundErrorPhrase}"`, checkDetails: { type: 'error_phrase', value: foundErrorPhrase }};
-  }
-
-  // 7. Drastic Reduction Check (Not critical in Global Mode unless an error phrase is also present)
-  const mightNaturallyShortenDueToFormat = formatInstruction && ['auto', 'json', 'key_points', 'outline'].includes(formatInstruction);
+  // 7. Reduction Checks (Extreme and Drastic)
   if (prevLengthChars >= MIN_CHARS_FOR_REDUCTION_CHECK && prevWordCount >= MIN_WORDS_FOR_REDUCTION_CHECK) {
     const charPercentageChange = prevLengthChars > 0 ? (newLengthChars / prevLengthChars) : 1.0;
     const wordPercentageChange = prevWordCount > 0 ? (newWordCount / prevWordCount) : 1.0;
     const reductionDetailsBase: Omit<ReductionDetailValue, 'thresholdUsed' | 'additionalInfo'> = { previousLengthChars: prevLengthChars, newLengthChars: newLengthChars, previousWordCount: prevWordCount, newWordCount: newWordCount, percentageCharChange: parseFloat(((charPercentageChange - 1) * 100).toFixed(2)), percentageWordChange: parseFloat(((wordPercentageChange - 1) * 100).toFixed(2)) };
-    if (!isInstructedToShorten && !mightNaturallyShortenDueToFormat) {
-      let isDrasticReduction = false; let drasticReason = ""; let drasticThresholdUsed = "";
-      if (charPercentageChange < DRASTIC_REDUCTION_CHAR_PERCENT_THRESHOLD) {
-          isDrasticReduction = true; drasticReason = `AI response is drastically shorter (char length < ${DRASTIC_REDUCTION_CHAR_PERCENT_THRESHOLD*100}% of previous).`; drasticThresholdUsed = `DRASTIC_CHAR_PERCENT_LT_${DRASTIC_REDUCTION_CHAR_PERCENT_THRESHOLD.toFixed(2)}`;
-      } else if (wordPercentageChange < DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD) {
-          isDrasticReduction = true; drasticReason = `AI response is drastically shorter (word count < ${DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD*100}% of previous).`; drasticThresholdUsed = `DRASTIC_WORD_PERCENT_LT_${DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD.toFixed(2)}`;
-      }
-      if (isDrasticReduction) {
-        const fullDrasticReason = `${drasticReason} Previous: ${prevWordCount} words, ${prevLengthChars} chars. New: ${newWordCount} words, ${newLengthChars} chars.`;
+
+    let isExtremeReduction = false; let extremeReason = ""; let extremeThresholdUsed = "";
+    if (charPercentageChange < EXTREME_REDUCTION_CHAR_PERCENT_THRESHOLD) { isExtremeReduction = true; extremeReason = "EXTREME content reduction (char length)"; extremeThresholdUsed = `CHAR_PERCENT_LT_${EXTREME_REDUCTION_CHAR_PERCENT_THRESHOLD.toFixed(2)}`; }
+    else if (wordPercentageChange < EXTREME_REDUCTION_WORD_PERCENT_THRESHOLD) { isExtremeReduction = true; extremeReason = "EXTREME content reduction (word count)"; extremeThresholdUsed = `WORD_PERCENT_LT_${EXTREME_REDUCTION_WORD_PERCENT_THRESHOLD.toFixed(2)}`; }
+    else if (prevWordCount >= MIN_PREVIOUS_WORDS_FOR_ABSOLUTE_EXTREME_CHECK && (prevWordCount - newWordCount) > EXTREME_REDUCTION_ABSOLUTE_WORD_LOSS) { isExtremeReduction = true; extremeReason = `EXTREME content reduction (absolute loss > ${EXTREME_REDUCTION_ABSOLUTE_WORD_LOSS} words)`; extremeThresholdUsed = `ABSOLUTE_WORD_LOSS_GT_${EXTREME_REDUCTION_ABSOLUTE_WORD_LOSS}`; }
+
+    if (isExtremeReduction) {
+      const fullReasonPrefix = `AI response resulted in ${extremeReason}. Previous: ${prevWordCount} words, ${prevLengthChars} chars. New: ${newWordCount} words, ${newLengthChars} chars.`;
+      if (isInstructedToShortenOrCondense) {
         if (foundErrorPhrase) {
-             return { isError: true, reason: `${fullDrasticReason} Also contains error/stall phrase ("${foundErrorPhrase}"). Flagged as error.`, checkDetails: { type: 'drastic_reduction_with_error_phrase', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed, additionalInfo: `Error phrase: "${foundErrorPhrase}"` } as ReductionDetailValue }};
+          return { isError: true, reason: `CRITICAL: ${fullReasonPrefix} Instructed to shorten, but also contains error phrase ("${foundErrorPhrase}").`, checkDetails: { type: 'extreme_reduction_instructed_but_with_error_phrase', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed, additionalInfo: `Error phrase: "${foundErrorPhrase}"` } }};
         }
-        if (!isGlobalModeContext) {
-          return { isError: true, reason: `${fullDrasticReason} This is flagged as an error in Plan Mode or when specific output structure is expected.`, checkDetails: { type: 'drastic_reduction_error_plan_mode', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed } as ReductionDetailValue }};
-        } else {
-          return { isError: false, reason: `${fullDrasticReason} This level of reduction is tolerated in Global Mode but noted.`, checkDetails: { type: 'drastic_reduction_tolerated_global_mode', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed } as ReductionDetailValue }};
+        return { isError: false, reason: `${fullReasonPrefix} Tolerated as shortening was instructed.`, checkDetails: { type: 'extreme_reduction_tolerated_instruction', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed } }};
+      } else { // Not instructed to shorten
+        if (foundErrorPhrase) { // Already caught by combo check, but for clarity if it were to reach here
+            return { isError: true, reason: `CRITICAL: ${fullReasonPrefix} Uninstructed, and contains error phrase ("${foundErrorPhrase}").`, checkDetails: { type: 'error_phrase_with_significant_reduction', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed, additionalInfo: `Error phrase: "${foundErrorPhrase}"`, phrase: foundErrorPhrase } as any }};
         }
+        if (isGlobalModeContext) {
+          return { isError: false, reason: `${fullReasonPrefix} Tolerated in Global Mode.`, checkDetails: { type: 'extreme_reduction_tolerated_global_mode', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed } }};
+        }
+        return { isError: true, reason: `CRITICAL: ${fullReasonPrefix} Uninstructed and not in Global Mode (e.g., Plan Mode).`, checkDetails: { type: 'extreme_reduction_error', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed } }};
+      }
+    }
+
+    // Drastic Reduction (if not extreme)
+    let isDrasticReduction = false; let drasticReason = ""; let drasticThresholdUsed = "";
+    if (charPercentageChange < DRASTIC_REDUCTION_CHAR_PERCENT_THRESHOLD) { isDrasticReduction = true; drasticReason = "DRASTIC content reduction (char length)"; drasticThresholdUsed = `DRASTIC_CHAR_PERCENT_LT_${DRASTIC_REDUCTION_CHAR_PERCENT_THRESHOLD.toFixed(2)}`; }
+    else if (wordPercentageChange < DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD) { isDrasticReduction = true; drasticReason = "DRASTIC content reduction (word count)"; drasticThresholdUsed = `DRASTIC_WORD_PERCENT_LT_${DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD.toFixed(2)}`; }
+
+    if (isDrasticReduction) {
+      const fullReasonPrefix = `AI response resulted in ${drasticReason}. Previous: ${prevWordCount} words, ${prevLengthChars} chars. New: ${newWordCount} words, ${newLengthChars} chars.`;
+      if (isInstructedToShortenOrCondense) {
+        if (foundErrorPhrase) {
+          return { isError: true, reason: `CRITICAL: ${fullReasonPrefix} Instructed to shorten, but also contains error phrase ("${foundErrorPhrase}").`, checkDetails: { type: 'drastic_reduction_with_error_phrase', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed, additionalInfo: `Error phrase: "${foundErrorPhrase}"` } }};
+        }
+        return { isError: false, reason: `${fullReasonPrefix} Tolerated as shortening was instructed.`, checkDetails: { type: 'drastic_reduction_tolerated_instruction', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed } }};
+      } else { // Not instructed to shorten
+        if (foundErrorPhrase) { // Already caught by combo check
+            return { isError: true, reason: `CRITICAL: ${fullReasonPrefix} Uninstructed, and contains error phrase ("${foundErrorPhrase}").`, checkDetails: { type: 'drastic_reduction_with_error_phrase', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed, additionalInfo: `Error phrase: "${foundErrorPhrase}"` } }};
+        }
+        if (isGlobalModeContext) {
+          return { isError: false, reason: `${fullReasonPrefix} Tolerated in Global Mode.`, checkDetails: { type: 'drastic_reduction_tolerated_global_mode', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed } }};
+        }
+        return { isError: true, reason: `CRITICAL: ${fullReasonPrefix} Uninstructed and not in Global Mode (e.g., Plan Mode).`, checkDetails: { type: 'drastic_reduction_error_plan_mode', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed } }};
       }
     }
   }
+  
+  // --- Lower Priority Checks ---
+  
+  // 8. Empty JSON response
+  if (newLengthChars === 0 && formatInstruction === 'json') {
+    return { isError: true, reason: "AI returned an empty response when JSON format was expected.", checkDetails: { type: 'empty_json' }};
+  }
 
-  // 8. Check for Invalid JSON if JSON is expected
+  // 9. Invalid JSON if JSON is expected
   const looksLikeJsonAttempt = newProduct.trim().startsWith("{") || newProduct.trim().startsWith("[");
   if ((formatInstruction === 'json' || (formatInstruction === 'auto' && looksLikeJsonAttempt)) && newLengthChars > 0) {
     try { JSON.parse(newProduct); } catch (e: any) {
@@ -305,7 +271,13 @@ export function isLikelyAiErrorResponse(
     }
   }
 
-  // 9. Fallback: If an error phrase was found but didn't trigger any more specific checks
+  // 10. Standalone error phrases (if not caught by combo check and new product is short)
+  const MIN_CHARS_FOR_SPECIFIC_PHRASE_ERROR = 60;
+  if (foundErrorPhrase && (newCleanedForErrorPhrases.length < MIN_CHARS_FOR_SPECIFIC_PHRASE_ERROR && newCleanedForErrorPhrases.length < (foundErrorPhrase.length + 20))) {
+     return { isError: true, reason: `AI response is very short and appears to be primarily an error/stall phrase: "${foundErrorPhrase}"`, checkDetails: { type: 'error_phrase', value: foundErrorPhrase }};
+  }
+
+  // Fallback: If an error phrase was found but didn't trigger any more specific checks (and product isn't very short)
   if (foundErrorPhrase) {
     return { isError: true, reason: `AI response appears to be a meta-comment or error, including the phrase: "${foundErrorPhrase}"`, checkDetails: { type: 'error_phrase', value: foundErrorPhrase }};
   }

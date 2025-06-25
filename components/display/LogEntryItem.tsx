@@ -19,7 +19,25 @@ interface LogEntryItemProps {
   isProcessing: boolean;
 }
 
-const LogEntryItem: React.FC<LogEntryItemProps> = ({
+// Helper function to determine the title for the diff section
+const getDiffTitle = (entry: IterationLogEntry): string => {
+  if (entry.entryType === 'initial_state' && entry.iteration === 0) {
+    return "Initial Product";
+  }
+  if (entry.entryType === 'segmented_synthesis_milestone' && entry.iteration === 1) {
+    return `Changes from Iteration 0 (Full Product after Segmented Synthesis)`;
+  }
+  // For all other cases, including AI iterations, manual edits, targeted refinements
+  // that are not Iteration 0 or the special Iteration 1 milestone.
+  if (entry.iteration > 0) {
+    return `Changes from Iteration ${entry.iteration - 1}`;
+  }
+  // Fallback for Iteration 0 if not 'initial_state' (should not happen with good data)
+  // or other unexpected scenarios.
+  return `Product at Iteration ${entry.iteration}`;
+};
+
+export const LogEntryItem: React.FC<LogEntryItemProps> = ({
   logEntry,
   isExpanded,
   onToggleExpand,
@@ -31,9 +49,14 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
 }) => {
   const { initialPrompt: baseInitialPrompt } = useProcessContext(); 
   const [expandedDiagnostics, setExpandedDiagnostics] = useState<{ [key: string]: boolean }>({});
+  const [expandedPrompts, setExpandedPrompts] = useState<{ [key: string]: boolean }>({});
 
   const toggleDiagnosticSection = (key: string) => {
     setExpandedDiagnostics(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+  
+  const togglePromptExpansion = (key: string) => {
+    setExpandedPrompts(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
   const [localCopyStatus, setLocalCopyStatus] = useState<string | undefined>(undefined);
@@ -80,7 +103,7 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
   let diffDisplayComponent: JSX.Element[] | null = null;
   let netWordChange: number | undefined = undefined;
 
-  const isAiEntry = !logEntry.entryType || logEntry.entryType === 'ai_iteration' || logEntry.entryType === 'targeted_refinement' || logEntry.entryType === 'segmented_synthesis_milestone';
+  const isAiEntry = logEntry.entryType === 'ai_iteration' || logEntry.entryType === 'targeted_refinement' || logEntry.entryType === 'segmented_synthesis_milestone';
 
 
   if (isExpanded) {
@@ -91,35 +114,21 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
 
       newTextResult = reconstructProductCallback(logEntry.iteration, iterationHistory);
 
-      if (logEntry.iteration === 0 && logEntry.entryType === 'initial_state') {
+      if (logEntry.entryType === 'initial_state' && logEntry.iteration === 0) {
          oldTextResult = { product: "", error: undefined }; // Diff initial state from empty
+      } else if (logEntry.entryType === 'segmented_synthesis_milestone' && logEntry.iteration === 1) {
+         // Diff segmented synthesis result from the initial state (Iter 0)
+         oldTextResult = reconstructProductCallback(0, iterationHistory);
       } else {
-        // Find the true previous textual state, skipping non-textual or intermediate log entries if needed
-        let previousMeaningfulIter = logEntry.iteration -1;
-        if(logEntry.entryType === 'manual_edit' || logEntry.entryType === 'ai_iteration' || logEntry.entryType === 'targeted_refinement' || logEntry.entryType === 'segmented_synthesis_milestone') {
-            // For manual edit, diff against the product of the same iteration number but previous entryType (likely 'ai_iteration' or 'initial_state')
-            // Or if it's an AI iter, diff against the actual previous iteration number's final state.
-            // This logic might need refinement if multiple non-AI entries can occur for the same iter number.
-            // For simplicity, for now, a manual edit at iter X diffs from product of AI iter X-1 or initial state.
-            // AI iter X diffs from product of Manual Edit iter X or AI iter X-1 etc.
-            // The reconstructProduct should handle finding the correct state based on the iteration number.
-             oldTextResult = reconstructProductCallback(logEntry.iteration -1 , iterationHistory); // Default to iter-1
-             const sameIterPrevEntries = iterationHistory.filter(e => e.iteration === logEntry.iteration && e.timestamp < logEntry.timestamp);
-             if (sameIterPrevEntries.length > 0) {
-                 // If there's a previous entry for the same iteration number (e.g. AI iter, then manual edit)
-                 // this logic is simplified because reconstructProduct(iter) gives the state *after* iter.
-                 // So for a manual edit at iter X, we need the product *before* this manual edit,
-                 // which is effectively the product of iter X from the AI or iter X-1 if no prior iter X entry.
-                 // This current diff logic might show diffs from iter X-1 for a manual edit at iter X, which is acceptable for showing overall change.
-             }
-        } else {
-            oldTextResult = reconstructProductCallback(logEntry.iteration -1 , iterationHistory);
-        }
+        // For other AI iterations, manual edits, targeted refinements, diff from previous iteration's state
+         oldTextResult = reconstructProductCallback(logEntry.iteration - 1 , iterationHistory);
       }
 
-      if (newTextResult.error && oldTextResult.error && !(logEntry.iteration === 0 && logEntry.entryType === 'initial_state')) overallReconstructionError = `Error reconstructing Iter. ${logEntry.iteration}: ${newTextResult.error}\nError reconstructing Prev. Iter. (${logEntry.iteration - 1}): ${oldTextResult.error}`;
+      if (newTextResult.error && oldTextResult.error && !(logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) {
+        overallReconstructionError = `Error reconstructing Iter. ${logEntry.iteration}: ${newTextResult.error}\nError reconstructing Prev. Iter. (${logEntry.iteration -1}): ${oldTextResult.error}`;
+      }
       else if (newTextResult.error) overallReconstructionError = `Error reconstructing Iteration ${logEntry.iteration}: ${newTextResult.error}`;
-      else if (oldTextResult.error && !(logEntry.iteration === 0 && logEntry.entryType === 'initial_state')) overallReconstructionError = `Error reconstructing Previous Iteration (${logEntry.iteration - 1}): ${oldTextResult.error}`;
+      else if (oldTextResult.error && !(logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) overallReconstructionError = `Error reconstructing Previous Iteration (${logEntry.iteration -1}): ${oldTextResult.error}`;
 
 
       if (overallReconstructionError) {
@@ -143,25 +152,21 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
   
   const canRewind = logEntry.iteration >= 0 && !isProcessing;
   const iterZeroResultForExportCheck = logEntry.iteration === 0 ? reconstructProductCallback(0, iterationHistory) : null;
-  const canExportIteration = (logEntry.iteration === 0 && iterZeroResultForExportCheck && !iterZeroResultForExportCheck.error && iterZeroResultForExportCheck.product.trim() !== "") || (logEntry.iteration > 0 && logEntry.productDiff && logEntry.productDiff.trim() !== "");
+  const canExportIteration = 
+    (logEntry.entryType === 'initial_state' && logEntry.iteration === 0 && iterZeroResultForExportCheck && !iterZeroResultForExportCheck.error && iterZeroResultForExportCheck.product.trim() !== "") ||
+    (logEntry.entryType === 'segmented_synthesis_milestone' && logEntry.iteration === 1) ||
+    (logEntry.iteration > 0 && logEntry.productDiff && logEntry.productDiff.trim() !== "" && logEntry.entryType !== 'initial_state' && logEntry.entryType !== 'segmented_synthesis_milestone');
 
-  const DIAG_PROMPT_MAX_DISPLAY_LENGTH = 2000;
-
-  const truncateForDisplay = (text: string | undefined, maxLength: number = DIAG_PROMPT_MAX_DISPLAY_LENGTH): string => {
-    if (!text) return "(Not available)";
-    if (text.length <= maxLength) return text;
-    return `${text.substring(0, maxLength / 2)}...\n[TRUNCATED - Full prompt in copied diagnostics or raw log - Total Length: ${text.length} chars]\n...${text.substring(text.length - maxLength / 2)}`;
-  };
 
   const modelUsedDisplayName = logEntry.currentModelForIteration
     ? SELECTABLE_MODELS.find(m => m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration
-    : (logEntry.entryType === 'manual_edit' ? "N/A (Manual Edit)" : "N/A");
+    : (logEntry.entryType === 'manual_edit' ? "N/A (Manual Edit)" : (logEntry.entryType === 'initial_state' ? "N/A (Initial State)" : "N/A"));
     
   const entryTypeDisplay: Record<IterationEntryType, string> = {
     'initial_state': "Initial State",
     'ai_iteration': "AI Iteration",
     'manual_edit': "Manual Edit",
-    'segmented_synthesis_milestone': "Segmented Synthesis",
+    'segmented_synthesis_milestone': "Segmented Synthesis Milestone",
     'targeted_refinement': "Targeted Refinement"
   };
   const displayEntryType = entryTypeDisplay[logEntry.entryType || 'ai_iteration'];
@@ -208,6 +213,39 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
                 return <li key={index} className={`break-words ${matched ? "pl-1" : "pl-3"}`}>{styledPart}</li>;
             })}
         </ul>
+    );
+  };
+
+  const PROMPT_UI_TRUNCATE_LENGTH = 300; // Length for initial UI truncation
+
+  const renderExpandablePrompt = (promptText: string | undefined, promptKey: string, title: string) => {
+    if (!promptText) return <p className="text-xs text-slate-500 dark:text-slate-400">({title} not available)</p>;
+
+    const isPromptExpanded = expandedPrompts[promptKey];
+    const canExpand = promptText.length > PROMPT_UI_TRUNCATE_LENGTH;
+
+    return (
+      <div className="text-xs">
+        <div className="flex justify-between items-center mb-0.5">
+          <h5 className="font-semibold text-slate-700 dark:text-slate-300">{title}</h5>
+          {canExpand && (
+            <button
+              onClick={() => togglePromptExpansion(promptKey)}
+              className="text-xs text-primary-600 dark:text-primary-400 hover:underline focus:outline-none"
+              aria-expanded={isPromptExpanded}
+              aria-controls={`prompt-content-${promptKey}`}
+            >
+              {isPromptExpanded ? 'Show Less' : 'Show More'}
+            </button>
+          )}
+        </div>
+        <pre
+          id={`prompt-content-${promptKey}`}
+          className={`whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 ${isPromptExpanded ? 'max-h-96 overflow-y-auto' : ''}`}
+        >
+          {isPromptExpanded ? promptText : (promptText.length > PROMPT_UI_TRUNCATE_LENGTH ? promptText.substring(0, PROMPT_UI_TRUNCATE_LENGTH) + "..." : promptText)}
+        </pre>
+      </div>
     );
   };
 
@@ -299,251 +337,121 @@ const LogEntryItem: React.FC<LogEntryItemProps> = ({
             <div>
               <div className="flex justify-between items-center mb-2">
                 <h4 className="text-sm font-semibold text-primary-600 dark:text-primary-300">
-                  {logEntry.iteration === 0 && logEntry.entryType === 'initial_state' ? "Initial Content (Diff from Empty):" : "Word Changes from Previous Meaningful State:"}
+                  {getDiffTitle(logEntry)}
                 </h4>
               </div>
-              <pre className="whitespace-pre-wrap break-words text-xs bg-slate-100/80 dark:bg-black/40 p-2 rounded max-h-96 overflow-y-auto text-slate-700 dark:text-slate-200">
+              <pre className="whitespace-pre-wrap break-words text-xs bg-slate-100 dark:bg-black/40 p-2 rounded max-h-96 overflow-y-auto">
                 {diffDisplayComponent}
               </pre>
             </div>
           )}
-          <div className="pt-3 border-t border-slate-300/70 dark:border-white/10">
-            <h4 className="text-sm font-semibold text-primary-600 dark:text-primary-300 mb-2">
-               Interaction Diagnostics
-            </h4>
-            {(isAiEntry || logEntry.fileProcessingInfo || logEntry.readabilityScoreFlesch !== undefined) ? (
-              <div className="space-y-2 text-xs">
-                 {isAiEntry && logEntry.strategyRationale && (
-                  <div>
-                    <button onClick={() => toggleDiagnosticSection(`strategy_rationale_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      Strategy Rationale <span className="ml-1">{expandedDiagnostics[`strategy_rationale_${logEntry.iteration}`] ? '▲' : '▼'}</span>
-                    </button>
-                    {expandedDiagnostics[`strategy_rationale_${logEntry.iteration}`] && renderStrategyRationale(logEntry.strategyRationale)}
-                  </div>
-                )}
-                 {isAiEntry && logEntry.activeMetaInstruction && (
-                  <div className="mt-1.5">
-                    <h5 className="font-semibold text-slate-700 dark:text-slate-300 text-xs mb-0.5">
-                      Active Meta-Instruction Applied:
-                    </h5>
-                    <p className="italic text-fuchsia-600 dark:text-fuchsia-400 bg-fuchsia-50 dark:bg-fuchsia-900/30 p-1 rounded text-xs">
-                        "{logEntry.activeMetaInstruction}"
-                    </p>
-                  </div>
-                )}
-                {isAiEntry && logEntry.currentModelForIteration && (
-                  <div className="mt-1.5">
-                     <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">
-                       Model Used for Iteration:
-                       <span className="font-normal ml-1 text-slate-600 dark:text-slate-400">
-                         {modelUsedDisplayName}
-                       </span>
-                     </p>
-                  </div>
-                )}
-                 {isAiEntry && logEntry.modelConfigUsed && (
-                  <div className="mt-1">
-                     <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">
-                       Applied Parameters:
-                       <span className="font-normal ml-1 text-slate-600 dark:text-slate-400">
-                         Temp: {logEntry.modelConfigUsed.temperature.toFixed(2)}, Top-P: {logEntry.modelConfigUsed.topP.toFixed(2)}, Top-K: {logEntry.modelConfigUsed.topK}
-                         {logEntry.modelConfigUsed.thinkingConfig !== undefined && ` (Thinking Budget: ${logEntry.modelConfigUsed.thinkingConfig.thinkingBudget})`}
-                       </span>
-                     </p>
-                  </div>
-                )}
-                {logEntry.processedProductHead && (
-                  <div>
-                    <button onClick={() => toggleDiagnosticSection(`processed_product_info_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      Final Iteration Product Details <span className="ml-1">{expandedDiagnostics[`processed_product_info_${logEntry.iteration}`] ? '▲' : '▼'}</span>
-                    </button>
-                    {expandedDiagnostics[`processed_product_info_${logEntry.iteration}`] && (
-                      <div className="mt-1 space-y-0.5 bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400">
-                        <p>Processed Product Length: {logEntry.processedProductLengthChars ?? 'N/A'} chars</p>
-                        <p className="font-medium mt-1">Processed Product Head (first {logEntry.processedProductHead.length} chars):</p>
-                        <pre className="whitespace-pre-wrap break-words bg-slate-200 dark:bg-black/50 p-1 rounded max-h-32 overflow-y-auto">{logEntry.processedProductHead}</pre>
-                        {logEntry.processedProductTail && logEntry.processedProductLengthChars && logEntry.processedProductLengthChars > logEntry.processedProductHead.length && (
-                          <>
-                            <p className="font-medium mt-1">Processed Product Tail (last {logEntry.processedProductTail.length} chars):</p>
-                            <pre className="whitespace-pre-wrap break-words bg-slate-200 dark:bg-black/50 p-1 rounded max-h-32 overflow-y-auto">{logEntry.processedProductTail}</pre>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {isAiEntry && logEntry.directAiResponseHead && (logEntry.directAiResponseHead !== logEntry.processedProductHead || logEntry.directAiResponseTail !== logEntry.processedProductTail || logEntry.directAiResponseLengthChars !== logEntry.processedProductLengthChars) && (
-                  <div>
-                    <button onClick={() => toggleDiagnosticSection(`direct_ai_response_info_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      Direct AI Response Details (if different) <span className="ml-1">{expandedDiagnostics[`direct_ai_response_info_${logEntry.iteration}`] ? '▲' : '▼'}</span>
-                    </button>
-                    {expandedDiagnostics[`direct_ai_response_info_${logEntry.iteration}`] && (
-                      <div className="mt-1 space-y-0.5 bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400">
-                        <p>Direct AI Response Length: {logEntry.directAiResponseLengthChars ?? 'N/A'} chars</p>
-                        <p className="font-medium mt-1">Direct AI Response Head (first {logEntry.directAiResponseHead.length} chars):</p>
-                        <pre className="whitespace-pre-wrap break-words bg-slate-200 dark:bg-black/50 p-1 rounded max-h-32 overflow-y-auto">{logEntry.directAiResponseHead}</pre>
-                        {logEntry.directAiResponseTail && logEntry.directAiResponseLengthChars && logEntry.directAiResponseLengthChars > logEntry.directAiResponseHead.length && (
-                          <>
-                            <p className="font-medium mt-1">Direct AI Response Tail (last {logEntry.directAiResponseTail.length} chars):</p>
-                            <pre className="whitespace-pre-wrap break-words bg-slate-200 dark:bg-black/50 p-1 rounded max-h-32 overflow-y-auto">{logEntry.directAiResponseTail}</pre>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {logEntry.fileProcessingInfo && (
-                  <div>
-                    <button onClick={() => toggleDiagnosticSection(`file_info_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      File Processing Info <span className="ml-1">{expandedDiagnostics[`file_info_${logEntry.iteration}`] ? '▲' : '▼'}</span>
-                    </button>
-                    {expandedDiagnostics[`file_info_${logEntry.iteration}`] && (
-                      <div className="mt-1 space-y-0.5 bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400">
-                        <p>File Manifest Chars (this iter prompt): {logEntry.fileProcessingInfo.fileManifestProvidedCharacterCount}</p>
-                        {logEntry.fileProcessingInfo.filesSentToApiIteration !== null ? (
-                          <>
-                            <p>Actual File Data Sent in Iteration (API Call): {logEntry.fileProcessingInfo.filesSentToApiIteration}</p>
-                            <p>Number of Files Sent (API Call): {logEntry.fileProcessingInfo.numberOfFilesActuallySent}</p>
-                            <p>Total Bytes Sent (API Data): {logEntry.fileProcessingInfo.totalFilesSizeBytesSent}</p>
-                          </>
-                        ) : logEntry.iteration === 0 && logEntry.fileProcessingInfo.numberOfFilesActuallySent > 0 ? (
-                          <>
-                            <p>Files Loaded into Application: Yes</p>
-                            <p>Number of Files Loaded: {logEntry.fileProcessingInfo.numberOfFilesActuallySent}</p>
-                            <p>Total Bytes Loaded (App Data): {logEntry.fileProcessingInfo.totalFilesSizeBytesSent}</p>
-                          </>
-                        ) : (
-                          <p>Actual File Data: Not sent in this API call (expected if files were sent initially or no files loaded).</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-                 {isAiEntry && logEntry.aiValidationInfo && (
-                  <div>
-                    <button onClick={() => toggleDiagnosticSection(`ai_validation_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                       AI Response Validation ({logEntry.aiValidationInfo.checkName}) <span className={`ml-1 ${logEntry.aiValidationInfo.passed ? 'text-green-500' : 'text-red-500 font-bold'}`}>{expandedDiagnostics[`ai_validation_${logEntry.iteration}`] ? '▲' : '▼'}</span>
-                    </button>
-                    {expandedDiagnostics[`ai_validation_${logEntry.iteration}`] && (
-                        <div className={`mt-1 space-y-0.5 bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 border-l-2 ${logEntry.aiValidationInfo.passed ? 'border-green-500' : 'border-red-500'}`}>
-                            <p>Passed: <span className={logEntry.aiValidationInfo.passed ? 'text-green-600 font-semibold' : 'text-red-600 font-semibold'}>{logEntry.aiValidationInfo.passed ? 'Yes' : 'No'}</span></p>
-                            {logEntry.aiValidationInfo.reason && <p>Reason: {logEntry.aiValidationInfo.reason}</p>}
-                            {logEntry.aiValidationInfo.details && (
-                                <div>Details:
-                                  <ul className="list-disc list-inside ml-2">
-                                    <li>Type: '{logEntry.aiValidationInfo.details.type}'</li>
-                                    {logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'string' && <li>Value: "{logEntry.aiValidationInfo.details.value}"</li>}
-                                    {logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'object' && 'marker' in logEntry.aiValidationInfo.details.value && 'snippet' in logEntry.aiValidationInfo.details.value ? (
-                                      <>
-                                        <li>Marker: "{(logEntry.aiValidationInfo.details.value as PromptLeakageDetailValue).marker}"</li>
-                                        <li>Snippet: <pre className="whitespace-pre-wrap text-xs bg-slate-200 dark:bg-black/50 p-1 rounded">{(logEntry.aiValidationInfo.details.value as PromptLeakageDetailValue).snippet}</pre></li>
-                                      </>
-                                    ) : logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'object' && !( 'marker' in logEntry.aiValidationInfo.details.value) ? (
-                                      Object.entries(logEntry.aiValidationInfo.details.value as ReductionDetailValue).map(([key, val]) => (
-                                        <li key={key}>{key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}: {typeof val === 'number' ? val.toFixed(2) : val}</li>
-                                      ))
-                                    ) : null}
-                                  </ul>
-                                </div>
-                            )}
-                        </div>
-                    )}
-                  </div>
-                )}
-                {(logEntry.readabilityScoreFlesch !== undefined || logEntry.lexicalDensity !== undefined || logEntry.avgSentenceLength !== undefined || logEntry.typeTokenRatio !== undefined) && (
-                  <div>
-                    <button onClick={() => toggleDiagnosticSection(`text_metrics_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      Textual Metrics <span className="ml-1">{expandedDiagnostics[`text_metrics_${logEntry.iteration}`] ? '▲' : '▼'}</span>
-                    </button>
-                    {expandedDiagnostics[`text_metrics_${logEntry.iteration}`] && (
-                      <div className="mt-1 space-y-0.5 bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400">
-                        {logEntry.readabilityScoreFlesch !== undefined && (
-                          <p>Readability (Flesch): {logEntry.readabilityScoreFlesch.toFixed(1)}
-                            <span className="italic text-slate-500 dark:text-slate-500">{getReadabilityInterpretation(logEntry.readabilityScoreFlesch)}</span>
-                          </p>
-                        )}
-                        {logEntry.lexicalDensity !== undefined && (
-                          <p title="Proportion of content words to total words. Higher indicates more informational content.">
-                            Lexical Density: {logEntry.lexicalDensity.toFixed(3)}
-                          </p>
-                        )}
-                        {logEntry.avgSentenceLength !== undefined && (
-                          <p title="Average number of words per sentence. Can indicate syntactic complexity.">
-                            Avg. Sentence Length: {logEntry.avgSentenceLength.toFixed(1)} words
-                          </p>
-                        )}
-                        {logEntry.typeTokenRatio !== undefined && (
-                          <p title="Ratio of unique words to total words. Higher indicates greater vocabulary diversity.">
-                            Type-Token Ratio (TTR): {logEntry.typeTokenRatio.toFixed(3)}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {isAiEntry && logEntry.promptSystemInstructionSent && (
-                  <div>
-                    <button onClick={() => toggleDiagnosticSection(`sys_instr_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      System Instruction Sent <span className="ml-1">{expandedDiagnostics[`sys_instr_${logEntry.iteration}`] ? '▲' : '▼'}</span>
-                    </button>
-                    {expandedDiagnostics[`sys_instr_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-48 overflow-y-auto">{truncateForDisplay(logEntry.promptSystemInstructionSent, 1000)}</pre>}
-                  </div>
-                )}
-                 {isAiEntry && logEntry.promptCoreUserInstructionsSent && (
-                  <div>
-                    <button onClick={() => toggleDiagnosticSection(`core_instr_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                        Core User Instructions Sent <span className="ml-1">{expandedDiagnostics[`core_instr_${logEntry.iteration}`] ? '▲' : '▼'}</span>
-                    </button>
-                    {expandedDiagnostics[`core_instr_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-48 overflow-y-auto">{truncateForDisplay(logEntry.promptCoreUserInstructionsSent, 1000)}</pre>}
-                  </div>
-                )}
-                {isAiEntry && logEntry.promptFullUserPromptSent && (
-                  <div>
-                    <button onClick={() => toggleDiagnosticSection(`full_prompt_init_${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 hover:underline flex items-center text-xs">
-                      {logEntry.isSegmentedSynthesis && logEntry.iteration === 1 ? "Overall Iteration 1 Synthesis Summary " : "Initial Full User Prompt Sent (for Iteration's First/Only API Call) "}
-                       <span className="ml-1">{expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] ? '▲' : '▼'}</span>
-                    </button>
-                     {expandedDiagnostics[`full_prompt_init_${logEntry.iteration}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 max-h-72 overflow-y-auto">{truncateForDisplay(logEntry.promptFullUserPromptSent)}</pre>}
-                  </div>
-                )}
-                {isAiEntry && logEntry.apiStreamDetails && logEntry.apiStreamDetails.length > 0 && (
-                  <div>
-                    <p className="font-semibold text-slate-700 dark:text-slate-300 mt-2 mb-1 text-xs">API Stream Call Details (within this Iteration):</p>
-                    <div className="space-y-1.5 max-h-96 overflow-y-auto">
-                      {logEntry.apiStreamDetails.map((detail, index) => (
-                        <div key={index} className="bg-slate-100/70 dark:bg-black/30 p-1.5 rounded border border-slate-200 dark:border-slate-700">
-                           {logEntry.isSegmentedSynthesis && detail.segmentTitle && (
-                             <h5 className="font-medium text-primary-700 dark:text-primary-300 text-xs mb-0.5">
-                               Segment {detail.segmentIndex !== undefined ? detail.segmentIndex + 1 : 'N/A'}: {detail.segmentTitle} (API Call {detail.callCount})
-                             </h5>
-                           )}
-                           {!logEntry.isSegmentedSynthesis && <p><strong>API Call {detail.callCount}:</strong> {detail.isContinuation ? '(Continuation)' : '(Initial Call for Iteration)'}</p> }
 
-                          <p>Finish Reason: <span className="font-mono text-primary-700 dark:text-primary-300">{detail.finishReason || 'N/A'}</span></p>
-                          <p>Text Length This Call: {detail.textLengthThisCall} chars</p>
-                          {detail.safetyRatings && <p>Safety Ratings: <span className="font-mono text-orange-600 dark:text-orange-400">{JSON.stringify(detail.safetyRatings)}</span></p>}
-                          {detail.promptForThisCall && detail.promptForThisCall !== "N/A (Initial State - Input becomes first product)" && (
-                            <div>
-                              <button onClick={() => toggleDiagnosticSection(`stream_prompt_${logEntry.iteration}_${index}`)} className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex items-center">
-                                View Full Prompt for this Specific API Call <span className="ml-1 text-xs">{expandedDiagnostics[`stream_prompt_${logEntry.iteration}_${index}`] ? '▲' : '▼'}</span>
-                              </button>
-                              {expandedDiagnostics[`stream_prompt_${logEntry.iteration}_${index}`] && <pre className="mt-1 whitespace-pre-wrap break-words bg-slate-200 dark:bg-black/50 p-1 rounded text-slate-600 dark:text-slate-400 max-h-72 overflow-y-auto">{truncateForDisplay(detail.promptForThisCall)}</pre>}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+          {(isAiEntry || (logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) && logEntry.modelConfigUsed && (
+            <div className="text-xs">
+              <button onClick={() => toggleDiagnosticSection(`modelConfig-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
+                Model Config Used {expandedDiagnostics[`modelConfig-${logEntry.iteration}`] ? '▼' : '▶'}
+              </button>
+              {expandedDiagnostics[`modelConfig-${logEntry.iteration}`] && (
+                <div className="ml-2 pl-2 border-l border-slate-300 dark:border-slate-600">
+                  <p>Model: {modelUsedDisplayName}</p>
+                  <p>Temp: {logEntry.modelConfigUsed.temperature.toFixed(2)}, Top-P: {logEntry.modelConfigUsed.topP.toFixed(2)}, Top-K: {logEntry.modelConfigUsed.topK}</p>
+                  {logEntry.modelConfigUsed.thinkingConfig && (
+                    <p>Thinking Budget: {logEntry.modelConfigUsed.thinkingConfig.thinkingBudget}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {logEntry.fileProcessingInfo && (logEntry.fileProcessingInfo.fileManifestProvidedCharacterCount > 0 || logEntry.fileProcessingInfo.numberOfFilesActuallySent > 0) && (
+            <div className="text-xs">
+              <button onClick={() => toggleDiagnosticSection(`fileInfo-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
+                File Processing Info {expandedDiagnostics[`fileInfo-${logEntry.iteration}`] ? '▼' : '▶'}
+              </button>
+              {expandedDiagnostics[`fileInfo-${logEntry.iteration}`] && (
+                <div className="ml-2 pl-2 border-l border-slate-300 dark:border-slate-600">
+                  <p>File Manifest Chars (this iter prompt): {logEntry.fileProcessingInfo.fileManifestProvidedCharacterCount}</p>
+                  {logEntry.fileProcessingInfo.filesSentToApiIteration !== null ? (
+                    <>
+                      <p>Actual File Data Sent in Iteration (API Call): {logEntry.fileProcessingInfo.filesSentToApiIteration}</p>
+                      <p>Number of Files Sent (API Call): {logEntry.fileProcessingInfo.numberOfFilesActuallySent}</p>
+                      <p>Total Bytes Sent (API Data): {logEntry.fileProcessingInfo.totalFilesSizeBytesSent}</p>
+                    </>
+                  ) : logEntry.iteration === 0 && logEntry.fileProcessingInfo.numberOfFilesActuallySent > 0 ? (
+                     <>
+                      <p>Files Loaded into Application: Yes</p>
+                      <p>Number of Files Loaded: {logEntry.fileProcessingInfo.numberOfFilesActuallySent}</p>
+                      <p>Total Bytes Loaded (App Data): {logEntry.fileProcessingInfo.totalFilesSizeBytesSent}</p>
+                    </>
+                  ) : (
+                     <p>Actual File Data: Not sent in this API call.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {logEntry.aiValidationInfo && (
+             <div className="text-xs">
+                <button onClick={() => toggleDiagnosticSection(`validation-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
+                  AI Response Validation {expandedDiagnostics[`validation-${logEntry.iteration}`] ? '▼' : '▶'}
+                </button>
+                {expandedDiagnostics[`validation-${logEntry.iteration}`] && (
+                  <div className={`ml-2 pl-2 border-l ${logEntry.aiValidationInfo.passed ? 'border-green-500' : 'border-red-500'}`}>
+                    <p>Passed: <span className={logEntry.aiValidationInfo.passed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>{logEntry.aiValidationInfo.passed ? 'Yes' : 'No'}</span></p>
+                    {logEntry.aiValidationInfo.reason && <p>Reason: {logEntry.aiValidationInfo.reason}</p>}
+                    {logEntry.aiValidationInfo.details && (
+                      <p>Details Type: {logEntry.aiValidationInfo.details.type} | Value: {
+                          typeof logEntry.aiValidationInfo.details.value === 'string' ? `"${logEntry.aiValidationInfo.details.value}"`
+                          : logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'object' ? JSON.stringify(logEntry.aiValidationInfo.details.value)
+                          : 'N/A'
+                      }</p>
+                    )}
                   </div>
                 )}
-              </div>
-            ) : (
-              <p className="text-slate-500 dark:text-slate-400 italic">No detailed diagnostics available for this entry type.</p>
-            )}
-          </div>
+             </div>
+          )}
+
+          {isAiEntry && logEntry.strategyRationale && (
+             <div className="text-xs">
+                <button onClick={() => toggleDiagnosticSection(`strategy-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
+                  Strategy Rationale {expandedDiagnostics[`strategy-${logEntry.iteration}`] ? '▼' : '▶'}
+                </button>
+                {expandedDiagnostics[`strategy-${logEntry.iteration}`] && renderStrategyRationale(logEntry.strategyRationale)}
+             </div>
+          )}
+
+          {(isAiEntry || (logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) && (logEntry.promptSystemInstructionSent || logEntry.promptCoreUserInstructionsSent || logEntry.promptFullUserPromptSent) && (
+            <div className="text-xs space-y-2">
+              {renderExpandablePrompt(logEntry.promptSystemInstructionSent, `sys-${logEntry.iteration}`, "System Instruction Sent")}
+              {renderExpandablePrompt(logEntry.promptCoreUserInstructionsSent, `core-${logEntry.iteration}`, "Core User Instructions Sent")}
+              {renderExpandablePrompt(logEntry.promptFullUserPromptSent, `full-${logEntry.iteration}`, "Initial Full User Prompt Sent (for Iteration's First API Call)")}
+            </div>
+          )}
+
+          {logEntry.readabilityScoreFlesch !== undefined && (
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Readability (Flesch): {logEntry.readabilityScoreFlesch.toFixed(1)}
+              {getReadabilityInterpretation(logEntry.readabilityScoreFlesch)}
+            </p>
+          )}
+           {logEntry.lexicalDensity !== undefined && (
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Lexical Density: {logEntry.lexicalDensity.toFixed(3)}
+            </p>
+          )}
+          {logEntry.avgSentenceLength !== undefined && (
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Avg. Sentence Length: {logEntry.avgSentenceLength.toFixed(1)} words
+            </p>
+          )}
+          {logEntry.typeTokenRatio !== undefined && (
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Type-Token Ratio (TTR): {logEntry.typeTokenRatio.toFixed(3)}
+            </p>
+          )}
         </div>
       )}
     </div>
   );
 };
-
-export default LogEntryItem;
