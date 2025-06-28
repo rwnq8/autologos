@@ -1,5 +1,4 @@
 
-
 import { GoogleGenAI } from "@google/genai";
 import type { DevLogEntry, SelectableModelName } from '../types';
 
@@ -17,7 +16,7 @@ const API_KEY: string | undefined = (() => {
 let ai: GoogleGenAI | null = null;
 if (API_KEY) {
   try {
-    ai = new GoogleGenAI({apiKey: API_KEY});
+    ai = new GoogleGenAI({ apiKey: API_KEY });
   } catch (error) {
     console.error("Error initializing GoogleGenAI for DevLogContextualizerService:", error);
     ai = null;
@@ -96,18 +95,15 @@ Based on the system prompt, identify relevant DevLog entries for the current req
   `;
 
   try {
-    const response = await ai.models.generateContent({
-        model: CONTEXTUALIZER_MODEL_NAME,
-        contents: promptToContextualizer,
-        config: {
-          systemInstruction: devLogContextualizerSystemPrompt,
-          temperature: 0.1, 
-          topK: 5,
-          topP: 0.95,
-        },
+    const result = await ai.models.generateContent({
+      model: CONTEXTUALIZER_MODEL_NAME,
+      contents: promptToContextualizer,
+      config: {
+        systemInstruction: devLogContextualizerSystemPrompt,
+      }
     });
 
-    return response.text.trim();
+    return result.text.trim();
 
   } catch (error: any) {
     console.error("DevLogContextualizerService: Error calling Gemini API:", error);

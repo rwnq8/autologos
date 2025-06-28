@@ -153,7 +153,7 @@ Failure to incorporate the available detail from source files, resulting in an o
 3. AGGRESSIVELY de-duplicate and consolidate information, BUT prioritize capturing the full breadth and depth of unique content from the source files. **Do not over-summarize or lose important details at this stage.**
 4. Produce a SINGLE, COHERENT, WELL-STRUCTURED initial document that synthetically represents the core, essential information from ALL files.
 Your output for this iteration MUST be a de-duplicated synthesis. DO NOT output raw concatenated content or a simple list of all information from the files. Severe redundancy in your output will be considered a failure to meet the primary task.
-The primary metric of success for this specific iteration is the quality of synthesis and de-duplication, aiming for comprehensive initial coverage that PRESERVES DETAIL. This synthesized document is your ONLY output for this iteration. It should be a high-quality, consolidated first draft, likely quite substantial in length if the source files are detailed.`
+The primary metric of success for this specific iteration is the quality of synthesis and de-duplication, aiming for comprehensive initial coverage that PRESERVES DETAIL. This synthesized document will be the 'Current State of Product' for Iteration 2. It should be a high-quality, consolidated first draft, likely quite substantial in length if the source files are detailed.`
       );
     }
   }
@@ -290,9 +290,10 @@ export const buildTextualPromptPart = (
     loadedFiles: LoadedFile[],
     coreUserInstructions: string,
     currentIterationOverall: number,
-    initialOutlineForIter1?: OutlineGenerationResult,
-    isSegmentedSynthesisMode?: boolean,
-    isTargetedRefinementMode?: boolean
+    initialOutlineForIter1: OutlineGenerationResult | undefined,
+    fileManifestForPrompt: string, // Changed from optional boolean flags to a string
+    isSegmentedSynthesisMode: boolean = false,
+    isTargetedRefinementMode: boolean = false
 ): string => {
     let productForPrompt = currentProduct || "";
 
@@ -300,18 +301,18 @@ export const buildTextualPromptPart = (
         productForPrompt = `${currentProduct.substring(0, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT / 2)}...\n...(Product content truncated in this prompt view. Full length: ${currentProduct.length} chars)...\n...${currentProduct.substring(currentProduct.length - MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT / 2)}`;
     }
     
-    let fileManifest = "";
+    let fileManifestContentForPrompt = "";
     if (loadedFiles.length > 0) {
-        fileManifest = `---FILE MANIFEST AND CONTENT---\n` + loadedFiles.map(f => 
-            `-- File: ${f.name} (${f.mimeType}, ${f.size} bytes) --\n${f.content}\n`
-        ).join('\n') + `---------------------------\n`;
+        // Use the passed-in manifest summary instead of embedding full content
+        fileManifestContentForPrompt = `---FILE MANIFEST (Original Input Summary)---\n${fileManifestForPrompt.trim()}\n---------------------------\n`;
     }
 
     const promptParts: string[] = [];
 
-    if (fileManifest.trim()) {
-        promptParts.push(fileManifest);
+    if (fileManifestContentForPrompt.trim()) {
+        promptParts.push(fileManifestContentForPrompt);
     }
+
 
     let productContextTitle: string;
 

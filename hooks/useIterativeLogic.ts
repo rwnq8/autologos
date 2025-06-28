@@ -206,16 +206,41 @@ export const useIterativeLogic = (
     });
 
     if (currentIter === 0 && !options?.isTargetedRefinement && (currentProd === null || currentProd.trim() === "")) {
+      let initialProductForStateAndLog: string;
+      let statusForLog: string;
+      
+      if (processState.loadedFiles.length > 0) {
+        // Concatenate file contents with a separator for clarity
+        initialProductForStateAndLog = processState.loadedFiles.map(f => `--- FILE: ${f.name} ---\n${f.content}`).join('\n\n');
+        statusForLog = "Initial State from Loaded Files";
+      } else {
+        initialProductForStateAndLog = processState.initialPrompt;
+        statusForLog = "Initial State from Prompt Text";
+      }
+
       const fileInfo = {
-        filesSentToApiIteration: null,
+        filesSentToApiIteration: null, // No API call for initial state
         numberOfFilesActuallySent: processState.loadedFiles.length,
         totalFilesSizeBytesSent: processState.loadedFiles.reduce((sum, f) => sum + f.size, 0),
         fileManifestProvidedCharacterCount: processState.initialPrompt.length,
         loadedFilesForIterationContext: processState.loadedFiles,
       };
-      logIterationData(0, 'initial_state', processState.initialPrompt, "Initial State from Prompt", "", undefined, undefined, fileInfo);
-      currentProd = processState.initialPrompt;
-      updateProcessState({ currentProduct: currentProd });
+
+      // Log this true initial state. previousProductForLog is "" to generate the initial diff.
+      logIterationData(
+        0, 
+        'initial_state', 
+        initialProductForStateAndLog, 
+        statusForLog, 
+        "", 
+        undefined, 
+        undefined, 
+        fileInfo
+      );
+      
+      currentProd = initialProductForStateAndLog;
+      // Immediately update the state so the rest of the loop and UI has the correct product and iteration number.
+      updateProcessState({ currentProduct: currentProd, currentIteration: 0 });
     }
 
     while (true) {

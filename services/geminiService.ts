@@ -28,7 +28,7 @@ let apiKeyAvailable = false;
 
 if (API_KEY) {
     try {
-        ai = new GoogleGenAI({apiKey: API_KEY});
+        ai = new GoogleGenAI({ apiKey: API_KEY });
         apiKeyAvailable = true;
     } catch (error) {
         console.error("Error during GoogleGenAI client initialization. Gemini API calls will be disabled.", error);
@@ -37,7 +37,7 @@ if (API_KEY) {
     }
 } else {
     if (!apiKeyWarningLoggedOnce) {
-        console.warn("API_KEY was not found or is not configured. GoogleGenAI client not initialized. Gemini API calls will be disabled.");
+        console.warn("API_KEY was not found or is not configured. GoogleGenerativeAI client not initialized. Gemini API calls will be disabled.");
         apiKeyWarningLoggedOnce = true;
     }
     apiKeyAvailable = false;
@@ -80,36 +80,52 @@ export const getModelParameterGuidance = (config: ModelConfig, isGlobalMode: boo
     return { warnings, advice };
 };
 
+const toBase64 = (str: string): string => {
+    try {
+        const bytes = new TextEncoder().encode(str);
+        const binString = Array.from(bytes, (byte) => String.fromCodePoint(byte)).join("");
+        return btoa(binString);
+    } catch (e) {
+      console.error("Base64 encoding failed:", e);
+      // Fallback for environments where TextEncoder/btoa might fail.
+      return btoa(str);
+    }
+};
+
 export const generateInitialOutline = async (fileManifest: string, loadedFiles: LoadedFile[], modelConfig: ModelConfig, modelToUse: SelectableModelName, devLogContextString?: string): Promise<OutlineGenerationResult> => {
   if (!ai) return { outline: "", identifiedRedundancies: "", errorMessage: "Gemini API client not initialized." };
   
   try {
     const { systemInstruction, coreUserInstructions } = getOutlineGenerationPromptComponents(fileManifest);
     
-    let fullPromptText = coreUserInstructions;
-    if (loadedFiles.length > 0) {
-        const fileContentsString = loadedFiles.map(f => `--- FILE: ${f.name} ---\n${f.content}`).join('\n\n');
-        fullPromptText += `\n\n--- FULL FILE CONTENTS ---\n${fileContentsString}`;
-    }
+    const requestParts: Part[] = loadedFiles.map(file => ({
+      inlineData: { mimeType: file.mimeType || 'text/plain', data: toBase64(file.content) }
+    }));
+    requestParts.push({ text: coreUserInstructions });
 
-    const response = await ai.models.generateContent({
+    const { modelName, maxIterations, ...apiConfig } = modelConfig;
+
+    const result: GenerateContentResponse = await ai.models.generateContent({
         model: modelToUse,
-        contents: fullPromptText,
+        contents: [{ role: "user", parts: requestParts }],
         config: {
-            ...modelConfig,
-            systemInstruction: systemInstruction
+            ...apiConfig,
+            systemInstruction,
         }
     });
+
+    const responseText = result.text;
+    const finalResponse = result;
+
     const apiStreamDetails: ApiStreamCallDetail[] = [{
         callCount: 1,
-        promptForThisCall: fullPromptText,
-        finishReason: response.candidates?.[0]?.finishReason || "UNKNOWN",
-        safetyRatings: response.candidates?.[0]?.safetyRatings || null,
-        textLengthThisCall: response.text.length,
+        promptForThisCall: coreUserInstructions, // Simplified prompt log
+        finishReason: finalResponse.candidates?.[0]?.finishReason || "UNKNOWN",
+        safetyRatings: finalResponse.candidates?.[0]?.safetyRatings || null,
+        textLengthThisCall: responseText.length,
         isContinuation: false
     }];
 
-    const responseText = response.text;
     let outline = "";
     let identifiedRedundancies = "";
 
@@ -160,63 +176,108 @@ export const iterateProduct = async ({
     isRadicalRefinementKickstart?: boolean;
 }): Promise<IterateProductResult> => {
      if (!ai) return { product: currentProduct, status: 'ERROR', errorMessage: "Gemini API client not initialized." };
+    
+    const isInitialProductEmptyAndFilesLoaded = (currentProduct === null || currentProduct.trim() === "") && loadedFiles.length > 0;
+    const isSegmentedSynthesisMode = false;
 
     try {
         const { systemInstruction, coreUserInstructions } = getUserPromptComponents(
             currentIterationOverall, maxIterationsOverall, activePlanStage, outputParagraphShowHeadings,
             outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings, isGlobalMode,
-            (currentProduct === null || currentProduct.trim() === "") && loadedFiles.length > 0,
+            isInitialProductEmptyAndFilesLoaded,
             retryContext, stagnationNudgeStrategy, initialOutlineForIter1, loadedFiles, activeMetaInstruction,
-            false, undefined, undefined,
+            isSegmentedSynthesisMode, undefined, undefined,
             isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
             isRadicalRefinementKickstart
         );
 
+        const { modelName, maxIterations, ...apiConfig } = modelConfigToUse;
+        
         const fullUserPromptText = buildTextualPromptPart(
-            currentProduct, loadedFiles, coreUserInstructions, currentIterationOverall, initialOutlineForIter1, false, isTargetedRefinementMode
+            currentProduct,
+            loadedFiles,
+            coreUserInstructions,
+            currentIterationOverall,
+            initialOutlineForIter1,
+            fileManifest, // Pass the summary manifest string here
+            isSegmentedSynthesisMode,
+            isTargetedRefinementMode
         );
 
-        const generationConfig: any = { ...modelConfigToUse };
-        if (activePlanStage?.format === 'json') {
-            generationConfig.responseMimeType = "application/json";
+        const initialUserParts: Part[] = [];
+        if (isInitialProductEmptyAndFilesLoaded && currentIterationOverall === 1) {
+            loadedFiles.forEach(file => {
+                initialUserParts.push({ inlineData: { mimeType: file.mimeType || 'text/plain', data: toBase64(file.content) }});
+            });
         }
+        initialUserParts.push({ text: fullUserPromptText });
 
-        if (systemInstruction) {
-          generationConfig.systemInstruction = systemInstruction;
-        }
+        const conversationHistory: Content[] = [{ role: 'user', parts: initialUserParts }];
 
-        const streamGenerator = await ai.models.generateContentStream({
-            model: modelToUse,
-            contents: fullUserPromptText,
-            config: generationConfig
-        });
-        
         let accumulatedText = "";
         const apiStreamDetails: ApiStreamCallDetail[] = [];
-        let lastChunk: GenerateContentResponse | null = null;
-        let callCount = 1;
+        let callCount = 0;
+        let continueStreaming = true;
 
-        for await (const chunk of streamGenerator) {
+        while (continueStreaming) {
+            callCount++;
             if (isHaltSignalled()) {
-                return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: 'Process halted by user during stream.' };
+                return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: 'Process halted by user during preparation for API call.' };
             }
-            const chunkText = chunk.text;
-            onStreamChunk(chunkText);
-            accumulatedText += chunkText;
-            lastChunk = chunk;
+
+            const streamResult = await ai.models.generateContentStream({
+                model: modelToUse,
+                contents: conversationHistory,
+                config: { ...apiConfig, systemInstruction },
+            });
+
+            let responseTextThisStream = "";
+            let finalResponse: GenerateContentResponse | undefined;
+
+            for await (const chunk of streamResult) {
+                if (isHaltSignalled()) {
+                    break;
+                }
+                const chunkText = chunk.text;
+                onStreamChunk(chunkText);
+                responseTextThisStream += chunkText;
+                finalResponse = chunk;
+            }
+            
+            let finalFinishReason = finalResponse?.candidates?.[0]?.finishReason || "UNKNOWN";
+            let finalSafetyRatings = finalResponse?.candidates?.[0]?.safetyRatings || null;
+            
+            if (isHaltSignalled()) {
+                 finalFinishReason = "HALTED";
+            }
+
+            // Update the model's full response in the history for this turn
+            const fullModelResponseForTurn = accumulatedText + responseTextThisStream;
+            if (callCount > 1 && conversationHistory[conversationHistory.length-2].role === 'model') {
+                 // Append to the previous model response if this was a continuation
+                 conversationHistory[conversationHistory.length-2].parts = [{ text: fullModelResponseForTurn }];
+            } else {
+                 conversationHistory.push({ role: 'model', parts: [{ text: fullModelResponseForTurn }] });
+            }
+            accumulatedText = fullModelResponseForTurn;
+
+            apiStreamDetails.push({
+                callCount,
+                promptForThisCall: callCount > 1 ? "Continue Request" : fullUserPromptText,
+                finishReason: finalFinishReason,
+                safetyRatings: finalSafetyRatings,
+                textLengthThisCall: responseTextThisStream.length,
+                isContinuation: callCount > 1,
+            });
+
+            if (finalFinishReason === 'MAX_TOKENS') {
+                continueStreaming = true;
+                // Add a user message to prompt continuation
+                conversationHistory.push({ role: 'user', parts: [{ text: "Please continue generating the response from exactly where you left off. Do not repeat any part of the previous response or add conversational filler." }] });
+            } else {
+                continueStreaming = false;
+            }
         }
-
-        const finalFinishReason = lastChunk?.candidates?.[0]?.finishReason || "UNKNOWN";
-        const safetyRatings = lastChunk?.candidates?.[0]?.safetyRatings || null;
-
-        apiStreamDetails.push({
-            callCount,
-            promptForThisCall: fullUserPromptText,
-            finishReason: finalFinishReason,
-            safetyRatings,
-            textLengthThisCall: accumulatedText.length,
-            isContinuation: false,
-        });
         
         const status = accumulatedText.startsWith(CONVERGED_PREFIX) ? 'CONVERGED' : 'COMPLETED';
 
@@ -224,7 +285,7 @@ export const iterateProduct = async ({
             product: accumulatedText,
             status,
             apiStreamDetails,
-            isStuckOnMaxTokensContinuation: finalFinishReason === 'MAX_TOKENS',
+            isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',
             promptSystemInstructionSent: systemInstruction,
             promptCoreUserInstructionsSent: coreUserInstructions,
             promptFullUserPromptSent: fullUserPromptText,

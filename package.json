@@ -11,8 +11,8 @@
   "dependencies": {
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "diff": "^5.1.0",
     "@google/generative-ai": "^0.24.1",
+    "diff": "^8.0.2",
     "@google/genai": "^1.7.0"
   },
   "devDependencies": {
