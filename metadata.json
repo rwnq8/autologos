@@ -1,0 +1,6 @@
+{
+  "name": "Critical Analysis Toolkit",
+  "description": "A React application for performing various types of critical analysis on user-provided text using the Gemini API.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
