@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName } from '../types.ts';
 import * as storageService from '../services/storageService';
@@ -13,6 +14,8 @@ type ModelParams = {
     settingsSuggestionSource: SettingsSuggestionSource;
     userManuallyAdjustedSettings: boolean;
 };
+
+const LEAN_HISTORY_COUNT = 5; // Keep full diffs for the last 5 items
 
 export const useAutoSave = (
   processState: ProcessState,
@@ -57,9 +60,19 @@ export const useAutoSave = (
     setAutoSaveStatus('saving');
     const { processState: currentState, modelParams: currentModelParams } = latestDataRef.current;
 
+    // Create a "lean" history for auto-saving to improve performance
+    const leanHistory = currentState.iterationHistory.map((entry, index, arr) => {
+        if (index < arr.length - LEAN_HISTORY_COUNT) {
+            // For older entries, omit the large diff string
+            const { productDiff, ...leanEntry } = entry;
+            return { ...leanEntry, productDiff: "(omitted for auto-save performance)" };
+        }
+        return entry; // Keep recent entries as is
+    });
+
     const dataToSave: AutologosIterativeEngineData = {
         initialPrompt: currentState.initialPrompt,
-        iterationHistory: currentState.iterationHistory,
+        iterationHistory: leanHistory, // Use the lean history for saving
         maxIterations: currentState.maxIterations,
         temperature: currentModelParams.temperature,
         topP: currentModelParams.topP,

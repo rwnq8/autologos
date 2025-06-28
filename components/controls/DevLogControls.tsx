@@ -1,4 +1,4 @@
-import React, { useState, useContext, useCallback } from 'react';
+import React, { useState, useContext, useCallback, useMemo } from 'react';
 import type { DevLogEntry, DevLogEntryType, DevLogEntryStatus, CommonControlProps } from '../../types';
 import { useProcessContext } from '../../contexts/ProcessContext';
 
@@ -6,14 +6,17 @@ const DevLogControls: React.FC<CommonControlProps> = ({
     commonInputClasses, 
     commonSelectClasses, 
     commonButtonClasses,
-    // commonCheckboxLabelClasses, // Not used in this version
-    // commonCheckboxInputClasses // Not used in this version
  }) => {
   const { devLog = [], addDevLogEntry, updateDevLogEntry, deleteDevLogEntry, isProcessing } = useProcessContext();
   
   const [isSectionExpanded, setIsSectionExpanded] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingEntry, setEditingEntry] = useState<DevLogEntry | null>(null);
+
+  // Filter and search state
+  const [typeFilter, setTypeFilter] = useState<DevLogEntryType | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<DevLogEntryStatus | 'all'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
 
   // Form state
   const [currentType, setCurrentType] = useState<DevLogEntryType>('note');
@@ -90,13 +93,22 @@ const DevLogControls: React.FC<CommonControlProps> = ({
     deferred: 'bg-indigo-200 dark:bg-indigo-700 text-indigo-800 dark:text-indigo-100',
   };
 
-  const sortedDevLog = [...devLog].sort((a, b) => b.timestamp - a.timestamp);
+  const filteredDevLog = useMemo(() => {
+    return devLog
+      .filter(entry => {
+        const typeMatch = typeFilter === 'all' || entry.type === typeFilter;
+        const statusMatch = statusFilter === 'all' || entry.status === statusFilter;
+        const searchMatch = searchTerm === '' || entry.summary.toLowerCase().includes(searchTerm.toLowerCase());
+        return typeMatch && statusMatch && searchMatch;
+      })
+      .sort((a, b) => b.timestamp - a.timestamp);
+  }, [devLog, typeFilter, statusFilter, searchTerm]);
 
   return (
     <div className="pt-4 border-t border-slate-300/70 dark:border-white/10">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-md font-semibold text-primary-600 dark:text-primary-300">
-          Development Log & Roadmap ({devLog.length})
+          Development Log & Roadmap ({filteredDevLog.length}/{devLog.length})
         </h3>
         <button
           onClick={() => setIsSectionExpanded(!isSectionExpanded)}
@@ -176,12 +188,39 @@ const DevLogControls: React.FC<CommonControlProps> = ({
             </div>
           )}
 
-          {sortedDevLog.length === 0 && !showAddForm && (
-            <p className="text-center text-sm text-slate-500 dark:text-slate-400 py-3">No development log entries yet.</p>
+          {/* Filters */}
+          <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-slate-200 dark:border-white/10">
+            <select value={typeFilter} onChange={e => setTypeFilter(e.target.value as DevLogEntryType | 'all')} className={commonSelectClasses + " flex-1"}>
+              <option value="all">All Types</option>
+              <option value="note">Note</option>
+              <option value="issue">Issue</option>
+              <option value="fix">Fix</option>
+              <option value="feature">Feature Request</option>
+              <option value="decision">Decision</option>
+            </select>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as DevLogEntryStatus | 'all')} className={commonSelectClasses + " flex-1"}>
+              <option value="all">All Statuses</option>
+              <option value="open">Open</option>
+              <option value="in_progress">In Progress</option>
+              <option value="resolved">Resolved</option>
+              <option value="implemented">Implemented</option>
+              <option value="closed">Closed</option>
+              <option value="deferred">Deferred</option>
+            </select>
+            <input 
+              type="text" 
+              placeholder="Search summaries..." 
+              value={searchTerm} 
+              onChange={e => setSearchTerm(e.target.value)} 
+              className={commonInputClasses + " flex-1"}/>
+          </div>
+
+          {filteredDevLog.length === 0 && !showAddForm && (
+            <p className="text-center text-sm text-slate-500 dark:text-slate-400 py-3">No development log entries match the current filters.</p>
           )}
           
           <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-            {sortedDevLog.map(entry => (
+            {filteredDevLog.map(entry => (
               <div key={entry.id} className={`p-2.5 rounded-md border-l-4 ${entryTypeColors[entry.type]} text-sm shadow-sm`}>
                 <div className="flex justify-between items-start mb-1">
                   <div className="flex-grow">

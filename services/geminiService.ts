@@ -82,13 +82,13 @@ export const getModelParameterGuidance = (config: ModelConfig, isGlobalMode: boo
 
 const toBase64 = (str: string): string => {
     try {
-        const bytes = new TextEncoder().encode(str);
-        const binString = Array.from(bytes, (byte) => String.fromCodePoint(byte)).join("");
-        return btoa(binString);
+      // Use a robust method to handle UTF-8 strings for btoa by first percent-encoding.
+      return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g,
+          (match, p1) => String.fromCharCode(Number('0x' + p1))
+      ));
     } catch (e) {
-      console.error("Base64 encoding failed:", e);
-      // Fallback for environments where TextEncoder/btoa might fail.
-      return btoa(str);
+      console.error("Base64 encoding failed for a string. This should not happen in a browser context. Returning empty string.", e);
+      return "";
     }
 };
 
@@ -252,14 +252,15 @@ export const iterateProduct = async ({
             }
 
             // Update the model's full response in the history for this turn
-            const fullModelResponseForTurn = accumulatedText + responseTextThisStream;
-            if (callCount > 1 && conversationHistory[conversationHistory.length-2].role === 'model') {
-                 // Append to the previous model response if this was a continuation
-                 conversationHistory[conversationHistory.length-2].parts = [{ text: fullModelResponseForTurn }];
+            // This logic correctly handles continuations by appending to the last model message
+            const lastMessage = conversationHistory[conversationHistory.length - 1];
+            if (lastMessage.role === 'model') {
+                lastMessage.parts[0].text += responseTextThisStream;
             } else {
-                 conversationHistory.push({ role: 'model', parts: [{ text: fullModelResponseForTurn }] });
+                conversationHistory.push({ role: 'model', parts: [{ text: responseTextThisStream }] });
             }
-            accumulatedText = fullModelResponseForTurn;
+            
+            accumulatedText += responseTextThisStream;
 
             apiStreamDetails.push({
                 callCount,
@@ -272,8 +273,10 @@ export const iterateProduct = async ({
 
             if (finalFinishReason === 'MAX_TOKENS') {
                 continueStreaming = true;
-                // Add a user message to prompt continuation
-                conversationHistory.push({ role: 'user', parts: [{ text: "Please continue generating the response from exactly where you left off. Do not repeat any part of the previous response or add conversational filler." }] });
+                // Add a user message to prompt continuation, only if the last message was from the model
+                if (conversationHistory.length > 0 && conversationHistory[conversationHistory.length - 1].role === 'model') {
+                    conversationHistory.push({ role: 'user', parts: [{ text: "Please continue generating the response from exactly where you left off. Do not repeat any part of the previous response or add conversational filler." }] });
+                }
             } else {
                 continueStreaming = false;
             }
