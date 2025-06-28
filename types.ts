@@ -238,7 +238,7 @@ export interface AutologosProjectFile {
 export interface LoadedFile {
   name: string;
   mimeType: string;
-  base64Data: string;
+  content: string; // Changed from base64Data to simplify and focus on text
   size: number;
 }
 
@@ -279,7 +279,7 @@ export interface PromptLeakageDetailValue {
 }
 
 export interface AiResponseValidationInfoDetailsValue_InitialSynthesis extends Partial<ReductionDetailValue> {
-    inputBytes?: number;
+    inputChars?: number;
     outputChars?: number;
     isOutlineDriven?: boolean;
     factorUsed?: number;
@@ -288,36 +288,47 @@ export interface AiResponseValidationInfoDetailsValue_InitialSynthesis extends P
     dataDumpReason?: string;
 }
 
+export type AiResponseValidationInfoDetailsType =
+  | 'error_phrase'
+  | 'empty_json'
+  | 'invalid_json'
+  | 'passed'
+  | 'prompt_leakage'
+  | 'initial_synthesis_failed_data_dump'
+  | 'catastrophic_collapse'
+  | 'error_phrase_with_significant_reduction'
+  | 'extreme_reduction_error'
+  | 'extreme_reduction_instructed_but_with_error_phrase'
+  | 'extreme_reduction_tolerated_instruction'
+  | 'extreme_reduction_tolerated_global_mode'
+  | 'drastic_reduction_error_plan_mode'
+  | 'drastic_reduction_with_error_phrase'
+  | 'drastic_reduction_tolerated_instruction'
+  | 'drastic_reduction_tolerated_global_mode'
+  | 'uninstructed_reduction'
+  | 'unknown_finish_reason_minimal_output'
+  | 'unknown_finish_reason_abrupt_end'
+  | 'max_tokens_with_incomplete_sentence'
+  | 'convergence_on_underdeveloped_product';
+
+export interface AiResponseValidationInfoDetails {
+  type: AiResponseValidationInfoDetailsType;
+  value?: string | ReductionDetailValue | PromptLeakageDetailValue | AiResponseValidationInfoDetailsValue_InitialSynthesis | { [key: string]: any };
+}
+
 export interface AiResponseValidationInfo {
   checkName: string;
   passed: boolean;
   isCriticalFailure?: boolean;
   reason?: string;
-  details?: {
-    type:
-      | 'error_phrase'
-      | 'empty_json'
-      | 'invalid_json'
-      | 'passed'
-      | 'prompt_leakage'
-      | 'initial_synthesis_failed_data_dump' // Changed
-      | 'catastrophic_collapse'
-      | 'error_phrase_with_significant_reduction'
-      | 'extreme_reduction_error'
-      | 'extreme_reduction_instructed_but_with_error_phrase'
-      | 'extreme_reduction_tolerated_instruction'
-      | 'extreme_reduction_tolerated_global_mode'
-      | 'drastic_reduction_error_plan_mode'
-      | 'drastic_reduction_with_error_phrase'
-      | 'drastic_reduction_tolerated_instruction'
-      | 'drastic_reduction_tolerated_global_mode'
-      | 'uninstructed_reduction' // New
-      | 'unknown_finish_reason_minimal_output'
-      | 'unknown_finish_reason_abrupt_end'
-      | 'max_tokens_with_incomplete_sentence'
-      | 'convergence_on_underdeveloped_product';
-    value?: string | ReductionDetailValue | PromptLeakageDetailValue | AiResponseValidationInfoDetailsValue_InitialSynthesis | { [key: string]: any };
-  };
+  details?: AiResponseValidationInfoDetails;
+}
+
+export interface IsLikelyAiErrorResponseResult {
+  isError: boolean;
+  isCriticalFailure: boolean;
+  reason: string;
+  checkDetails: AiResponseValidationInfoDetails;
 }
 
 
@@ -392,13 +403,6 @@ export interface ProcessState {
   devLog?: DevLogEntry[];
 }
 
-export interface IsLikelyAiErrorResponseResult {
-  isError: boolean;
-  isCriticalFailure?: boolean;
-  reason: string;
-  checkDetails: AiResponseValidationInfo['details'];
-}
-
 export interface RetryContext {
     previousErrorReason: string;
     originalCoreInstructions: string;
@@ -410,43 +414,23 @@ export interface OutlineGenerationResult {
     apiDetails?: ApiStreamCallDetail[];
 }
 
+export interface StrategistLLMContext {
+  productDevelopmentState: 'UNKNOWN' | 'NEEDS_EXPANSION_STALLED' | 'UNDERDEVELOPED_KERNEL' | 'MATURE_PRODUCT' | 'DEVELOPED_DRAFT';
+  stagnationSeverity: 'NONE' | 'CRITICAL' | 'SEVERE' | 'MODERATE' | 'MILD';
+  recentIterationPerformance: 'PRODUCTIVE' | 'STALLED' | 'LOW_VALUE';
+}
+
 export interface ModelStrategy {
-    modelName: SelectableModelName;
-    config: ModelConfig;
-    rationale: string;
-    activeMetaInstruction?: string;
+  modelName: SelectableModelName;
+  config: ModelConfig;
+  rationale: string;
+  activeMetaInstruction: string | undefined;
 }
 
 export interface StrategistAdvice {
-    suggestedModelName?: SelectableModelName;
-    suggestedThinkingBudget?: 0 | 1;
-    suggestedMetaInstruction?: string;
-    suggestedTemperature?: number;
-    suggestedTopP?: number;
-    suggestedTopK?: number;
-    rationale: string;
-}
-
-// Strategist context object for getStrategicAdviceFromLLM
-export interface StrategistLLMContext {
-    currentIteration: number;
-    maxIterations: number;
-    inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
-    lastUsedModel?: SelectableModelName;
-    lastUsedConfig?: ModelConfig | null;
-    stagnationInfo: StagnationInfo;
-    stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
-    lastNValidationSummariesString: string;
-    currentGoal: string;
-    recentIterationSummaries: string[];
-    productDevelopmentState: 'UNDERDEVELOPED_KERNEL' | 'DEVELOPED_DRAFT' | 'MATURE_PRODUCT' | 'NEEDS_EXPANSION_STALLED' | 'UNKNOWN';
-    stagnationSeverity: 'NONE' | 'MILD' | 'MODERATE' | 'SEVERE' | 'CRITICAL';
-    recentIterationPerformance: 'PRODUCTIVE' | 'LOW_VALUE' | 'STALLED';
-    currentRefinementFocusHint?: string;
-    isRadicalRefinementKickstartAttempt?: boolean;
-}
-declare module '../types.ts' {
-  interface AiResponseValidationInfoDetails {
-    type: 'extreme_reduction_tolerated_global_mode' | 'drastic_reduction_tolerated_instruction' | 'drastic_reduction_tolerated_global_mode';
-  }
+  modelName?: SelectableModelName;
+  config?: Partial<ModelConfig>;
+  metaInstruction?: string;
+  confidence?: number;
+  rationale: string;
 }

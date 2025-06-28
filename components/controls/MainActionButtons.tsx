@@ -1,4 +1,3 @@
-
 import React, { useContext } from 'react';
 import type { CommonControlProps } from '../../types.ts';
 import { useApplicationContext } from '../../contexts/ApplicationContext';
@@ -15,16 +14,15 @@ const MainActionButtons: React.FC<CommonControlProps> = ({
   const planCtx = usePlanContext(); // Get plan context
 
   // Derive startProcessButtonText locally based on context
-  const startProcessButtonTextValue = (processCtx.isProcessing && processCtx.currentProductBeforeHalt) || 
-                                (!processCtx.isProcessing && processCtx.currentProduct !== null && processCtx.finalProduct === null && processCtx.iterationHistory.length > 0) 
-                                ? "Resume Process" : "Start Process";
+  const startProcessButtonTextValue = (!processCtx.isProcessing && processCtx.currentProduct !== null && processCtx.finalProduct === null) ? "Resume Process" : "Start Process";
+
 
   return (
     <div className="flex flex-col space-y-3 pt-4">
       {!processCtx.isProcessing ? (
         <button
           onClick={() => processCtx.handleStartProcess()}
-          disabled={appCtx.apiKeyStatus !== 'loaded' || processCtx.loadedFiles.length === 0 || (planCtx.isPlanActive && planCtx.planStages.length === 0) || appCtx.isApiRateLimited}
+          disabled={appCtx.apiKeyStatus !== 'loaded' || (processCtx.loadedFiles.length === 0 && !processCtx.initialPrompt.trim()) || (planCtx.isPlanActive && planCtx.planStages.length === 0) || appCtx.isApiRateLimited}
           className="w-full inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 disabled:bg-slate-400 dark:disabled:bg-slate-600/70 disabled:cursor-not-allowed transition-colors"
           aria-label={startProcessButtonTextValue}
         >

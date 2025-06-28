@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback, useRef, useState } from 'react';
-import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType, DevLogEntry } from './types.ts'; // Added DevLogEntry
+import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType, DevLogEntry } from './types.ts';
 import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID } from './types.ts';
 import * as GeminaiService from './services/geminiService';
 import { DEFAULT_PROJECT_NAME_FALLBACK, INITIAL_PROJECT_NAME_STATE, generateFileName } from './services/utils';
@@ -408,67 +408,67 @@ const AppLogicContainer: React.FC<{ children: React.ReactNode }> = ({ children }
     };
   
     const onFilesSelectedForImport = async (files: FileList | null) => {
-      if (!files || files.length === 0) return;
-  
-      updateProcessState({ statusMessage: `Processing ${files.length} file(s)...` });
-      try {
-        const filePromises = Array.from(files).map(async (file) => {
-          const fileNameLower = file.name.toLowerCase();
-  
-          if (files.length === 1 && fileNameLower.endsWith('.autologos.json')) {
-              const fileContent = await file.text();
-              try {
-                  const parsedJson = JSON.parse(fileContent);
-                  if (parsedJson.header && parsedJson.header.fileFormatVersion === AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION) {
-                      projectIO.handleImportProjectData(parsedJson as AutologosProjectFile);
-                      return null; 
-                  }
-              } catch (e) { /* Fall through */ }
-          }
-  
-          if (fileNameLower.endsWith('.json')) {
-            const fileContent = await file.text();
-            try {
-              const parsedJson = JSON.parse(fileContent);
-              if (Array.isArray(parsedJson) && parsedJson.length > 0 && 'iteration' in parsedJson[0] && 'productSummary' in parsedJson[0] && 'timestamp' in parsedJson[0]) {
-                projectIO.handleImportIterationLogData(parsedJson as IterationLogEntry[], file.name);
-                return null; 
-              }
-            } catch(e) { /* Fall through */ }
-          }
-  
-          if (file.type.startsWith("image/") || file.type === "application/pdf" || !file.type.startsWith("text/")) {
-            return new Promise<LoadedFile>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = (e_reader) => {
-                const dataUrl = e_reader.target?.result as string;
-                const base64Data = dataUrl.substring(dataUrl.indexOf(',') + 1);
-                resolve({ name: file.name, mimeType: file.type || 'application/octet-stream', base64Data, size: file.size });
-              };
-              reader.onerror = () => reject(new Error(`Error reading file ${file.name}`));
-              reader.readAsDataURL(file);
+        if (!files || files.length === 0) return;
+    
+        updateProcessState({ statusMessage: `Processing ${files.length} file(s)...` });
+        try {
+            const readFileAsText = (file: File): Promise<string> => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = () => reject(reader.error);
+                    reader.readAsText(file);
+                });
+            };
+
+            const filePromises = Array.from(files).map(async (file) => {
+                const fileNameLower = file.name.toLowerCase();
+    
+                // Project file import logic
+                if (files.length === 1 && fileNameLower.endsWith('.autologos.json')) {
+                    const fileContent = await readFileAsText(file);
+                    try {
+                        const parsedJson = JSON.parse(fileContent);
+                        if (parsedJson.header && parsedJson.header.fileFormatVersion === AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION) {
+                            projectIO.handleImportProjectData(parsedJson as AutologosProjectFile);
+                            return null; // Signal that this file was handled
+                        }
+                    } catch (e) { /* Fall through to treat as a normal text file */ }
+                }
+    
+                // Iteration log import logic
+                if (fileNameLower.endsWith('.json')) {
+                    const fileContent = await readFileAsText(file);
+                    try {
+                        const parsedJson = JSON.parse(fileContent);
+                        if (Array.isArray(parsedJson) && parsedJson.length > 0 && 'iteration' in parsedJson[0] && 'productSummary' in parsedJson[0]) {
+                            projectIO.handleImportIterationLogData(parsedJson as IterationLogEntry[], file.name);
+                            return null; // Signal that this file was handled
+                        }
+                    } catch (e) { /* Fall through to treat as a normal text file */ }
+                }
+
+                // Default text file handling
+                const textContent = await readFileAsText(file);
+                return { name: file.name, mimeType: file.type || 'text/plain', content: textContent, size: file.size };
             });
-          } else {
-            const fileContent = await file.text();
-            const base64Data = btoa(unescape(encodeURIComponent(fileContent)));
-            return { name: file.name, mimeType: file.type || 'text/plain', base64Data, size: file.size };
-          }
-        });
-  
-        const results = await Promise.all(filePromises);
-        const newValidLoadedFiles = results.filter(result => result !== null) as LoadedFile[];
-  
-        if (newValidLoadedFiles.length > 0) {
-          handleLoadedFilesChange(newValidLoadedFiles, 'add'); 
-        } else if (files.length === 1 && results[0] === null) {
-        } else {
-           updateProcessState({ statusMessage: "No new data files were added."});
+    
+            const results = await Promise.all(filePromises);
+            const newValidLoadedFiles = results.filter((result): result is LoadedFile => result !== null);
+    
+            if (newValidLoadedFiles.length > 0) {
+                handleLoadedFilesChange(newValidLoadedFiles, 'add');
+            } else if (files.length > 0 && results.every(r => r === null)) {
+                // This means only project/log files were loaded and handled
+                updateProcessState({ statusMessage: "Project/Log data loaded successfully." });
+            } else {
+                updateProcessState({ statusMessage: "No new data files were added." });
+            }
+    
+        } catch (error: any) {
+            console.error("Error importing/loading files:", error);
+            updateProcessState({ statusMessage: `Error processing files: ${error.message}` });
         }
-  
-      } catch (error: any) {
-        console.error("Error importing/loading files:", error);
-        updateProcessState({ statusMessage: `Error processing files: ${error.message}` });
-      }
     };
   
     const handleExportIterationDiffs = useCallback(() => {

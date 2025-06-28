@@ -1,13 +1,23 @@
-// services/devLogContextualizerService.ts
+
+
 import { GoogleGenAI } from "@google/genai";
-import type { GenerateContentResponse } from "@google/genai";
 import type { DevLogEntry, SelectableModelName } from '../types';
 
-const API_KEY: string | undefined = process.env.API_KEY;
+const API_KEY: string | undefined = (() => {
+  try {
+    if (typeof process !== 'undefined' && process.env && typeof process.env.API_KEY === 'string' && process.env.API_KEY.length > 0) {
+      return process.env.API_KEY;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
 let ai: GoogleGenAI | null = null;
 if (API_KEY) {
   try {
-    ai = new GoogleGenAI({ apiKey: API_KEY });
+    ai = new GoogleGenAI({apiKey: API_KEY});
   } catch (error) {
     console.error("Error initializing GoogleGenAI for DevLogContextualizerService:", error);
     ai = null;
@@ -19,8 +29,10 @@ if (API_KEY) {
 const CONTEXTUALIZER_MODEL_NAME: SelectableModelName = 'gemini-2.5-flash-preview-04-17';
 
 const formatDevLogForPrompt = (devLog: DevLogEntry[]): string => {
-  if (!devLog || devLog.length === 0) return "No development log entries available.";
-  return devLog.map(entry =>
+  if (!devLog || devLog.length === 0) {
+    return "No development log entries available.";
+  }
+  return devLog.map(entry => 
     `Entry ID: ${entry.id.substring(0,8)} (Type: ${entry.type}, Status: ${entry.status}, Created: ${new Date(entry.timestamp).toLocaleDateString()})\nSummary: ${entry.summary}\nDetails: ${entry.details || 'N/A'}\nResolution: ${entry.resolution || 'N/A'}\nTags: ${(entry.tags || []).join(', ') || 'None'}\nRelated Iteration: ${entry.relatedIteration ?? 'N/A'}`
   ).join("\n---\n");
 };
@@ -51,21 +63,19 @@ Do NOT be conversational. Do NOT explain your reasoning beyond the brief "why it
 Do NOT list more than 4 entries. Prioritize critical issues/fixes and key decisions or notes about past problematic AI behavior relevant to current refinement.
 `;
 
-
 export const getRelevantDevLogContext = async (
   devLog: DevLogEntry[],
   currentUserPrompt: string
 ): Promise<string> => {
   if (!ai || !API_KEY) {
-    console.warn("DevLogContextualizerService: Gemini API client not available. Skipping contextualization.");
-    return "DevLog Contextualizer Inactive.";
+    return "DevLog Contextualizer Inactive (No API Key).";
   }
   if (!devLog || devLog.length === 0) {
     return "No DevLog entries to analyze.";
   }
 
   const formattedDevLog = formatDevLogForPrompt(devLog);
-  const maxDevLogChars = 20000; // Limit DevLog size in prompt to avoid exceeding token limits for this meta-call
+  const maxDevLogChars = 20000;
   const truncatedDevLog = formattedDevLog.length > maxDevLogChars ?
     `${formattedDevLog.substring(0, maxDevLogChars)}...\n[Development Log Truncated]` :
     formattedDevLog;
@@ -86,18 +96,17 @@ Based on the system prompt, identify relevant DevLog entries for the current req
   `;
 
   try {
-    const result = await ai.models.generateContent({
+    const response = await ai.models.generateContent({
         model: CONTEXTUALIZER_MODEL_NAME,
-        contents: [{ role: "user", parts: [{text: promptToContextualizer}] }],
+        contents: promptToContextualizer,
         config: {
           systemInstruction: devLogContextualizerSystemPrompt,
-          temperature: 0.1, // Low temperature for factual identification
+          temperature: 0.1, 
           topK: 5,
           topP: 0.95,
-        }
+        },
     });
 
-    const response = result;
     return response.text.trim();
 
   } catch (error: any) {

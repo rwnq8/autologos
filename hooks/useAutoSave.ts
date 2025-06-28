@@ -126,16 +126,14 @@ export const useAutoSave = (
         }
 
         const lastIter = engineData.iterationHistory.length > 0 ? engineData.iterationHistory[engineData.iterationHistory.length - 1].iteration : 0;
-        const productAtLastIter = engineData.finalProduct || 
-                                 (engineData.iterationHistory.length > 0 
-                                    ? reconstructProduct(lastIter, engineData.iterationHistory, correctedInitialPrompt).product 
-                                    : correctedInitialPrompt);
+        
+        const { product: productAtLastIter } = reconstructProduct(lastIter, engineData.iterationHistory, correctedInitialPrompt);
 
         const restoredProcessState: ProcessState = {
           ...initialProcessStateValues,
           ...engineData,
-          initialPrompt: correctedInitialPrompt, // Use corrected prompt
-          loadedFiles: loadedFilesFromData,     // Use loaded files from data
+          initialPrompt: correctedInitialPrompt, 
+          loadedFiles: loadedFilesFromData,     
 
           apiKeyStatus: initialProcessStateValues.apiKeyStatus, 
           isProcessing: false, 
@@ -147,6 +145,7 @@ export const useAutoSave = (
           selectedModelName: engineData.selectedModelName || initialProcessStateValues.selectedModelName,
           
           planStages: engineData.planStages || [],
+          savedPlanTemplates: engineData.savedPlanTemplates || [], 
           iterationHistory: engineData.iterationHistory || [],
 
           outputParagraphShowHeadings: engineData.outputParagraphShowHeadings ?? initialProcessStateValues.outputParagraphShowHeadings,
@@ -169,6 +168,7 @@ export const useAutoSave = (
           settingsSuggestionSource: engineData.settingsSuggestionSource ?? initialModelParamValues.settingsSuggestionSource,
           userManuallyAdjustedSettings: engineData.userManuallyAdjustedSettings ?? initialModelParamValues.userManuallyAdjustedSettings,
         });
+        updateProcessState({statusMessage: `Project "${restoredProcessState.projectName || 'Restored Project'}" loaded.`});
 
         setAutoSaveStatus('loaded');
       } else {

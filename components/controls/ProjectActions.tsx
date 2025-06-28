@@ -1,4 +1,3 @@
-
 import React, { useRef, useContext, useState } from 'react';
 import type { CommonControlProps } from '../../types';
 import { useApplicationContext } from '../../contexts/ApplicationContext';
@@ -54,7 +53,7 @@ const ProjectActions: React.FC<CommonControlProps> = ({
           ref={unifiedFileInputRef}
           onChange={handleUnifiedFileSelected}
           className="hidden"
-          accept=".autologos.json,.json,.txt,.md,.csv,.xml,.html,.js,.py,.pdf,image/png,image/jpeg,image/gif,image/webp,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          accept=".autologos.json,.json,.txt,.md,.csv,.xml,.html,.js,.py"
           disabled={processCtx.isProcessing || isLoadingFile}
           aria-hidden="true"
         />

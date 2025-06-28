@@ -1,6 +1,5 @@
-
 import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult } from '../types.ts';
-import { DETERMINISTIC_TARGET_ITERATION } from '../services/ModelStrategyService'; // Import for dynamic use
+import { DETERMINISTIC_TARGET_ITERATION } from '../hooks/useModelParameters'; // Import for dynamic use
 
 export const CONVERGED_PREFIX = "CONVERGED:";
 export const MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT = 250000; // Max chars of current product to include in prompt
@@ -20,7 +19,7 @@ Outline:
 Redundancies:
 <List key areas of significant redundancy or versioning identified across files. Be specific, e.g., "Paragraphs about 'Project X Results' appear in report_v1.txt and report_v2.txt with minor wording changes." or "Chapter 3 content from draft.md is nearly identical to final.md">
 
-Do NOT generate the full document content. Only the outline and redundancy list.`;
+Do NOT generate the full document content. Only the outline and a redundancy list.`;
 
   const coreUserInstructions = `Based on ALL provided files (summarized below in the File Manifest), generate a detailed hierarchical outline for a single, coherent, synthesized document that would integrate the information from all files.
 Additionally, list any significant redundancies, duplications, or versioning conflicts you identify across these files that would need to be resolved in a final synthesized document.
@@ -122,7 +121,7 @@ Output Structure: Produce ONLY the new, modified textual product. Do NOT include
 Convergence: If you determine that the product cannot be meaningfully improved further according to the current iteration's goals, OR if your generated product is identical to the 'Current State of Product' you received, prefix your ENTIRE response with "${CONVERGED_PREFIX}". Do this sparingly and only when truly converged. This means the topic is **thoroughly explored, conceptually well-developed, and further iterations would genuinely add no significant conceptual value (i.e., only minor stylistic tweaks on an already mature document) or would likely degrade quality.** Premature convergence on underdeveloped ideas is undesirable. However, if the document is mature and multiple recent iterations have yielded only negligible changes where the 'cost' of further iteration outweighs the benefit, you SHOULD declare convergence. Unless the product is identical or the goal is unachievable, attempt refinement. A 'meaningful improvement' involves addressing specific aspects like clarity, coherence, depth, or structure as per the iteration's goal. If the task requires significant content generation or transformation, ensure this is substantially completed before considering convergence. Do not converge if simply unsure how to proceed; instead, attempt an alternative refinement strategy if the current one seems to stall.
 File Usage: Base all refinements on the full content of the originally provided input files. The 'File Manifest' in the prompt is a reminder of these files.
 Error Handling: If you cannot fulfill a request due to ambiguity or impossibility, explain briefly and then output "${CONVERGED_PREFIX}" followed by the original unchanged product. Do not attempt to guess if instructions are critically unclear.
-Content Integrity: Preserve core information and aim for comprehensive coverage of the source material's intent, especially during initial synthesis. Aggressively identify and consolidate duplicative content from multiple files into a single, synthesized representation. **Unless specific instructions for summarization (e.g., 'shorter' length, 'key_points' format) or significant restructuring are provided for the current iteration, avoid unrequested deletions of unique information or excessive summarization that leads to loss of detail from the source material. Your primary goal is to REFINE, STRUCTURE, and ENRICH the existing information, not to arbitrarily shorten it unless explicitly instructed.** While merging and pruning redundant information is critical, if in doubt about whether content is merely redundant vs. a nuanced variation or supporting detail, err on theside of preserving it, particularly in earlier iterations. Subsequent iterations or specific plan stages can focus on more aggressive condensation if the product becomes too verbose or if explicitly instructed.
+Content Integrity: Preserve core information and aim for comprehensive coverage of the source material's intent, especially during initial synthesis. Aggressively identify and consolidate duplicative content from multiple files into a single, synthesized representation. **Unless specific instructions for summarization (e.g., 'shorter' length, 'key_points' format) or significant restructuring are provided for the current iteration, avoid unrequested deletions of unique information or excessive summarization that leads to loss of detail from the source material. Your primary goal is to REFINE, STRUCTURE, and ENRICH the existing information, not to arbitrarily shorten it unless explicitly instructed.** While merging and pruning redundant information is critical, if in doubt about whether content is merely redundant vs. a nuanced variation or supporting detail, err on the side of preserving it, particularly in earlier iterations. Subsequent iterations or specific plan stages can focus on more aggressive condensation if the product becomes too verbose or if explicitly instructed.
 CRITICAL - AVOID WORDSMITHING: If a meta-instruction to break stagnation or wordsmithing is active (especially for "Radical Refinement Kickstart"), you MUST make a *substantively different* response than the previous iteration. Do not just change a few words, reorder phrases slightly, or make trivial edits. Focus on *conceptual changes*, adding *net new information*, significantly restructuring, or offering a *genuinely different perspective* as guided by the meta-instruction. Minor stylistic changes are insufficient in this context. If only wordsmithing is possible on the current content, consider declaring convergence if the content is mature.`
     );
 
@@ -288,7 +287,7 @@ Output: Provide ONLY the new, modified textual product based on these stage goal
 
 export const buildTextualPromptPart = (
     currentProduct: string | null,
-    fileManifest: string,
+    loadedFiles: LoadedFile[],
     coreUserInstructions: string,
     currentIterationOverall: number,
     initialOutlineForIter1?: OutlineGenerationResult,
@@ -300,12 +299,18 @@ export const buildTextualPromptPart = (
     if (currentProduct && currentProduct.length > MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT && !isSegmentedSynthesisMode) {
         productForPrompt = `${currentProduct.substring(0, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT / 2)}...\n...(Product content truncated in this prompt view. Full length: ${currentProduct.length} chars)...\n...${currentProduct.substring(currentProduct.length - MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT / 2)}`;
     }
+    
+    let fileManifest = "";
+    if (loadedFiles.length > 0) {
+        fileManifest = `---FILE MANIFEST AND CONTENT---\n` + loadedFiles.map(f => 
+            `-- File: ${f.name} (${f.mimeType}, ${f.size} bytes) --\n${f.content}\n`
+        ).join('\n') + `---------------------------\n`;
+    }
 
     const promptParts: string[] = [];
 
-    if (fileManifest && fileManifest.trim()) {
-        promptParts.push(`---FILE MANIFEST (Original Input Summary. Note: Full file data is provided separately to the API for your reference during generation.)---`);
-        promptParts.push(fileManifest.trim());
+    if (fileManifest.trim()) {
+        promptParts.push(fileManifest);
     }
 
     let productContextTitle: string;

@@ -1,7 +1,6 @@
-
 // services/iterationUtils.ts
 
-import type { OutputLength, OutputFormat, IsLikelyAiErrorResponseResult, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, AiResponseValidationInfoDetailsValue_InitialSynthesis, FileProcessingInfo } from '../types.ts';
+import type { OutputLength, OutputFormat, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, AiResponseValidationInfoDetailsValue_InitialSynthesis, FileProcessingInfo, IsLikelyAiErrorResponseResult } from '../types.ts';
 import { countWords } from './textAnalysisService'; // Assuming countWords is exported
 
 // --- Constants for Content Reduction Checks ---
@@ -19,13 +18,9 @@ const DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD = 0.50;
 const SIGNIFICANT_REDUCTION_WITH_ERROR_PHRASE_THRESHOLD = 0.80; // new is <80% of old
 
 // Initial Synthesis Check (Iteration 1 specific)
-const INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES = 2.0;
-const INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES_OUTLINE_DRIVEN = 50.0;
-const CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT = 1.5;
-const CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT_OUTLINE_DRIVEN = 25.0;
-
-const TEXT_DOMINANT_THRESHOLD_PERCENT = 0.80;
-const MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 = 500 * 1024;
+const INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_CHARS = 2.0;
+const INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_CHARS_OUTLINE_DRIVEN = 50.0;
+const MAX_INPUT_CHARS_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 = 500 * 1024;
 const ABSOLUTE_MAX_CHARS_ITER1_PRODUCT = 1200000;
 
 // Catastrophic Collapse Check
@@ -108,17 +103,6 @@ const PROMPT_LEAKAGE_MARKERS = [
 export const CONVERGED_PREFIX = "CONVERGED:";
 const PROMPT_LEAKAGE_SNIPPET_RADIUS = 50;
 
-// Helper to estimate character count from base64 text data
-const estimateCharsFromBase64Text = (base64Data: string): number => {
-  try {
-    const decoded = atob(base64Data);
-    // This is a rough estimate; actual character count can vary with UTF-8
-    return decoded.length;
-  } catch (e) {
-    return 0; // Error in decoding
-  }
-};
-
 export const isDataDump = (
   newProduct: string,
   fileProcessingInfo: FileProcessingInfo,
@@ -127,69 +111,45 @@ export const isDataDump = (
   if (
     !fileProcessingInfo ||
     fileProcessingInfo.numberOfFilesActuallySent === 0 ||
-    fileProcessingInfo.totalFilesSizeBytesSent === 0
+    !fileProcessingInfo.loadedFilesForIterationContext ||
+    fileProcessingInfo.loadedFilesForIterationContext.length === 0
   ) {
     return { isError: false, reason: "No file info to check for data dump." };
   }
 
   const newLengthChars = newProduct.length;
-  const { totalFilesSizeBytesSent } = fileProcessingInfo;
-  const loadedFilesForIter1 = fileProcessingInfo.loadedFilesForIterationContext || [];
+  const loadedFilesForIter1 = fileProcessingInfo.loadedFilesForIterationContext;
+  const totalInputChars = loadedFilesForIter1.reduce((sum, f) => sum + f.content.length, 0);
+
+  if (totalInputChars === 0) {
+      return { isError: false, reason: "No text content in files to check for data dump." };
+  }
+
   let synthesisFailed = false;
   let synthesisReason = "";
 
-  const textFiles = loadedFilesForIter1.filter((f) => f.mimeType.startsWith("text/"));
-  const isTextDominant =
-    loadedFilesForIter1.length > 0 &&
-    (textFiles.length / loadedFilesForIter1.length >=
-      TEXT_DOMINANT_THRESHOLD_PERCENT ||
-    (totalFilesSizeBytesSent > 0 && textFiles.reduce((sum, f) => sum + f.size, 0) / totalFilesSizeBytesSent >=
-      TEXT_DOMINANT_THRESHOLD_PERCENT));
+  const expansionFactor = isOutlineDriven
+    ? INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_CHARS_OUTLINE_DRIVEN
+    : INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_CHARS;
 
-  let currentTextDominantFactor = isOutlineDriven
-    ? CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT_OUTLINE_DRIVEN
-    : CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT;
-  let currentByteExpansionFactor = isOutlineDriven
-    ? INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES_OUTLINE_DRIVEN
-    : INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES;
-
-  if (isTextDominant) {
-    const totalEstimatedInputChars = textFiles.reduce(
-      (sum, f) => sum + estimateCharsFromBase64Text(f.base64Data),
-      0
-    );
-    if (
-      totalEstimatedInputChars > 0 &&
-      newLengthChars > totalEstimatedInputChars * currentTextDominantFactor
-    ) {
+  if (newLengthChars > totalInputChars * expansionFactor) {
       synthesisFailed = true;
-      synthesisReason = `Initial synthesis from text-dominant files ${
+      synthesisReason = `Initial synthesis ${
         isOutlineDriven ? "(outline-driven)" : ""
-      } resulted in output (${newLengthChars} chars) much larger (>${currentTextDominantFactor}x) than input characters (${totalEstimatedInputChars} chars).`;
-    }
+      } resulted in output (${newLengthChars} chars) much larger (>${expansionFactor}x) than total input characters (${totalInputChars} chars).`;
   }
 
   if (
     !synthesisFailed &&
-    totalFilesSizeBytesSent < MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 &&
+    totalInputChars < MAX_INPUT_CHARS_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 &&
     newLengthChars > ABSOLUTE_MAX_CHARS_ITER1_PRODUCT
   ) {
     synthesisFailed = true;
     synthesisReason = `Initial synthesis from files (<${
-      MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 / 1024
+      MAX_INPUT_CHARS_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 / 1024
     }KB) ${
       isOutlineDriven ? "(outline-driven)" : ""
     } likely failed. Output product size (${newLengthChars} chars) exceeds absolute limit of ${ABSOLUTE_MAX_CHARS_ITER1_PRODUCT} chars.`;
-  }
-
-  if (
-    !synthesisFailed && totalFilesSizeBytesSent > 0 &&
-    newLengthChars > totalFilesSizeBytesSent * currentByteExpansionFactor
-  ) {
-    synthesisFailed = true;
-    synthesisReason = `Initial synthesis ${
-      isOutlineDriven ? "(outline-driven)" : ""
-    } resulted in output (${newLengthChars} chars) much larger (>${currentByteExpansionFactor}x) than total input file size (${totalFilesSizeBytesSent} bytes).`;
   }
 
   if (synthesisFailed) {
