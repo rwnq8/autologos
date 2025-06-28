@@ -45,6 +45,7 @@ export const createInitialProcessState = (
   isApiRateLimited: false,
   rateLimitCooldownActiveSeconds: 0,
   stagnationNudgeEnabled: true,
+  isSearchGroundingEnabled: false,
   stagnationInfo: { 
     isStagnant: false, 
     consecutiveStagnantIterations: 0, 
@@ -112,6 +113,7 @@ export type AddLogEntryParams = {
   targetedSelection?: string;
   targetedRefinementInstructions?: string;
   isCriticalFailure?: boolean; 
+  groundingMetadata?: any;
   netLineChange?: number; 
   charDelta?: number; 
   // New fields for per-iteration stagnation metrics
@@ -332,6 +334,7 @@ export const useProcessState = () => {
       processedProductLengthChars: logData.processedProductLengthChars, attemptCount: logData.attemptCount,
       strategyRationale: logData.strategyRationale, currentModelForIteration: logData.currentModelForIteration,
       activeMetaInstruction: logData.activeMetaInstruction,
+      groundingMetadata: logData.groundingMetadata,
       isSegmentedSynthesis: entryType === 'segmented_synthesis_milestone', isTargetedRefinement: entryType === 'targeted_refinement',
       targetedSelection: logData.targetedSelection, targetedRefinementInstructions: logData.targetedRefinementInstructions,
       isCriticalFailure: logData.isCriticalFailure, 
@@ -379,7 +382,7 @@ export const useProcessState = () => {
         statusMessage: "System reset. Load input file(s) or type prompt to begin.", aiProcessInsight: "System reset. Ready for new input.",
         savedPlanTemplates: currentSavedPlanTemplates, 
         projectId: await storageService.hasSavedState() ? state.projectId : null, 
-        stagnationNudgeEnabled: true, currentDiffViewType: 'words', inputComplexity: initialComplexity,
+        stagnationNudgeEnabled: true, isSearchGroundingEnabled: false, currentDiffViewType: 'words', inputComplexity: initialComplexity,
         currentAppliedModelConfig: baseModelConfig, 
         stagnationInfo: { 
             isStagnant: false, consecutiveStagnantIterations: 0, consecutiveIdenticalProductIterations: 0, 

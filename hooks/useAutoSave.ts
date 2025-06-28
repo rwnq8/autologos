@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName } from '../types.ts';
 import * as storageService from '../services/storageService';
@@ -100,6 +99,7 @@ export const useAutoSave = (
         isApiRateLimited: currentState.isApiRateLimited,
         rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
         stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,
+        isSearchGroundingEnabled: currentState.isSearchGroundingEnabled,
         inputComplexity: currentState.inputComplexity,
         strategistInfluenceLevel: currentState.strategistInfluenceLevel, 
         stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, 
@@ -168,6 +168,7 @@ export const useAutoSave = (
           currentDiffViewType: engineData.currentDiffViewType || 'words',
           aiProcessInsight: initialProcessStateValues.aiProcessInsight, 
           stagnationNudgeEnabled: engineData.stagnationNudgeEnabled ?? initialProcessStateValues.stagnationNudgeEnabled,
+          isSearchGroundingEnabled: engineData.isSearchGroundingEnabled ?? initialProcessStateValues.isSearchGroundingEnabled,
           strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, 
           stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness,
           devLog: engineData.devLog || [],

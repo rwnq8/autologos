@@ -1,4 +1,3 @@
-
 import React, { useState, useContext } from 'react';
 import type { CommonControlProps, ProcessState } from '../../types.ts';
 import { useModelConfigContext } from '../../contexts/ModelConfigContext';
@@ -245,6 +244,19 @@ This setting does NOT apply in Plan Mode.`;
                             type="checkbox"
                             checked={processCtx.stagnationNudgeEnabled}
                             onChange={(e) => processCtx.updateProcessState({ stagnationNudgeEnabled: e.target.checked })}
+                            disabled={processCtx.isProcessing || planCtx.isPlanActive}
+                            className={commonCheckboxInputClasses}
+                        />
+                    </label>
+
+                    <label className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
+                        <span className="flex-grow mr-2" title="If enabled, the AI can use Google Search to ground its responses in up-to-date information. Useful for topics requiring current knowledge. This will disable JSON response mode if it is active for a plan stage.">
+                            Enable Google Search Grounding (Global Mode)
+                        </span>
+                        <input
+                            type="checkbox"
+                            checked={processCtx.isSearchGroundingEnabled}
+                            onChange={(e) => processCtx.updateProcessState({ isSearchGroundingEnabled: e.target.checked })}
                             disabled={processCtx.isProcessing || planCtx.isPlanActive}
                             className={commonCheckboxInputClasses}
                         />

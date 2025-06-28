@@ -87,6 +87,7 @@ export const useProjectIO = (
       isApiRateLimited: currentState.isApiRateLimited,
       rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
       stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,
+      isSearchGroundingEnabled: currentState.isSearchGroundingEnabled,
       inputComplexity: currentState.inputComplexity,
       strategistInfluenceLevel: currentState.strategistInfluenceLevel, 
       stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, 
@@ -174,6 +175,7 @@ export const useProjectIO = (
       currentDiffViewType: engineData.currentDiffViewType || 'words',
       aiProcessInsight: "Project loaded. Review state and resume or start new process.",
       stagnationNudgeEnabled: engineData.stagnationNudgeEnabled ?? initialProcessStateValues.stagnationNudgeEnabled,
+      isSearchGroundingEnabled: engineData.isSearchGroundingEnabled ?? initialProcessStateValues.isSearchGroundingEnabled,
       strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, 
       stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness, 
     };
@@ -302,6 +304,7 @@ export const useProjectIO = (
     restoredState.statusMessage = `State restored from log: ${originalFilename}. Last Iteration: ${lastLogEntry.iteration}.`;
     restoredState.aiProcessInsight = "Review restored state. You can resume, rewind, or reset.";
     restoredState.stagnationNudgeEnabled = initialProcessStateValues.stagnationNudgeEnabled;
+    restoredState.isSearchGroundingEnabled = initialProcessStateValues.isSearchGroundingEnabled;
     restoredState.currentDiffViewType = 'words';
     restoredState.strategistInfluenceLevel = initialProcessStateValues.strategistInfluenceLevel;
     restoredState.stagnationNudgeAggressiveness = initialProcessStateValues.stagnationNudgeAggressiveness;

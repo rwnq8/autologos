@@ -1,5 +1,3 @@
-
-
 import React, { useState, useContext } from 'react';
 import type { IterationLogEntry, ReconstructedProductResult, ModelConfig, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, SelectableModelName, IterationEntryType } from '../../types.ts';
 import * as GeminaiDiff from 'diff';
@@ -361,6 +359,25 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
               </pre>
             </div>
           )}
+          
+          {logEntry.groundingMetadata?.groundingChunks?.length > 0 && (
+             <div className="text-xs">
+                 <button onClick={() => toggleDiagnosticSection(`grounding-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
+                     Grounding Sources {expandedDiagnostics[`grounding-${logEntry.iteration}`] ? '▼' : '▶'}
+                 </button>
+                 {expandedDiagnostics[`grounding-${logEntry.iteration}`] && (
+                     <ul className="ml-2 pl-2 border-l border-slate-300 dark:border-slate-600 space-y-1 list-disc list-inside">
+                         {logEntry.groundingMetadata.groundingChunks.filter((c: any) => c.web && c.web.uri).map((chunk: any, index: number) => (
+                             <li key={index} className="text-blue-600 dark:text-blue-400 hover:underline">
+                                 <a href={chunk.web.uri} target="_blank" rel="noopener noreferrer">
+                                     {chunk.web.title || chunk.web.uri}
+                                 </a>
+                             </li>
+                         ))}
+                     </ul>
+                 )}
+             </div>
+          )}
 
           {(logEntry.similarityWithPreviousLogged !== undefined || logEntry.charDelta !== undefined || logEntry.netLineChange !== undefined) && (
             <div className="text-xs">
@@ -421,7 +438,7 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
                       <p>Total Bytes Loaded (App Data): {logEntry.fileProcessingInfo.totalFilesSizeBytesSent}</p>
                     </>
                   ) : (
-                     <p>Actual File Data: Not sent in this API call.</p>
+                     <p>Actual File Data: Not sent in this API call (expected if files were sent initially or no files loaded).</p>
                   )}
                 </div>
               )}
@@ -449,46 +466,4 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
              </div>
           )}
 
-          {(isAiEntry || (logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) && logEntry.strategyRationale && (
-             <div className="text-xs">
-                <button onClick={() => toggleDiagnosticSection(`strategy-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
-                  Strategy Rationale {expandedDiagnostics[`strategy-${logEntry.iteration}`] ? '▼' : '▶'}
-                </button>
-                {expandedDiagnostics[`strategy-${logEntry.iteration}`] && renderStrategyRationale(logEntry.strategyRationale)}
-             </div>
-          )}
-
-          {(isAiEntry || (logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) && (logEntry.promptSystemInstructionSent || logEntry.promptCoreUserInstructionsSent || logEntry.promptFullUserPromptSent) && (
-            <div className="text-xs space-y-2">
-              {renderExpandablePrompt(logEntry.promptSystemInstructionSent, `sys-${logEntry.iteration}`, "System Instruction Sent")}
-              {renderExpandablePrompt(logEntry.promptCoreUserInstructionsSent, `core-${logEntry.iteration}`, "Core User Instructions Sent")}
-              {renderExpandablePrompt(logEntry.promptFullUserPromptSent, `full-${logEntry.iteration}`, "Initial Full User Prompt Sent (for Iteration's First API Call)")}
-            </div>
-          )}
-
-          {logEntry.readabilityScoreFlesch !== undefined && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Readability (Flesch): {logEntry.readabilityScoreFlesch.toFixed(1)}
-              {getReadabilityInterpretation(logEntry.readabilityScoreFlesch)}
-            </p>
-          )}
-           {logEntry.lexicalDensity !== undefined && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Lexical Density: {logEntry.lexicalDensity.toFixed(3)}
-            </p>
-          )}
-          {logEntry.avgSentenceLength !== undefined && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Avg. Sentence Length: {logEntry.avgSentenceLength.toFixed(1)} words
-            </p>
-          )}
-          {logEntry.typeTokenRatio !== undefined && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Type-Token Ratio (TTR): {logEntry.typeTokenRatio.toFixed(3)}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
+          {(isAiEntry || (logEntry.entryType === 'initial_state' && logEntry.iteration === 0

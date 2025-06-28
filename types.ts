@@ -37,6 +37,7 @@ export interface IterateProductResult {
   apiStreamDetails?: ApiStreamCallDetail[];
   isRateLimitError?: boolean;
   isStuckOnMaxTokensContinuation?: boolean;
+  groundingMetadata?: any;
 }
 
 export interface IterationResultDetails extends IterateProductResult {
@@ -169,6 +170,7 @@ export interface IterationLogEntry {
   targetedSelection?: string;
   targetedRefinementInstructions?: string;
   isCriticalFailure?: boolean;
+  groundingMetadata?: any;
   // Fields for per-iteration stagnation metrics
   similarityWithPreviousLogged?: number;
   isStagnantIterationLogged?: boolean;
@@ -222,6 +224,7 @@ export interface AutologosIterativeEngineData {
   isApiRateLimited?: boolean;
   rateLimitCooldownActiveSeconds?: number;
   stagnationNudgeEnabled?: boolean;
+  isSearchGroundingEnabled?: boolean;
   inputComplexity?: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
   strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
@@ -381,6 +384,7 @@ export interface ProcessState {
   aiProcessInsight?: string;
   currentAppliedModelConfig?: ModelConfig | null;
   stagnationNudgeEnabled: boolean;
+  isSearchGroundingEnabled: boolean;
   stagnationInfo: StagnationInfo;
   isPlanActive: boolean;
   planStages: PlanStage[];

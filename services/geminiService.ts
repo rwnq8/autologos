@@ -1,5 +1,3 @@
-
-
 import { GoogleGenAI } from "@google/genai";
 import type { GenerateContentResponse, Part, Content } from "@google/genai";
 import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, LoadedFile, PlanStage, SuggestedParamsResponse, RetryContext, OutlineGenerationResult, NudgeStrategy, SelectableModelName } from "../types.ts";
@@ -159,7 +157,7 @@ export const generateInitialOutline = async (fileManifest: string, loadedFiles: 
 export const iterateProduct = async ({
     currentProduct, currentIterationOverall, maxIterationsOverall, fileManifest, loadedFiles,
     activePlanStage, outputParagraphShowHeadings, outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings,
-    modelConfigToUse, isGlobalMode, modelToUse, onStreamChunk, isHaltSignalled,
+    modelConfigToUse, isGlobalMode, isSearchGroundingEnabled, modelToUse, onStreamChunk, isHaltSignalled,
     retryContext, stagnationNudgeStrategy, initialOutlineForIter1, activeMetaInstruction,
     devLogContextString, isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
     isRadicalRefinementKickstart
@@ -167,7 +165,7 @@ export const iterateProduct = async ({
     currentProduct: string; currentIterationOverall: number; maxIterationsOverall: number; fileManifest: string;
     loadedFiles: LoadedFile[]; activePlanStage: PlanStage | null; outputParagraphShowHeadings: boolean;
     outputParagraphMaxHeadingDepth: number; outputParagraphNumberedHeadings: boolean;
-    modelConfigToUse: ModelConfig; isGlobalMode: boolean; modelToUse: SelectableModelName;
+    modelConfigToUse: ModelConfig; isGlobalMode: boolean; isSearchGroundingEnabled: boolean; modelToUse: SelectableModelName;
     onStreamChunk: (chunkText: string) => void; isHaltSignalled: () => boolean;
     retryContext?: RetryContext; stagnationNudgeStrategy?: NudgeStrategy;
     initialOutlineForIter1?: OutlineGenerationResult; activeMetaInstruction?: string;
@@ -225,11 +223,21 @@ export const iterateProduct = async ({
                 return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: 'Process halted by user during preparation for API call.' };
             }
 
-            const streamResult = await ai.models.generateContentStream({
+            const requestPayload: any = {
                 model: modelToUse,
                 contents: conversationHistory,
                 config: { ...apiConfig, systemInstruction },
-            });
+            };
+
+            if (isSearchGroundingEnabled) {
+                requestPayload.tools = [{googleSearch: {}}];
+                // Per Gemini API guidance, responseMimeType is not supported with the googleSearch tool.
+                if (requestPayload.config.responseMimeType) {
+                    delete requestPayload.config.responseMimeType;
+                }
+            }
+
+            const streamResult = await ai.models.generateContentStream(requestPayload);
 
             let responseTextThisStream = "";
             let finalResponse: GenerateContentResponse | undefined;
@@ -292,6 +300,7 @@ export const iterateProduct = async ({
             promptSystemInstructionSent: systemInstruction,
             promptCoreUserInstructionsSent: coreUserInstructions,
             promptFullUserPromptSent: fullUserPromptText,
+            groundingMetadata: apiStreamDetails[apiStreamDetails.length - 1] // The last response chunk should have the aggregated metadata
         };
 
     } catch (error: any) {
