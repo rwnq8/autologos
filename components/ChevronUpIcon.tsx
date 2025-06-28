@@ -1,10 +1,3 @@
-
-import React from 'react';
-
-// Minimal placeholder for components/ChevronUpIcon.tsx
-// Assuming components/shared/ChevronUpIcon.tsx is the primary one if used.
-const ChevronUpIcon: React.FC = () => {
-  return null;
-};
-
-export default ChevronUpIcon;
+// This component is obsolete. Use components/shared/ChevronUpIcon.tsx instead.
+// This file is intentionally left blank.
+export {};

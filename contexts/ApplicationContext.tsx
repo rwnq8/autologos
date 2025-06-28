@@ -1,4 +1,8 @@
 
+
+
+
+
 import React, { createContext, useContext } from 'react';
 import type { SelectableModelName, StaticAiModelDetails, ProcessState, AutologosProjectFile, IterationLogEntry } from '../types';
 
@@ -18,6 +22,7 @@ export interface ApplicationContextType {
   staticAiModelDetails: StaticAiModelDetails | null;
   onSelectedModelChange: (modelName: SelectableModelName) => void;
   onFilesSelectedForImport: (files: FileList | null) => Promise<void>;
+  autoSaveHook?: any;
 }
 
 const ApplicationContext = createContext<ApplicationContextType | undefined>(undefined);

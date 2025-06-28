@@ -38,7 +38,7 @@ export const formatLogEntryDiagnostics = (
 
 
   if (logEntry.aiValidationInfo) {
-    diagString += `\n== AI Response Validation (${logEntry.aiValidationInfo.checkName}) ==\n`;
+    diagString += `\n== AI Response Validation (${logEntry.aiValidationInfo.checkName || 'N/A'}) ==\n`;
     diagString += `  Passed: ${logEntry.aiValidationInfo.passed}\n`;
     if (logEntry.aiValidationInfo.reason) diagString += `  Reason: ${logEntry.aiValidationInfo.reason}\n`;
     if (logEntry.aiValidationInfo.details) {
@@ -103,7 +103,7 @@ export const formatLogEntryDiagnostics = (
       }
   }
   if (logEntry.modelConfigUsed) {
-    const modelUsedDisplayName = SELECTABLE_MODELS.find(m => m.name === logEntry.modelConfigUsed?.modelName)?.displayName || logEntry.modelConfigUsed?.modelName || "N/A";
+    const modelUsedDisplayName = SELECTABLE_MODELS.find(m => m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration || "N/A";
     diagString += `\n== Model Config Used ==\n  Model Name: ${modelUsedDisplayName}\n  Temperature: ${logEntry.modelConfigUsed.temperature.toFixed(2)}\n  Top-P: ${logEntry.modelConfigUsed.topP.toFixed(2)}\n  Top-K: ${logEntry.modelConfigUsed.topK}\n`;
     if (logEntry.modelConfigUsed.thinkingConfig) {
         diagString += `  Thinking Budget: ${logEntry.modelConfigUsed.thinkingConfig.thinkingBudget}\n`;

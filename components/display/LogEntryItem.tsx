@@ -20,6 +20,8 @@ interface LogEntryItemProps {
   isProcessing: boolean;
 }
 
+const MAX_DIFF_RENDER_SIZE = 200000; // 200k chars max for rendering a diff to prevent UI freeze
+
 // Helper function to determine the title for the diff section
 const getDiffTitle = (entry: IterationLogEntry): string => {
   if (entry.entryType === 'initial_state' && entry.iteration === 0) {
@@ -92,6 +94,9 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
   };
 
   const renderWordDiffDisplay = (oldStr: string, newStr: string): JSX.Element[] => {
+    if (newStr.length > MAX_DIFF_RENDER_SIZE) {
+        return [<span key="large_diff_warning" className="text-orange-500 dark:text-orange-400 block">Diff not shown due to excessive size ({newStr.length} chars). Export diagnostics to view full content.</span>];
+    }
     const changes = GeminaiDiff.diffWordsWithSpace(oldStr, newStr);
     return changes.map((part, index) => {
       const partClasses = part.added ? 'bg-green-100 dark:bg-green-600/30 text-green-700 dark:text-green-200'
@@ -444,7 +449,7 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
              </div>
           )}
 
-          {isAiEntry && logEntry.strategyRationale && (
+          {(isAiEntry || (logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) && logEntry.strategyRationale && (
              <div className="text-xs">
                 <button onClick={() => toggleDiagnosticSection(`strategy-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
                   Strategy Rationale {expandedDiagnostics[`strategy-${logEntry.iteration}`] ? '▼' : '▶'}

@@ -1,6 +1,3 @@
-
-
-
 import { useState, useCallback } from 'react';
 import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, ParameterAdvice, PlanTemplate, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry } from '../types.ts'; // Added DevLogEntry
 import * as geminiService from '../services/geminiService';
@@ -51,12 +48,13 @@ export const createInitialProcessState = (
   stagnationInfo: { 
     isStagnant: false, 
     consecutiveStagnantIterations: 0, 
-    consecutiveIdenticalProductIterations: 0, // Added
-    lastMeaningfulChangeProductLength: undefined, // Added
+    consecutiveIdenticalProductIterations: 0, 
+    lastMeaningfulChangeProductLength: undefined, 
     similarityWithPrevious: undefined, 
     nudgeStrategyApplied: 'none',
     consecutiveLowValueIterations: 0, 
-    lastProductLengthForStagnation: undefined 
+    lastProductLengthForStagnation: undefined,
+    consecutiveWordsmithingIterations: 0, 
   },
   inputComplexity: 'SIMPLE',
   currentModelForIteration: selectedModelNameInput,
@@ -69,7 +67,7 @@ export const createInitialProcessState = (
   instructionsForSelectionRefinement: "",
   isEditingCurrentProduct: false,
   editedProductBuffer: null,
-  devLog: [], // Initialize devLog as an empty array
+  devLog: [], 
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
@@ -212,12 +210,13 @@ export const useProcessState = () => {
         updates.stagnationInfo = { 
             isStagnant: false, 
             consecutiveStagnantIterations: 0, 
-            consecutiveIdenticalProductIterations: 0, // Reset
-            lastMeaningfulChangeProductLength: undefined, // Reset
+            consecutiveIdenticalProductIterations: 0, 
+            lastMeaningfulChangeProductLength: undefined, 
             similarityWithPrevious: undefined, 
             nudgeStrategyApplied: 'none', 
             consecutiveLowValueIterations: 0, 
-            lastProductLengthForStagnation: undefined 
+            lastProductLengthForStagnation: undefined,
+            consecutiveWordsmithingIterations: 0, 
         };
         updates.currentProductBeforeHalt = null;
         updates.currentIterationBeforeHalt = undefined;
@@ -228,7 +227,7 @@ export const useProcessState = () => {
         updates.currentStageIteration = 0;
         updates.isEditingCurrentProduct = false; 
         updates.editedProductBuffer = null;
-        updates.devLog = []; // Reset devLog when primary input changes significantly
+        updates.devLog = []; 
       }
       return { ...prev, ...updates };
     });
@@ -237,7 +236,6 @@ export const useProcessState = () => {
   const handleInitialPromptChange = useCallback((newPromptText: string) => {
       setState(prev => {
           if (prev.loadedFiles.length > 0) { 
-            // If files are loaded, initialPrompt is derived from file manifest and should not be user-editable.
             return prev;
           }
           const newComplexity = calculateInputComplexity(newPromptText, prev.loadedFiles);
@@ -245,9 +243,8 @@ export const useProcessState = () => {
               ...prev,
               initialPrompt: newPromptText,
               inputComplexity: newComplexity,
-              promptChangedByFileLoad: true, // Signify that suggestions might need update
+              promptChangedByFileLoad: true, 
               promptSourceName: newPromptText.trim() ? "direct_text" : null,
-              // Reset process if prompt changes substantially when no files are loaded
               currentProduct: null,
               iterationHistory: [],
               finalProduct: null,
@@ -255,12 +252,13 @@ export const useProcessState = () => {
               stagnationInfo: { 
                 isStagnant: false, 
                 consecutiveStagnantIterations: 0, 
-                consecutiveIdenticalProductIterations: 0, // Reset
-                lastMeaningfulChangeProductLength: undefined, // Reset
+                consecutiveIdenticalProductIterations: 0, 
+                lastMeaningfulChangeProductLength: undefined, 
                 similarityWithPrevious: undefined, 
                 nudgeStrategyApplied: 'none',
                 consecutiveLowValueIterations: 0,
-                lastProductLengthForStagnation: undefined 
+                lastProductLengthForStagnation: undefined,
+                consecutiveWordsmithingIterations: 0, 
               },
               currentProductBeforeHalt: null,
               currentIterationBeforeHalt: undefined,
@@ -271,7 +269,7 @@ export const useProcessState = () => {
               currentStageIteration: 0,
               isEditingCurrentProduct: false, 
               editedProductBuffer: null,
-              devLog: prev.devLog || [], // Keep existing devLog on prompt change
+              devLog: [], 
           };
       });
   }, []);
@@ -281,11 +279,10 @@ export const useProcessState = () => {
     let productDiff: string | undefined = undefined;
     let linesAdded = 0;
     let linesRemoved = 0;
-    const entryType = logData.entryType || 'ai_iteration'; // Default to 'ai_iteration' if not specified
+    const entryType = logData.entryType || 'ai_iteration'; 
 
     const normalizeNewlines = (str: string | null | undefined): string => {
         if (!str) return "";
-        // Replace CRLF with LF, then replace standalone CR with LF
         return str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     };
 
@@ -300,16 +297,12 @@ export const useProcessState = () => {
             : (logData.previousFullProduct ?? "")
     );
     
-    // For initial state or segmented synthesis milestone, diff from empty or previous state as appropriate.
-    // For other types, diff from previous product.
     const diffBase = (entryType === 'initial_state' && logData.iteration === 0) ? "" : previousPForDiff;
 
-    if (currentPForDiff !== diffBase) { // Only calculate diff if there's a change or it's an initial entry
+    if (currentPForDiff !== diffBase) { 
         productDiff = Diff.createTwoFilesPatch(
-            `iteration_content_prev.txt`,
-            `iteration_content_curr.txt`,
-            diffBase, 
-            currentPForDiff,
+            `iteration_content_prev.txt`, `iteration_content_curr.txt`,
+            diffBase, currentPForDiff,
             undefined, undefined, { context: 3 }
         );
         const lineChanges = Diff.diffLines(diffBase, currentPForDiff, { newlineIsToken: true, ignoreWhitespace: false });
@@ -322,55 +315,33 @@ export const useProcessState = () => {
     }
 
     const newEntry: IterationLogEntry = {
-      iteration: logData.iteration,
-      entryType: entryType,
-      productSummary: getProductSummary(logData.currentFullProduct),
-      status: logData.status,
-      timestamp: Date.now(),
-      productDiff: productDiff,
+      iteration: logData.iteration, entryType: entryType,
+      productSummary: getProductSummary(logData.currentFullProduct), status: logData.status,
+      timestamp: Date.now(), productDiff: productDiff,
       linesAdded: linesAdded > 0 ? linesAdded : (logData.iteration === 0 && entryType === 'initial_state' && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
       linesRemoved: linesRemoved > 0 ? linesRemoved : undefined,
-      netLineChange: logData.netLineChange,
-      charDelta: logData.charDelta,     
-      readabilityScoreFlesch: logData.readabilityScoreFlesch,
-      lexicalDensity: logData.lexicalDensity, 
-      avgSentenceLength: logData.avgSentenceLength, 
-      typeTokenRatio: logData.typeTokenRatio, 
-      fileProcessingInfo: logData.fileProcessingInfo,
-      promptSystemInstructionSent: logData.promptSystemInstructionSent,
-      promptCoreUserInstructionsSent: logData.promptCoreUserInstructionsSent,
-      promptFullUserPromptSent: logData.promptFullUserPromptSent,
-      apiStreamDetails: logData.apiStreamDetails,
-      modelConfigUsed: logData.modelConfigUsed,
-      aiValidationInfo: logData.aiValidationInfo,
-      directAiResponseHead: logData.directAiResponseHead,
-      directAiResponseTail: logData.directAiResponseTail,
-      directAiResponseLengthChars: logData.directAiResponseLengthChars,
-      processedProductHead: logData.processedProductHead,
-      processedProductTail: logData.processedProductTail,
-      processedProductLengthChars: logData.processedProductLengthChars,
-      attemptCount: logData.attemptCount,
-      strategyRationale: logData.strategyRationale,
-      currentModelForIteration: logData.currentModelForIteration,
+      netLineChange: logData.netLineChange, charDelta: logData.charDelta,     
+      readabilityScoreFlesch: logData.readabilityScoreFlesch, lexicalDensity: logData.lexicalDensity, 
+      avgSentenceLength: logData.avgSentenceLength, typeTokenRatio: logData.typeTokenRatio, 
+      fileProcessingInfo: logData.fileProcessingInfo, promptSystemInstructionSent: logData.promptSystemInstructionSent,
+      promptCoreUserInstructionsSent: logData.promptCoreUserInstructionsSent, promptFullUserPromptSent: logData.promptFullUserPromptSent,
+      apiStreamDetails: logData.apiStreamDetails, modelConfigUsed: logData.modelConfigUsed,
+      aiValidationInfo: logData.aiValidationInfo, directAiResponseHead: logData.directAiResponseHead,
+      directAiResponseTail: logData.directAiResponseTail, directAiResponseLengthChars: logData.directAiResponseLengthChars,
+      processedProductHead: logData.processedProductHead, processedProductTail: logData.processedProductTail,
+      processedProductLengthChars: logData.processedProductLengthChars, attemptCount: logData.attemptCount,
+      strategyRationale: logData.strategyRationale, currentModelForIteration: logData.currentModelForIteration,
       activeMetaInstruction: logData.activeMetaInstruction,
-      isSegmentedSynthesis: entryType === 'segmented_synthesis_milestone',
-      isTargetedRefinement: entryType === 'targeted_refinement',
-      targetedSelection: logData.targetedSelection,
-      targetedRefinementInstructions: logData.targetedRefinementInstructions,
-      isCriticalFailure: logData.isCriticalFailure, // Ensure this field is passed
-      similarityWithPreviousLogged: logData.similarityWithPreviousLogged,
-      isStagnantIterationLogged: logData.isStagnantIterationLogged,
-      isEffectivelyIdenticalLogged: logData.isEffectivelyIdenticalLogged,
-      isLowValueIterationLogged: logData.isLowValueIterationLogged,
+      isSegmentedSynthesis: entryType === 'segmented_synthesis_milestone', isTargetedRefinement: entryType === 'targeted_refinement',
+      targetedSelection: logData.targetedSelection, targetedRefinementInstructions: logData.targetedRefinementInstructions,
+      isCriticalFailure: logData.isCriticalFailure, 
+      similarityWithPreviousLogged: logData.similarityWithPreviousLogged, isStagnantIterationLogged: logData.isStagnantIterationLogged,
+      isEffectivelyIdenticalLogged: logData.isEffectivelyIdenticalLogged, isLowValueIterationLogged: logData.isLowValueIterationLogged,
     };
 
     setState(prev => {
-        // Ensure log entries are unique based on iteration AND entry type if multiple entries per iter exist
-        // Also consider attemptCount for uniqueness if multiple attempts for the same (iter, type) are logged.
         const existingEntryIndex = prev.iterationHistory.findIndex(entry => 
-            entry.iteration === newEntry.iteration && 
-            entry.entryType === newEntry.entryType &&
-            // If attemptCount is logged, it should be part of the uniqueness key
+            entry.iteration === newEntry.iteration && entry.entryType === newEntry.entryType &&
             (newEntry.attemptCount ? entry.attemptCount === newEntry.attemptCount : true) 
         );
         let updatedHistory;
@@ -380,20 +351,13 @@ export const useProcessState = () => {
         } else {
             updatedHistory = [...prev.iterationHistory, newEntry];
         }
-        // Sort history: iteration ascending, then by entry type order, then by attempt count
         updatedHistory.sort((a, b) => {
             if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-            const typeOrder: Record<IterationEntryType, number> = { 
-                'initial_state': 0, 
-                'segmented_synthesis_milestone': 1, 
-                'ai_iteration': 2, 
-                'targeted_refinement': 3, 
-                'manual_edit': 4 
-            };
+            const typeOrder: Record<IterationEntryType, number> = { 'initial_state': 0, 'segmented_synthesis_milestone': 1, 'ai_iteration': 2, 'targeted_refinement': 3, 'manual_edit': 4 };
             const aTypeOrder = typeOrder[a.entryType || 'ai_iteration'];
             const bTypeOrder = typeOrder[b.entryType || 'ai_iteration'];
             if (aTypeOrder !== bTypeOrder) return aTypeOrder - bTypeOrder;
-            return (a.attemptCount || 0) - (b.attemptCount || 0); // Sort by attempt if iter and type are same
+            return (a.attemptCount || 0) - (b.attemptCount || 0); 
         });
         return { ...prev, iterationHistory: updatedHistory };
     });
@@ -406,93 +370,54 @@ export const useProcessState = () => {
     ) => {
     const resetApiKeyStatus = geminiService.isApiKeyAvailable() ? 'loaded' : 'missing';
     const resetSelectedModelName = geminiService.DEFAULT_MODEL_NAME;
-
     const initialStateFromCreator = createInitialProcessState(resetApiKeyStatus, resetSelectedModelName);
-
     const initialComplexity = calculateInputComplexity(initialStateFromCreator.initialPrompt, initialStateFromCreator.loadedFiles);
 
     const resetState: ProcessState = {
         ...initialStateFromCreator, 
-        apiKeyStatus: resetApiKeyStatus,
-        selectedModelName: resetSelectedModelName,
-        currentModelForIteration: resetSelectedModelName,
-        statusMessage: "System reset. Load input file(s) or type prompt to begin.",
-        aiProcessInsight: "System reset. Ready for new input.",
+        apiKeyStatus: resetApiKeyStatus, selectedModelName: resetSelectedModelName, currentModelForIteration: resetSelectedModelName,
+        statusMessage: "System reset. Load input file(s) or type prompt to begin.", aiProcessInsight: "System reset. Ready for new input.",
         savedPlanTemplates: currentSavedPlanTemplates, 
         projectId: await storageService.hasSavedState() ? state.projectId : null, 
-        stagnationNudgeEnabled: true,
-        currentDiffViewType: 'words',
-        inputComplexity: initialComplexity,
+        stagnationNudgeEnabled: true, currentDiffViewType: 'words', inputComplexity: initialComplexity,
         currentAppliedModelConfig: baseModelConfig, 
         stagnationInfo: { 
-            isStagnant: false, 
-            consecutiveStagnantIterations: 0, 
-            consecutiveIdenticalProductIterations: 0, // Reset
-            lastMeaningfulChangeProductLength: undefined, // Reset
-            similarityWithPrevious: undefined, 
-            nudgeStrategyApplied: 'none',
-            consecutiveLowValueIterations: 0,
-            lastProductLengthForStagnation: undefined 
+            isStagnant: false, consecutiveStagnantIterations: 0, consecutiveIdenticalProductIterations: 0, 
+            lastMeaningfulChangeProductLength: undefined, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none',
+            consecutiveLowValueIterations: 0, lastProductLengthForStagnation: undefined,
+            consecutiveWordsmithingIterations: 0, 
         },
-        isTargetedRefinementModalOpen: false,
-        currentTextSelectionForRefinement: null,
-        instructionsForSelectionRefinement: "",
-        isEditingCurrentProduct: false, 
-        editedProductBuffer: null,
-        devLog: [], // Reset devLog on full app reset
+        isTargetedRefinementModalOpen: false, currentTextSelectionForRefinement: null, instructionsForSelectionRefinement: "",
+        isEditingCurrentProduct: false, editedProductBuffer: null, devLog: [], 
     };
     setState(resetState);
-
   }, [state.projectId]);
 
-  // --- DevLog Management Functions ---
   const addDevLogEntry = useCallback((newEntryData: Omit<DevLogEntry, 'id' | 'timestamp' | 'lastModified'>) => {
     const newEntry: DevLogEntry = {
       ...newEntryData,
       id: `devlog_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-      timestamp: Date.now(),
-      lastModified: Date.now(),
+      timestamp: Date.now(), lastModified: Date.now(),
     };
-    setState(prev => ({
-      ...prev,
-      devLog: [...(prev.devLog || []), newEntry].sort((a,b) => b.timestamp - a.timestamp), // Sort newest first
-    }));
+    setState(prev => ({ ...prev, devLog: [...(prev.devLog || []), newEntry].sort((a,b) => b.timestamp - a.timestamp) }));
   }, []);
 
   const updateDevLogEntry = useCallback((updatedEntry: DevLogEntry) => {
-    setState(prev => ({
-      ...prev,
-      devLog: (prev.devLog || []).map(entry =>
-        entry.id === updatedEntry.id ? { ...updatedEntry, lastModified: Date.now() } : entry
-      ).sort((a,b) => b.timestamp - a.timestamp), // Re-sort by original timestamp
-    }));
+    setState(prev => ({ ...prev, devLog: (prev.devLog || []).map(entry => entry.id === updatedEntry.id ? { ...updatedEntry, lastModified: Date.now() } : entry ).sort((a,b) => b.timestamp - a.timestamp) }));
   }, []);
 
   const deleteDevLogEntry = useCallback((entryId: string) => {
-    setState(prev => ({
-      ...prev,
-      devLog: (prev.devLog || []).filter(entry => entry.id !== entryId),
-    }));
+    setState(prev => ({ ...prev, devLog: (prev.devLog || []).filter(entry => entry.id !== entryId) }));
   }, []);
 
-
   return {
-    state,
-    updateProcessState,
-    handleLoadedFilesChange,
-    addLogEntry,
-    handleReset,
-    handleInitialPromptChange,
-    // DevLog functions
-    addDevLogEntry,
-    updateDevLogEntry,
-    deleteDevLogEntry,
+    state, updateProcessState, handleLoadedFilesChange, addLogEntry, handleReset, handleInitialPromptChange,
+    addDevLogEntry, updateDevLogEntry, deleteDevLogEntry,
   };
 };
 
 declare module '../types.ts' {
-  interface IterationLogEntry {
-    entryType?: IterationEntryType;
-    isCriticalFailure?: boolean; // Added this line
+  interface FileProcessingInfo {
+    loadedFilesForIterationContext?: LoadedFile[];
   }
 }

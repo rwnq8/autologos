@@ -1,5 +1,4 @@
-
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName } from '../types.ts';
 import * as storageService from '../services/storageService';
 import { DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils';
@@ -7,38 +6,31 @@ import { reconstructProduct } from '../services/diffService';
 
 type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'loaded' | 'not_found' | 'found_autosave' | 'cleared' | 'loading' | 'clearing';
 
+type ModelParams = {
+    temperature: number;
+    topP: number;
+    topK: number;
+    settingsSuggestionSource: SettingsSuggestionSource;
+    userManuallyAdjustedSettings: boolean;
+};
+
 export const useAutoSave = (
-  stateRef: React.MutableRefObject<ProcessState>,
-  modelParamsRef: React.MutableRefObject<{
-      temperature: number;
-      topP: number;
-      topK: number;
-      settingsSuggestionSource: SettingsSuggestionSource;
-      userManuallyAdjustedSettings: boolean;
-  }>,
+  processState: ProcessState,
+  modelParams: ModelParams,
   updateProcessState: (updates: Partial<ProcessState>) => void,
   overwriteUserPlanTemplates: (templates: PlanTemplate[]) => void,
   initialProcessStateValues: ProcessState,
-  initialModelParamValues: {
-      temperature: number;
-      topP: number;
-      topK: number;
-      settingsSuggestionSource: SettingsSuggestionSource;
-      userManuallyAdjustedSettings: boolean;
-  },
-  setLoadedModelParams: (params: {
-      temperature: number;
-      topP: number;
-      topK: number;
-      settingsSuggestionSource: SettingsSuggestionSource;
-      userManuallyAdjustedSettings: boolean;
-  }) => void
-
-
+  initialModelParamValues: ModelParams,
+  setLoadedModelParams: (params: ModelParams) => void
 ) => {
   const [autoSaveStatus, setAutoSaveStatus] = useState<AutoSaveStatus>('idle');
   const [showRestorePrompt, setShowRestorePrompt] = useState(false);
   const [restorableStateInfo, setRestorableStateInfo] = useState<{ projectName: string | null, lastAutoSavedAt: number | null } | null>(null);
+
+  const latestDataRef = useRef({ processState, modelParams });
+  useEffect(() => {
+    latestDataRef.current = { processState, modelParams };
+  }, [processState, modelParams]);
 
   useEffect(() => {
     const checkForAutoSavedState = async () => {
@@ -63,8 +55,7 @@ export const useAutoSave = (
 
   const performAutoSave = useCallback(async () => {
     setAutoSaveStatus('saving');
-    const currentState = stateRef.current;
-    const currentModelParams = modelParamsRef.current;
+    const { processState: currentState, modelParams: currentModelParams } = latestDataRef.current;
 
     const dataToSave: AutologosIterativeEngineData = {
         initialPrompt: currentState.initialPrompt,
@@ -114,7 +105,7 @@ export const useAutoSave = (
       setAutoSaveStatus('error');
       updateProcessState({ statusMessage: "Warning: Auto-save failed." });
     }
-  }, [stateRef, modelParamsRef, updateProcessState]);
+  }, [updateProcessState]);
 
 
   const handleRestoreAutoSave = useCallback(async () => {

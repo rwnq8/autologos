@@ -1,5 +1,4 @@
-
-import { useCallback } from 'react';
+import { useCallback, useRef, useEffect } from 'react';
 import type { ProcessState, AutologosProjectFile, AutologosIterativeEngineData, ProjectFileHeader, ModelConfig, LoadedFile, PlanTemplate, SettingsSuggestionSource, SelectableModelName, IterationLogEntry } from '../types.ts';
 import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION, SELECTABLE_MODELS } from '../types.ts';
 import { generateFileName, DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils';
@@ -14,19 +13,30 @@ function uuidv4() {
   });
 }
 
+type ModelParams = {
+    temperature: number;
+    topP: number;
+    topK: number;
+    settingsSuggestionSource: SettingsSuggestionSource;
+    userManuallyAdjustedSettings: boolean;
+};
+
 export const useProjectIO = (
-  stateRef: React.MutableRefObject<ProcessState>,
-  modelParamsRef: React.MutableRefObject<{temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean}>,
+  processState: ProcessState,
+  modelParams: ModelParams,
   updateProcessState: (updates: Partial<ProcessState>) => void,
   overwriteUserPlanTemplates: (templates: PlanTemplate[]) => void,
   initialProcessStateValues: ProcessState,
-  initialModelParamValues: {temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean},
-  setLoadedModelParams: (params: {temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean}) => void
-
+  initialModelParamValues: ModelParams,
+  setLoadedModelParams: (params: ModelParams) => void
 ) => {
+  const latestDataRef = useRef({ processState, modelParams });
+  useEffect(() => {
+    latestDataRef.current = { processState, modelParams };
+  }, [processState, modelParams]);
+
   const handleExportProject = useCallback(async () => {
-    const currentState = stateRef.current;
-    const currentModelParams = modelParamsRef.current;
+    const { processState: currentState, modelParams: currentModelParams } = latestDataRef.current;
 
     if (currentState.iterationHistory.length === 0 && currentState.loadedFiles.length === 0 && !currentState.initialPrompt.trim()) {
       updateProcessState({ statusMessage: "Nothing to export yet." });
@@ -101,7 +111,7 @@ export const useProjectIO = (
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     updateProcessState({ statusMessage: "Project exported successfully.", projectId: currentProjectId });
-  }, [stateRef, modelParamsRef, updateProcessState]);
+  }, [updateProcessState]);
 
   const handleImportProjectData = useCallback((projectFile: AutologosProjectFile) => {
     if (!projectFile.header || projectFile.header.fileFormatVersion !== AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION) {
@@ -189,10 +199,12 @@ export const useProjectIO = (
       return;
     }
 
+    const { processState: currentState } = latestDataRef.current;
+    
     const restoredState: Partial<ProcessState> = {
         ...initialProcessStateValues,
-        apiKeyStatus: stateRef.current.apiKeyStatus,
-        savedPlanTemplates: stateRef.current.savedPlanTemplates, // Keep current user's templates
+        apiKeyStatus: currentState.apiKeyStatus,
+        savedPlanTemplates: currentState.savedPlanTemplates, // Keep current user's templates
     };
 
     restoredState.iterationHistory = logData;
@@ -265,7 +277,7 @@ export const useProjectIO = (
             if (foundModel) modelNameFromLog = foundModel.name;
         }
     }
-    restoredState.selectedModelName = modelNameFromLog || stateRef.current.selectedModelName || GeminaiService.DEFAULT_MODEL_NAME;
+    restoredState.selectedModelName = modelNameFromLog || currentState.selectedModelName || GeminaiService.DEFAULT_MODEL_NAME;
 
 
     let pName = "Restored Log Project";
@@ -298,7 +310,7 @@ export const useProjectIO = (
 
     updateProcessState(restoredState as ProcessState);
 
-  }, [updateProcessState, setLoadedModelParams, initialProcessStateValues, initialModelParamValues, stateRef]);
+  }, [updateProcessState, setLoadedModelParams, initialProcessStateValues, initialModelParamValues, latestDataRef]);
 
 
   return { handleExportProject, handleImportProjectData, handleImportIterationLogData };

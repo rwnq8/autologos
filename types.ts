@@ -53,12 +53,12 @@ export const SELECTABLE_MODELS = [
   // Current & Recommended
   { name: 'gemini-2.5-flash-preview-04-17', displayName: 'Gemini 2.5 Flash Preview (04-17)', description: 'Fast, multimodal, latest preview. Supports thinkingConfig. Recommended for general text tasks.' },
   { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', description: 'Enhanced thinking and reasoning, multimodal understanding, advanced coding, and more. (No thinkingConfig)' },
-  
+ 
   // All other models as requested by user, including those previously marked deprecated
   { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro (Legacy)', description: 'Advanced reasoning, long context, multimodal capabilities. (No thinkingConfig)' },
   { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash (Legacy)', description: 'Fast, efficient, long context, multimodal model. (No thinkingConfig)' },
   { name: 'gemini-pro', displayName: 'Gemini Pro (Legacy)', description: 'General purpose model for text generation, chat, and code. (No thinkingConfig)'},
-  
+ 
   // Older models, included per user request (functionality may vary, thinkingConfig likely not supported)
   { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash (User Requested)', description: 'Adaptive thinking, cost efficiency. (Check API for thinkingConfig support)' },
   { name: 'gemini-2.5-flash-lite-preview-06-17', displayName: 'Gemini 2.5 Flash-Lite Preview (06-17, User Requested)', description: 'Most cost-efficient model supporting high throughput. (Likely no thinkingConfig)' },
@@ -134,15 +134,15 @@ export type IterationEntryType = 'initial_state' | 'ai_iteration' | 'manual_edit
 
 export interface IterationLogEntry {
   iteration: number;
-  entryType?: IterationEntryType; 
+  entryType?: IterationEntryType;
   productSummary: string;
   status: string;
   timestamp: number;
   productDiff?: string;
   linesAdded?: number;
   linesRemoved?: number;
-  netLineChange?: number; 
-  charDelta?: number; 
+  netLineChange?: number;
+  charDelta?: number;
   readabilityScoreFlesch?: number;
   lexicalDensity?: number;
   avgSentenceLength?: number;
@@ -164,11 +164,11 @@ export interface IterationLogEntry {
   strategyRationale?: string;
   currentModelForIteration?: SelectableModelName;
   activeMetaInstruction?: string;
-  isSegmentedSynthesis?: boolean; 
-  isTargetedRefinement?: boolean; 
+  isSegmentedSynthesis?: boolean;
+  isTargetedRefinement?: boolean;
   targetedSelection?: string;
   targetedRefinementInstructions?: string;
-  isCriticalFailure?: boolean; 
+  isCriticalFailure?: boolean;
   // Fields for per-iteration stagnation metrics
   similarityWithPreviousLogged?: number;
   isStagnantIterationLogged?: boolean;
@@ -180,16 +180,16 @@ export type DevLogEntryType = 'issue' | 'fix' | 'feature' | 'decision' | 'note';
 export type DevLogEntryStatus = 'open' | 'in_progress' | 'resolved' | 'implemented' | 'closed' | 'deferred';
 
 export interface DevLogEntry {
-  id: string; 
+  id: string;
   timestamp: number;
   lastModified: number;
   type: DevLogEntryType;
-  summary: string; 
-  details?: string; 
+  summary: string;
+  details?: string;
   status: DevLogEntryStatus;
-  relatedIteration?: number; 
-  tags?: string[]; 
-  resolution?: string; 
+  relatedIteration?: number;
+  tags?: string[];
+  resolution?: string;
 }
 
 export interface AutologosIterativeEngineData {
@@ -231,7 +231,7 @@ export interface AutologosIterativeEngineData {
 export interface AutologosProjectFile {
   header: ProjectFileHeader;
   applicationData: {
-    [appId: string]: any; 
+    [appId: string]: any;
   };
 }
 
@@ -283,38 +283,39 @@ export interface AiResponseValidationInfoDetailsValue_InitialSynthesis extends P
     outputChars?: number;
     isOutlineDriven?: boolean;
     factorUsed?: number;
-    phrase?: string; 
+    phrase?: string;
+    isDataDump?: boolean;
+    dataDumpReason?: string;
 }
-
 
 export interface AiResponseValidationInfo {
   checkName: string;
-  passed: boolean; 
-  isCriticalFailure?: boolean; 
+  passed: boolean;
+  isCriticalFailure?: boolean;
   reason?: string;
   details?: {
     type:
-      | 'error_phrase'                             
-      | 'empty_json'                               
-      | 'invalid_json'                             
-      | 'passed'                                   
-      | 'prompt_leakage'                           
-      | 'initial_synthesis_failed_large_output'    
-      | 'initial_synthesis_tolerated_large_output_outline_driven' 
-      | 'catastrophic_collapse'                    
-      | 'error_phrase_with_significant_reduction'  
-      | 'extreme_reduction_error'                  
-      | 'extreme_reduction_instructed_but_with_error_phrase' 
-      | 'extreme_reduction_tolerated_global_mode'  
-      | 'extreme_reduction_tolerated_instruction'  
-      | 'drastic_reduction_error_plan_mode'        
-      | 'drastic_reduction_with_error_phrase'      
-      | 'drastic_reduction_tolerated_global_mode'  
-      | 'drastic_reduction_tolerated_instruction'  
-      | 'unknown_finish_reason_minimal_output'     
-      | 'unknown_finish_reason_abrupt_end'       
-      | 'max_tokens_with_incomplete_sentence'    
-      | 'convergence_on_underdeveloped_product';   
+      | 'error_phrase'
+      | 'empty_json'
+      | 'invalid_json'
+      | 'passed'
+      | 'prompt_leakage'
+      | 'initial_synthesis_failed_data_dump' // Changed
+      | 'catastrophic_collapse'
+      | 'error_phrase_with_significant_reduction'
+      | 'extreme_reduction_error'
+      | 'extreme_reduction_instructed_but_with_error_phrase'
+      | 'extreme_reduction_tolerated_instruction'
+      | 'extreme_reduction_tolerated_global_mode'
+      | 'drastic_reduction_error_plan_mode'
+      | 'drastic_reduction_with_error_phrase'
+      | 'drastic_reduction_tolerated_instruction'
+      | 'drastic_reduction_tolerated_global_mode'
+      | 'uninstructed_reduction' // New
+      | 'unknown_finish_reason_minimal_output'
+      | 'unknown_finish_reason_abrupt_end'
+      | 'max_tokens_with_incomplete_sentence'
+      | 'convergence_on_underdeveloped_product';
     value?: string | ReductionDetailValue | PromptLeakageDetailValue | AiResponseValidationInfoDetailsValue_InitialSynthesis | { [key: string]: any };
   };
 }
@@ -333,12 +334,13 @@ export type NudgeStrategy = 'none' | 'params_light' | 'params_heavy' | 'meta_ins
 export interface StagnationInfo {
   isStagnant: boolean;
   consecutiveStagnantIterations: number;
-  consecutiveIdenticalProductIterations: number; 
-  lastMeaningfulChangeProductLength?: number; 
-  similarityWithPrevious?: number; 
+  consecutiveIdenticalProductIterations: number;
+  lastMeaningfulChangeProductLength?: number;
+  similarityWithPrevious?: number;
   nudgeStrategyApplied: NudgeStrategy;
-  consecutiveLowValueIterations: number; 
-  lastProductLengthForStagnation?: number; 
+  consecutiveLowValueIterations: number;
+  lastProductLengthForStagnation?: number;
+  consecutiveWordsmithingIterations?: number;
 }
 
 export interface ProcessState {
@@ -346,7 +348,7 @@ export interface ProcessState {
   currentProduct: string | null;
   iterationHistory: IterationLogEntry[];
   currentIteration: number;
-  maxIterations: number; 
+  maxIterations: number;
   isProcessing: boolean;
   finalProduct: string | null;
   statusMessage: string;
@@ -373,7 +375,7 @@ export interface ProcessState {
   planStages: PlanStage[];
   currentPlanStageIndex: number | null;
   currentStageIteration: number;
-  savedPlanTemplates: PlanTemplate[]; 
+  savedPlanTemplates: PlanTemplate[];
   currentDiffViewType: DiffViewType;
   isApiRateLimited?: boolean;
   rateLimitCooldownActiveSeconds?: number;
@@ -385,14 +387,14 @@ export interface ProcessState {
   isTargetedRefinementModalOpen?: boolean;
   currentTextSelectionForRefinement?: string | null;
   instructionsForSelectionRefinement?: string;
-  isEditingCurrentProduct?: boolean; 
-  editedProductBuffer?: string | null; 
+  isEditingCurrentProduct?: boolean;
+  editedProductBuffer?: string | null;
   devLog?: DevLogEntry[];
 }
 
 export interface IsLikelyAiErrorResponseResult {
-  isError: boolean; 
-  isCriticalFailure?: boolean; 
+  isError: boolean;
+  isCriticalFailure?: boolean;
   reason: string;
   checkDetails: AiResponseValidationInfo['details'];
 }
@@ -419,10 +421,10 @@ export interface StrategistAdvice {
     suggestedModelName?: SelectableModelName;
     suggestedThinkingBudget?: 0 | 1;
     suggestedMetaInstruction?: string;
-    rationale: string;
     suggestedTemperature?: number;
     suggestedTopP?: number;
     suggestedTopK?: number;
+    rationale: string;
 }
 
 // Strategist context object for getStrategicAdviceFromLLM
@@ -432,18 +434,19 @@ export interface StrategistLLMContext {
     inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
     lastUsedModel?: SelectableModelName;
     lastUsedConfig?: ModelConfig | null;
-    stagnationInfo: StagnationInfo; 
+    stagnationInfo: StagnationInfo;
     stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
-    lastNValidationSummariesString: string; 
-    currentGoal: string; 
-    recentIterationSummaries: string[]; 
+    lastNValidationSummariesString: string;
+    currentGoal: string;
+    recentIterationSummaries: string[];
     productDevelopmentState: 'UNDERDEVELOPED_KERNEL' | 'DEVELOPED_DRAFT' | 'MATURE_PRODUCT' | 'NEEDS_EXPANSION_STALLED' | 'UNKNOWN';
     stagnationSeverity: 'NONE' | 'MILD' | 'MODERATE' | 'SEVERE' | 'CRITICAL';
     recentIterationPerformance: 'PRODUCTIVE' | 'LOW_VALUE' | 'STALLED';
-    currentRefinementFocusHint?: string; 
+    currentRefinementFocusHint?: string;
+    isRadicalRefinementKickstartAttempt?: boolean;
 }
-
-
-declare module './types' { 
-
+declare module '../types.ts' {
+  interface AiResponseValidationInfoDetails {
+    type: 'extreme_reduction_tolerated_global_mode' | 'drastic_reduction_tolerated_instruction' | 'drastic_reduction_tolerated_global_mode';
+  }
 }

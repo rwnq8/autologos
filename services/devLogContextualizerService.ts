@@ -1,4 +1,3 @@
-
 // services/devLogContextualizerService.ts
 import { GoogleGenAI } from "@google/genai";
 import type { GenerateContentResponse } from "@google/genai";
@@ -72,7 +71,7 @@ export const getRelevantDevLogContext = async (
     formattedDevLog;
 
   const promptToContextualizer = `
-User's Current Request to Primary AI Developer (or AI's current refinement task):
+User's Current Request to Primary AI Developer (or AI's current internal task):
 ---
 ${currentUserPrompt.substring(0, 2000)} 
 ---
@@ -87,18 +86,18 @@ Based on the system prompt, identify relevant DevLog entries for the current req
   `;
 
   try {
-    const response: GenerateContentResponse = await ai.models.generateContent({
-      model: CONTEXTUALIZER_MODEL_NAME,
-      contents: [{ role: "user", parts: [{text: promptToContextualizer}] }],
-      config: {
-        systemInstruction: devLogContextualizerSystemPrompt,
-        temperature: 0.1, // Low temperature for factual identification
-        topK: 5,
-        topP: 0.95,
-        // No thinkingConfig here; we want a quick, focused response.
-      }
+    const result = await ai.models.generateContent({
+        model: CONTEXTUALIZER_MODEL_NAME,
+        contents: [{ role: "user", parts: [{text: promptToContextualizer}] }],
+        config: {
+          systemInstruction: devLogContextualizerSystemPrompt,
+          temperature: 0.1, // Low temperature for factual identification
+          topK: 5,
+          topP: 0.95,
+        }
     });
 
+    const response = result;
     return response.text.trim();
 
   } catch (error: any) {

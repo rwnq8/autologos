@@ -1,6 +1,7 @@
+
 // services/iterationUtils.ts
 
-import type { OutputLength, OutputFormat, IsLikelyAiErrorResponseResult, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, AiResponseValidationInfoDetailsValue_InitialSynthesis } from '../types.ts';
+import type { OutputLength, OutputFormat, IsLikelyAiErrorResponseResult, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, AiResponseValidationInfoDetailsValue_InitialSynthesis, FileProcessingInfo } from '../types.ts';
 import { countWords } from './textAnalysisService'; // Assuming countWords is exported
 
 // --- Constants for Content Reduction Checks ---
@@ -53,7 +54,7 @@ const AI_ERROR_PHRASES = [
   "okay, i need the context from where i left off.",
   "please provide the last sentence or paragraph i generated, or a summary of the topic we were discussing, so i can continue the response appropriately and ensure completion.",
   "i'm ready to pick up where i left off!",
-  "Okay, I'm ready. Please provide me with the text you want me to continue generating from. I will do my best to seamlessly pick up where I left off and complete the task you've assigned. Just give me the context I need!",
+  "Okay, I'm ready! Please provide me with the text you want me to continue generating from. I will do my best to seamlessly pick up where I left off and complete the task you've assigned. Just give me the context I need!",
   "okay, i'm ready!", "please provide me with the text", "i need the previous part of the response",
   "once you provide the starting point", "what has already been said", "i'm ready when you are! just paste the text.",
   "what you've already written", "complete your response!", "complete the thought or idea.",
@@ -116,6 +117,96 @@ const estimateCharsFromBase64Text = (base64Data: string): number => {
   } catch (e) {
     return 0; // Error in decoding
   }
+};
+
+export const isDataDump = (
+  newProduct: string,
+  fileProcessingInfo: FileProcessingInfo,
+  isOutlineDriven: boolean
+): { isError: boolean; reason: string } => {
+  if (
+    !fileProcessingInfo ||
+    fileProcessingInfo.numberOfFilesActuallySent === 0 ||
+    fileProcessingInfo.totalFilesSizeBytesSent === 0
+  ) {
+    return { isError: false, reason: "No file info to check for data dump." };
+  }
+
+  const newLengthChars = newProduct.length;
+  const { totalFilesSizeBytesSent } = fileProcessingInfo;
+  const loadedFilesForIter1 = fileProcessingInfo.loadedFilesForIterationContext || [];
+  let synthesisFailed = false;
+  let synthesisReason = "";
+
+  const textFiles = loadedFilesForIter1.filter((f) => f.mimeType.startsWith("text/"));
+  const isTextDominant =
+    loadedFilesForIter1.length > 0 &&
+    (textFiles.length / loadedFilesForIter1.length >=
+      TEXT_DOMINANT_THRESHOLD_PERCENT ||
+    (totalFilesSizeBytesSent > 0 && textFiles.reduce((sum, f) => sum + f.size, 0) / totalFilesSizeBytesSent >=
+      TEXT_DOMINANT_THRESHOLD_PERCENT));
+
+  let currentTextDominantFactor = isOutlineDriven
+    ? CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT_OUTLINE_DRIVEN
+    : CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT;
+  let currentByteExpansionFactor = isOutlineDriven
+    ? INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES_OUTLINE_DRIVEN
+    : INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES;
+
+  if (isTextDominant) {
+    const totalEstimatedInputChars = textFiles.reduce(
+      (sum, f) => sum + estimateCharsFromBase64Text(f.base64Data),
+      0
+    );
+    if (
+      totalEstimatedInputChars > 0 &&
+      newLengthChars > totalEstimatedInputChars * currentTextDominantFactor
+    ) {
+      synthesisFailed = true;
+      synthesisReason = `Initial synthesis from text-dominant files ${
+        isOutlineDriven ? "(outline-driven)" : ""
+      } resulted in output (${newLengthChars} chars) much larger (>${currentTextDominantFactor}x) than input characters (${totalEstimatedInputChars} chars).`;
+    }
+  }
+
+  if (
+    !synthesisFailed &&
+    totalFilesSizeBytesSent < MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 &&
+    newLengthChars > ABSOLUTE_MAX_CHARS_ITER1_PRODUCT
+  ) {
+    synthesisFailed = true;
+    synthesisReason = `Initial synthesis from files (<${
+      MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 / 1024
+    }KB) ${
+      isOutlineDriven ? "(outline-driven)" : ""
+    } likely failed. Output product size (${newLengthChars} chars) exceeds absolute limit of ${ABSOLUTE_MAX_CHARS_ITER1_PRODUCT} chars.`;
+  }
+
+  if (
+    !synthesisFailed && totalFilesSizeBytesSent > 0 &&
+    newLengthChars > totalFilesSizeBytesSent * currentByteExpansionFactor
+  ) {
+    synthesisFailed = true;
+    synthesisReason = `Initial synthesis ${
+      isOutlineDriven ? "(outline-driven)" : ""
+    } resulted in output (${newLengthChars} chars) much larger (>${currentByteExpansionFactor}x) than total input file size (${totalFilesSizeBytesSent} bytes).`;
+  }
+
+  if (synthesisFailed) {
+    if (isOutlineDriven) {
+      return {
+        isError: false, // Tolerated
+        reason: `${synthesisReason} This may be acceptable for outline-driven synthesis. Manual review advised.`,
+      };
+    } else {
+      return {
+        isError: true,
+        reason: `CRITICAL: ${synthesisReason} This suggests a data dump rather than synthesis.`,
+      };
+    }
+  }
+
+  return { isError: false, reason: "Initial synthesis size is within tolerance." };
 };
 
 
@@ -193,62 +284,11 @@ export function isLikelyAiErrorResponse(
   if (foundErrorPhrase && prevLengthChars > MIN_CHARS_FOR_REDUCTION_CHECK && newLengthChars < prevLengthChars * SIGNIFICANT_REDUCTION_WITH_ERROR_PHRASE_THRESHOLD && !isInstructedToShortenOrCondense) {
     return { isError: true, isCriticalFailure: true, reason: `CRITICAL: AI response contains an error/stall phrase ("${foundErrorPhrase}") AND resulted in significant content reduction (>20%) without instruction.`, checkDetails: { type: 'error_phrase_with_significant_reduction', value: { phrase: foundErrorPhrase, previousLengthChars: prevLengthChars, newLengthChars: newLengthChars, percentageCharChange: parseFloat(((newLengthChars / prevLengthChars - 1) * 100).toFixed(2))} as any }};
   }
-
-  // 6. Initial Synthesis Check for Iteration 1 (Large Output vs Input)
-  if (currentLogEntryForValidation.iteration === 1 &&
-      currentLogEntryForValidation.fileProcessingInfo &&
-      currentLogEntryForValidation.fileProcessingInfo.numberOfFilesActuallySent > 0 &&
-      currentLogEntryForValidation.fileProcessingInfo.totalFilesSizeBytesSent > 0) {
-
-    const { totalFilesSizeBytesSent } = currentLogEntryForValidation.fileProcessingInfo;
-    const loadedFilesForIter1 = currentLogEntryForValidation.fileProcessingInfo.loadedFilesForIterationContext || [];
-    let synthesisFailed = false;
-    let synthesisReason = "";
-    const isOutlineDriven = !!initialOutlineForIter1;
-
-    const textFiles = loadedFilesForIter1.filter(f => f.mimeType.startsWith('text/'));
-    const isTextDominant = textFiles.length / loadedFilesForIter1.length >= TEXT_DOMINANT_THRESHOLD_PERCENT ||
-                           textFiles.reduce((sum, f) => sum + f.size, 0) / totalFilesSizeBytesSent >= TEXT_DOMINANT_THRESHOLD_PERCENT;
-
-    let currentTextDominantFactor = isOutlineDriven ? CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT_OUTLINE_DRIVEN : CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT;
-    let currentByteExpansionFactor = isOutlineDriven ? INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES_OUTLINE_DRIVEN : INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES;
-
-    if (isTextDominant) {
-      const totalEstimatedInputChars = textFiles.reduce((sum, f) => sum + estimateCharsFromBase64Text(f.base64Data), 0);
-      if (totalEstimatedInputChars > 0 && newLengthChars > totalEstimatedInputChars * currentTextDominantFactor) {
-        synthesisFailed = true;
-        synthesisReason = `Initial synthesis from text-dominant files ${isOutlineDriven ? "(outline-driven)" : ""} resulted in output (${newLengthChars} chars) much larger (>${currentTextDominantFactor}x) than input characters (${totalEstimatedInputChars} chars).`;
-      }
-    }
-
-    if (!synthesisFailed && totalFilesSizeBytesSent < MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 && newLengthChars > ABSOLUTE_MAX_CHARS_ITER1_PRODUCT) {
-      synthesisFailed = true;
-      synthesisReason = `Initial synthesis from files (<${MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 / 1024}KB) ${isOutlineDriven ? "(outline-driven)" : ""} likely failed. Output product size (${newLengthChars} chars) exceeds absolute limit of ${ABSOLUTE_MAX_CHARS_ITER1_PRODUCT} chars.`;
-    }
-
-    if (!synthesisFailed && newLengthChars > totalFilesSizeBytesSent * currentByteExpansionFactor) {
-        synthesisFailed = true;
-        synthesisReason = `Initial synthesis ${isOutlineDriven ? "(outline-driven)" : ""} resulted in output (${newLengthChars} chars) much larger (>${currentByteExpansionFactor}x) than total input file size (${totalFilesSizeBytesSent} bytes).`;
-    }
-
-    if (synthesisFailed) {
-      const detailsValue: AiResponseValidationInfoDetailsValue_InitialSynthesis = { inputBytes: totalFilesSizeBytesSent, outputChars: newLengthChars, isOutlineDriven: isOutlineDriven, factorUsed: isTextDominant ? currentTextDominantFactor : currentByteExpansionFactor };
-      if (isOutlineDriven) {
-        return {
-          isError: false, isCriticalFailure: false,
-          reason: `${synthesisReason} This may be acceptable for outline-driven synthesis. Manual review advised.`,
-          checkDetails: { type: 'initial_synthesis_tolerated_large_output_outline_driven', value: detailsValue }
-        };
-      } else {
-        return {
-          isError: true, isCriticalFailure: true,
-          reason: `CRITICAL: ${synthesisReason} This suggests a data dump rather than synthesis.`,
-          checkDetails: { type: 'initial_synthesis_failed_large_output', value: detailsValue }
-        };
-      }
-    }
-  }
-
+  
+  // 6. Initial Synthesis Check is now handled externally by isDataDump for Iteration 0 processing.
+  // This check in isLikelyAiErrorResponse focused on Iteration 1 which is where the product is first created.
+  // The logic has been extracted.
+  
 
   // 7. Reduction Checks (Extreme and Drastic)
   if (prevLengthChars >= MIN_CHARS_FOR_REDUCTION_CHECK && prevWordCount >= MIN_WORDS_FOR_REDUCTION_CHECK) {
@@ -273,7 +313,7 @@ export function isLikelyAiErrorResponse(
             return { isError: true, isCriticalFailure: true, reason: `CRITICAL: ${fullReasonPrefix} Uninstructed, and contains error phrase ("${foundErrorPhrase}").`, checkDetails: { type: 'error_phrase_with_significant_reduction', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed, additionalInfo: `Error phrase: "${foundErrorPhrase}"`, phrase: foundErrorPhrase } as any }};
         }
         if (isGlobalModeContext) {
-          return { isError: false, isCriticalFailure: false, reason: `${fullReasonPrefix} Tolerated in Global Mode (might contribute to low-value iter).`, checkDetails: { type: 'extreme_reduction_tolerated_global_mode', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed } }};
+          return { isError: true, isCriticalFailure: false, reason: `${fullReasonPrefix} Retrying due to uninstructed extreme reduction.`, checkDetails: { type: 'uninstructed_reduction', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed } }};
         }
         return { isError: true, isCriticalFailure: true, reason: `CRITICAL: ${fullReasonPrefix} Uninstructed and not in Global Mode (e.g., Plan Mode).`, checkDetails: { type: 'extreme_reduction_error', value: { ...reductionDetailsBase, thresholdUsed: extremeThresholdUsed } }};
       }
@@ -295,7 +335,7 @@ export function isLikelyAiErrorResponse(
             return { isError: true, isCriticalFailure: true, reason: `CRITICAL: ${fullReasonPrefix} Uninstructed, and contains error phrase ("${foundErrorPhrase}").`, checkDetails: { type: 'drastic_reduction_with_error_phrase', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed, additionalInfo: `Error phrase: "${foundErrorPhrase}"` } }};
         }
         if (isGlobalModeContext) {
-          return { isError: false, isCriticalFailure: false, reason: `${fullReasonPrefix} Tolerated in Global Mode (might contribute to low-value iter).`, checkDetails: { type: 'drastic_reduction_tolerated_global_mode', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed } }};
+          return { isError: true, isCriticalFailure: false, reason: `${fullReasonPrefix} Retrying due to uninstructed drastic reduction.`, checkDetails: { type: 'uninstructed_reduction', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed } }};
         }
         return { isError: true, isCriticalFailure: true, reason: `CRITICAL: ${fullReasonPrefix} Uninstructed and not in Global Mode (e.g., Plan Mode).`, checkDetails: { type: 'drastic_reduction_error_plan_mode', value: { ...reductionDetailsBase, thresholdUsed: drasticThresholdUsed } }};
       }
