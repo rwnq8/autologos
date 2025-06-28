@@ -1,12 +1,13 @@
 
+
 import React, { useState, useMemo } from 'react';
-import type { IterationLogEntry } from '../../types'; 
-import { LogEntryItem } from './LogEntryItem';
-import { useProcessContext } from '../../contexts/ProcessContext';
-import { useApplicationContext } from '../../contexts/ApplicationContext';
-import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter';
-import ChevronDownIcon from '../shared/ChevronDownIcon';
-import ChevronUpIcon from '../shared/ChevronUpIcon';
+import type { IterationLogEntry } from '../../types.ts'; 
+import { LogEntryItem } from './LogEntryItem.tsx';
+import { useProcessContext } from '../../contexts/ProcessContext.tsx';
+import { useApplicationContext } from '../../contexts/ApplicationContext.tsx';
+import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter.ts';
+import ChevronDownIcon from '../shared/ChevronDownIcon.tsx';
+import ChevronUpIcon from '../shared/ChevronUpIcon.tsx';
 
 export interface IterationLogProps {
   onSaveLog: () => void; 

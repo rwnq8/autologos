@@ -1,8 +1,9 @@
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName } from '../types.ts';
-import * as storageService from '../services/storageService';
-import { DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils';
-import { reconstructProduct } from '../services/diffService';
+import * as storageService from '../services/storageService.ts';
+import { DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
+import { reconstructProduct } from '../services/diffService.ts';
 
 type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'loaded' | 'not_found' | 'found_autosave' | 'cleared' | 'loading' | 'clearing';
 
@@ -20,7 +21,7 @@ export const useAutoSave = (
   processState: ProcessState,
   modelParams: ModelParams,
   updateProcessState: (updates: Partial<ProcessState>) => void,
-  overwriteUserPlanTemplates: (templates: PlanTemplate[]) => void,
+  overwriteUserTemplates: (templates: PlanTemplate[]) => void,
   initialProcessStateValues: ProcessState,
   initialModelParamValues: ModelParams,
   setLoadedModelParams: (params: ModelParams) => void
@@ -100,6 +101,7 @@ export const useAutoSave = (
         rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
         stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,
         isSearchGroundingEnabled: currentState.isSearchGroundingEnabled,
+        isUrlBrowsingEnabled: currentState.isUrlBrowsingEnabled,
         inputComplexity: currentState.inputComplexity,
         strategistInfluenceLevel: currentState.strategistInfluenceLevel, 
         stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, 
@@ -127,9 +129,9 @@ export const useAutoSave = (
       const engineData = await storageService.loadState();
       if (engineData) {
         if (Array.isArray(engineData.savedPlanTemplates)) {
-          overwriteUserPlanTemplates(engineData.savedPlanTemplates);
+          overwriteUserTemplates(engineData.savedPlanTemplates);
         } else {
-          overwriteUserPlanTemplates([]);
+          overwriteUserTemplates([]);
         }
         
         let correctedInitialPrompt = engineData.initialPrompt;
@@ -169,6 +171,7 @@ export const useAutoSave = (
           aiProcessInsight: initialProcessStateValues.aiProcessInsight, 
           stagnationNudgeEnabled: engineData.stagnationNudgeEnabled ?? initialProcessStateValues.stagnationNudgeEnabled,
           isSearchGroundingEnabled: engineData.isSearchGroundingEnabled ?? initialProcessStateValues.isSearchGroundingEnabled,
+          isUrlBrowsingEnabled: engineData.isUrlBrowsingEnabled ?? initialProcessStateValues.isUrlBrowsingEnabled,
           strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, 
           stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness,
           devLog: engineData.devLog || [],
@@ -196,7 +199,7 @@ export const useAutoSave = (
     }
     setShowRestorePrompt(false);
     setRestorableStateInfo(null);
-  }, [updateProcessState, overwriteUserPlanTemplates, initialProcessStateValues, initialModelParamValues, setLoadedModelParams]);
+  }, [updateProcessState, overwriteUserTemplates, initialProcessStateValues, initialModelParamValues, setLoadedModelParams]);
 
   const handleClearAutoSaveAndDismiss = useCallback(async () => {
     setAutoSaveStatus('clearing');

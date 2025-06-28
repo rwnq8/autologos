@@ -80,6 +80,10 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
 1. Thresholds: The number of consecutive stagnant iterations needed to trigger different nudge types (params_light, params_heavy, meta_instruct). 'Low' requires more stagnant iterations; 'High' requires fewer.
 2. Intensity (for 'params_light' & 'params_heavy' nudges): The magnitude of code-driven parameter adjustments (e.g., how much Temperature or Top-K is changed). 'Low' uses smaller adjustments (e.g., 0.6x base nudge); 'High' uses larger adjustments (e.g., 1.4x base nudge), within safe operational bounds.
 This setting does NOT apply in Plan Mode.`;
+  
+  const aiToolsTooltip = `Enable special tools for the AI (Global Mode only). This may increase processing time per iteration.
+- Google Search: Allows the AI to ground its responses in up-to-date, public web information.
+- URL Browsing: Allows the AI to request the content of specific URLs mentioned in the prompt or product.`;
 
 
   return (
@@ -236,31 +240,45 @@ This setting does NOT apply in Plan Mode.`;
             </button>
             {isAdvancedSettingsExpanded && (
                 <div id="advanced-model-settings-details" className="mt-2 space-y-4 p-3 bg-slate-100/50 dark:bg-black/10 rounded-md border border-slate-200 dark:border-white/5 animate-fadeIn">
-                     <label className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
-                        <span className="flex-grow mr-2" title="If enabled, the system adaptively adjusts parameters or prompts the AI with meta-instructions when Global Mode progress appears to stall, aiming to break out of unproductive refinement loops.">
-                            Enable Stagnation Nudge (Global Mode)
-                        </span>
-                        <input
-                            type="checkbox"
-                            checked={processCtx.stagnationNudgeEnabled}
-                            onChange={(e) => processCtx.updateProcessState({ stagnationNudgeEnabled: e.target.checked })}
-                            disabled={processCtx.isProcessing || planCtx.isPlanActive}
-                            className={commonCheckboxInputClasses}
-                        />
-                    </label>
+                    <div className="space-y-2">
+                         <h4 className="block text-xs font-medium text-primary-600 dark:text-primary-400" title={aiToolsTooltip}>AI Tools (Global Mode Only)</h4>
+                         <label className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
+                            <span className="flex-grow mr-2">Enable Google Search Grounding</span>
+                            <input
+                                type="checkbox"
+                                checked={processCtx.isSearchGroundingEnabled}
+                                onChange={(e) => processCtx.updateProcessState({ isSearchGroundingEnabled: e.target.checked })}
+                                disabled={processCtx.isProcessing || planCtx.isPlanActive}
+                                className={commonCheckboxInputClasses}
+                            />
+                        </label>
+                        <label className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
+                            <span className="flex-grow mr-2">Enable URL Browsing Tool</span>
+                            <input
+                                type="checkbox"
+                                checked={processCtx.isUrlBrowsingEnabled}
+                                onChange={(e) => processCtx.updateProcessState({ isUrlBrowsingEnabled: e.target.checked })}
+                                disabled={processCtx.isProcessing || planCtx.isPlanActive}
+                                className={commonCheckboxInputClasses}
+                            />
+                        </label>
+                    </div>
 
-                    <label className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
-                        <span className="flex-grow mr-2" title="If enabled, the AI can use Google Search to ground its responses in up-to-date information. Useful for topics requiring current knowledge. This will disable JSON response mode if it is active for a plan stage.">
-                            Enable Google Search Grounding (Global Mode)
-                        </span>
-                        <input
-                            type="checkbox"
-                            checked={processCtx.isSearchGroundingEnabled}
-                            onChange={(e) => processCtx.updateProcessState({ isSearchGroundingEnabled: e.target.checked })}
-                            disabled={processCtx.isProcessing || planCtx.isPlanActive}
-                            className={commonCheckboxInputClasses}
-                        />
-                    </label>
+                    <div className="space-y-2">
+                         <h4 className="block text-xs font-medium text-primary-600 dark:text-primary-400">Stagnation &amp; Strategy Controls (Global Mode)</h4>
+                         <label className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
+                            <span className="flex-grow mr-2" title="If enabled, the system adaptively adjusts parameters or prompts the AI with meta-instructions when Global Mode progress appears to stall.">
+                                Enable Stagnation Nudge
+                            </span>
+                            <input
+                                type="checkbox"
+                                checked={processCtx.stagnationNudgeEnabled}
+                                onChange={(e) => processCtx.updateProcessState({ stagnationNudgeEnabled: e.target.checked })}
+                                disabled={processCtx.isProcessing || planCtx.isPlanActive}
+                                className={commonCheckboxInputClasses}
+                            />
+                        </label>
+                    </div>
 
                     <div>
                         <label htmlFor="strategistInfluenceLevel" className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-1" title={strategistInfluenceTooltip}>
@@ -271,14 +289,13 @@ This setting does NOT apply in Plan Mode.`;
                             value={processCtx.strategistInfluenceLevel}
                             onChange={(e) => processCtx.updateProcessState({ strategistInfluenceLevel: e.target.value as ProcessState['strategistInfluenceLevel'] })}
                             className={commonSelectClasses}
-                            disabled={processCtx.isProcessing}
+                            disabled={processCtx.isProcessing || planCtx.isPlanActive}
                         >
                             <option value="OFF">Off (Code Heuristics Only)</option>
                             <option value="SUGGEST">Suggest Only (Log AI Advice)</option>
                             <option value="ADVISE_PARAMS_ONLY">Advise (Model/Nudge; Params by Code)</option>
                             <option value="OVERRIDE_FULL">Full Override (Model & Params)</option>
                         </select>
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Controls how advice from the LLM Strategist (meta-AI) is used.</p>
                     </div>
 
                     <div>
@@ -296,7 +313,6 @@ This setting does NOT apply in Plan Mode.`;
                             <option value="MEDIUM">Medium (Balanced)</option>
                             <option value="HIGH">High (More Frequent/Intense)</option>
                         </select>
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Adjusts how quickly and strongly the system reacts to stagnation.</p>
                     </div>
                 </div>
             )}

@@ -1,8 +1,8 @@
 import React, { useRef, useContext, useState } from 'react';
-import type { CommonControlProps } from '../../types';
-import { useApplicationContext } from '../../contexts/ApplicationContext';
-import { useProcessContext } from '../../contexts/ProcessContext';
-import LoadingSpinner from '../shared/LoadingSpinner'; // Assuming LoadingSpinner exists
+import type { CommonControlProps } from '../../types.ts';
+import { useApplicationContext } from '../../contexts/ApplicationContext.tsx';
+import { useProcessContext } from '../../contexts/ProcessContext.tsx';
+import LoadingSpinner from '../shared/LoadingSpinner.tsx'; // Assuming LoadingSpinner exists
 
 const ProjectActions: React.FC<CommonControlProps> = ({
   commonInputClasses,

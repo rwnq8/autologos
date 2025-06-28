@@ -45,7 +45,8 @@ export const createInitialProcessState = (
   isApiRateLimited: false,
   rateLimitCooldownActiveSeconds: 0,
   stagnationNudgeEnabled: true,
-  isSearchGroundingEnabled: false,
+  isSearchGroundingEnabled: true,
+  isUrlBrowsingEnabled: true,
   stagnationInfo: { 
     isStagnant: false, 
     consecutiveStagnantIterations: 0, 
@@ -382,7 +383,7 @@ export const useProcessState = () => {
         statusMessage: "System reset. Load input file(s) or type prompt to begin.", aiProcessInsight: "System reset. Ready for new input.",
         savedPlanTemplates: currentSavedPlanTemplates, 
         projectId: await storageService.hasSavedState() ? state.projectId : null, 
-        stagnationNudgeEnabled: true, isSearchGroundingEnabled: false, currentDiffViewType: 'words', inputComplexity: initialComplexity,
+        stagnationNudgeEnabled: true, isSearchGroundingEnabled: true, isUrlBrowsingEnabled: true, currentDiffViewType: 'words', inputComplexity: initialComplexity,
         currentAppliedModelConfig: baseModelConfig, 
         stagnationInfo: { 
             isStagnant: false, consecutiveStagnantIterations: 0, consecutiveIdenticalProductIterations: 0, 

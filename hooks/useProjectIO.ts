@@ -1,9 +1,10 @@
+
 import { useCallback, useRef, useEffect } from 'react';
 import type { ProcessState, AutologosProjectFile, AutologosIterativeEngineData, ProjectFileHeader, ModelConfig, LoadedFile, PlanTemplate, SettingsSuggestionSource, SelectableModelName, IterationLogEntry } from '../types.ts';
 import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION, SELECTABLE_MODELS } from '../types.ts';
-import { generateFileName, DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils';
-import { reconstructProduct } from '../services/diffService';
-import * as GeminaiService from '../services/geminiService';
+import { generateFileName, DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
+import { reconstructProduct } from '../services/diffService.ts';
+import * as GeminaiService from '../services/geminiService.ts';
 
 
 function uuidv4() {
@@ -25,7 +26,7 @@ export const useProjectIO = (
   processState: ProcessState,
   modelParams: ModelParams,
   updateProcessState: (updates: Partial<ProcessState>) => void,
-  overwriteUserPlanTemplates: (templates: PlanTemplate[]) => void,
+  overwriteUserTemplates: (templates: PlanTemplate[]) => void,
   initialProcessStateValues: ProcessState,
   initialModelParamValues: ModelParams,
   setLoadedModelParams: (params: ModelParams) => void
@@ -88,6 +89,7 @@ export const useProjectIO = (
       rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
       stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,
       isSearchGroundingEnabled: currentState.isSearchGroundingEnabled,
+      isUrlBrowsingEnabled: currentState.isUrlBrowsingEnabled,
       inputComplexity: currentState.inputComplexity,
       strategistInfluenceLevel: currentState.strategistInfluenceLevel, 
       stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, 
@@ -127,9 +129,9 @@ export const useProjectIO = (
     const engineData = projectFile.applicationData[THIS_APP_ID] as AutologosIterativeEngineData;
 
     if (Array.isArray(engineData.savedPlanTemplates)) {
-      overwriteUserPlanTemplates(engineData.savedPlanTemplates);
+      overwriteUserTemplates(engineData.savedPlanTemplates);
     } else {
-      overwriteUserPlanTemplates([]);
+      overwriteUserTemplates([]);
     }
 
     let correctedInitialPrompt = engineData.initialPrompt;
@@ -139,7 +141,7 @@ export const useProjectIO = (
     }
 
 
-    const lastIter = engineData.iterationHistory && engineData.iterationHistory.length > 0 ? engineData.iterationHistory[engineData.iterationHistory.length -1].iteration : 0;
+    const lastIter = engineData.iterationHistory && engineData.iterationHistory.length > 0 ? engineData.iterationHistory[engineData.iterationHistory.length - 1].iteration : 0;
     
     const productAtLastIter = engineData.finalProduct || 
                              (engineData.iterationHistory && engineData.iterationHistory.length > 0 
@@ -176,6 +178,7 @@ export const useProjectIO = (
       aiProcessInsight: "Project loaded. Review state and resume or start new process.",
       stagnationNudgeEnabled: engineData.stagnationNudgeEnabled ?? initialProcessStateValues.stagnationNudgeEnabled,
       isSearchGroundingEnabled: engineData.isSearchGroundingEnabled ?? initialProcessStateValues.isSearchGroundingEnabled,
+      isUrlBrowsingEnabled: engineData.isUrlBrowsingEnabled ?? initialProcessStateValues.isUrlBrowsingEnabled,
       strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, 
       stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness, 
     };
@@ -190,7 +193,7 @@ export const useProjectIO = (
     });
     updateProcessState({statusMessage: `Project "${fullNewState.projectName}" imported successfully.`});
 
-  }, [updateProcessState, overwriteUserPlanTemplates, initialProcessStateValues, initialModelParamValues, setLoadedModelParams]);
+  }, [updateProcessState, overwriteUserTemplates, initialProcessStateValues, initialModelParamValues, setLoadedModelParams]);
 
   const handleImportIterationLogData = useCallback((
     logData: IterationLogEntry[],
@@ -315,6 +318,43 @@ export const useProjectIO = (
 
   }, [updateProcessState, setLoadedModelParams, initialProcessStateValues, initialModelParamValues, latestDataRef]);
 
+  const handleExportIterationDiffs = useCallback(() => {
+    const { processState: currentState } = latestDataRef.current;
+    if (currentState.iterationHistory.length === 0) {
+      updateProcessState({ statusMessage: "No iteration history to export diffs from." });
+      return;
+    }
+    const diffs = currentState.iterationHistory.map(entry => `==== ITERATION ${entry.iteration} ====\n${entry.productDiff || 'No diff available.'}`).join('\n\n');
+    const fileName = generateFileName(currentState.projectName, "diffs", "txt");
+    const blob = new Blob([diffs], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [updateProcessState]);
+
+  const handleExportIterationMarkdown = useCallback((iterationNumber: number) => {
+    const { processState: currentState } = latestDataRef.current;
+    const { product, error } = reconstructProduct(iterationNumber, currentState.iterationHistory, currentState.initialPrompt);
+    if (error) { 
+      updateProcessState({ statusMessage: `Error exporting markdown: ${error}` }); 
+      return; 
+    }
+    const fileName = generateFileName(currentState.projectName, "product", "md", iterationNumber);
+    const blob = new Blob([product], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; 
+    link.download = fileName;
+    document.body.appendChild(link); 
+    link.click();
+    document.body.removeChild(link); 
+    URL.revokeObjectURL(url);
+  }, [updateProcessState]);
 
   return { handleExportProject, handleImportProjectData, handleImportIterationLogData };
 };

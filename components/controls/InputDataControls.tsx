@@ -1,8 +1,9 @@
 
+
 import React, { useState, useContext } from 'react'; 
 import type { LoadedFile, CommonControlProps } from '../../types.ts';
-import { useProcessContext } from '../../contexts/ProcessContext';
-import { XCircleIcon } from '../shared/Icons'; 
+import { useProcessContext } from '../../contexts/ProcessContext.tsx';
+import { XCircleIcon } from '../shared/Icons.tsx'; 
 
 const InputDataControls: React.FC<CommonControlProps> = ({
   commonInputClasses, 

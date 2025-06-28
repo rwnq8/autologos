@@ -20,6 +20,9 @@ export interface ApiStreamCallDetail {
   isContinuation: boolean;
   segmentIndex?: number; // For segmented synthesis
   segmentTitle?: string; // For segmented synthesis
+  functionCall?: { name: string; args: any };
+  functionResponse?: { name: string; response: any };
+  groundingMetadata?: any;
 }
 
 export interface SuggestedParamsResponse {
@@ -52,21 +55,21 @@ export interface StaticAiModelDetails {
 
 export const SELECTABLE_MODELS = [
   // Current & Recommended
-  { name: 'gemini-2.5-flash-preview-04-17', displayName: 'Gemini 2.5 Flash Preview (04-17)', description: 'Fast, multimodal, latest preview. Supports thinkingConfig. Recommended for general text tasks.' },
-  { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', description: 'Enhanced thinking and reasoning, multimodal understanding, advanced coding, and more. (No thinkingConfig)' },
+  { name: 'gemini-2.5-flash-preview-04-17', displayName: 'Gemini 2.5 Flash Preview (04-17)', description: 'Fast, multimodal, latest preview. Supports thinkingConfig. Recommended for general text tasks.', supportsFunctionCalling: false },
+  { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', description: 'Enhanced thinking and reasoning, multimodal understanding, advanced coding, and more. (No thinkingConfig)', supportsFunctionCalling: true },
  
   // All other models as requested by user, including those previously marked deprecated
-  { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro (Legacy)', description: 'Advanced reasoning, long context, multimodal capabilities. (No thinkingConfig)' },
-  { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash (Legacy)', description: 'Fast, efficient, long context, multimodal model. (No thinkingConfig)' },
-  { name: 'gemini-pro', displayName: 'Gemini Pro (Legacy)', description: 'General purpose model for text generation, chat, and code. (No thinkingConfig)'},
+  { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro (Legacy)', description: 'Advanced reasoning, long context, multimodal capabilities. (No thinkingConfig)', supportsFunctionCalling: true },
+  { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash (Legacy)', description: 'Fast, efficient, long context, multimodal model. (No thinkingConfig)', supportsFunctionCalling: false },
+  { name: 'gemini-pro', displayName: 'Gemini Pro (Legacy)', description: 'General purpose model for text generation, chat, and code. (No thinkingConfig)', supportsFunctionCalling: true },
  
   // Older models, included per user request (functionality may vary, thinkingConfig likely not supported)
-  { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash (User Requested)', description: 'Adaptive thinking, cost efficiency. (Check API for thinkingConfig support)' },
-  { name: 'gemini-2.5-flash-lite-preview-06-17', displayName: 'Gemini 2.5 Flash-Lite Preview (06-17, User Requested)', description: 'Most cost-efficient model supporting high throughput. (Likely no thinkingConfig)' },
-  { name: 'gemini-2.5-flash-preview-05-20', displayName: 'Gemini 2.5 Flash Preview (05-20, User Requested)', description: 'Fast, multimodal, preview version. (Check API for thinkingConfig support)' },
-  { name: 'gemini-2.5-flash-preview-native-audio-dialog', displayName: 'Gemini 2.5 Flash Native Audio (User Requested)', description: 'High quality conversational audio outputs. (May have implicit thinking)' },
-  { name: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash (User Requested)', description: 'Next generation features, speed. (Likely no thinkingConfig)' },
-  { name: 'gemini-2.0-flash-lite', displayName: 'Gemini 2.0 Flash Lite (User Requested)', description: 'Cost efficiency and low latency. (Likely no thinkingConfig)' },
+  { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash (User Requested)', description: 'Adaptive thinking, cost efficiency. (Check API for thinkingConfig support)', supportsFunctionCalling: false },
+  { name: 'gemini-2.5-flash-lite-preview-06-17', displayName: 'Gemini 2.5 Flash-Lite Preview (06-17, User Requested)', description: 'Most cost-efficient model supporting high throughput. (Likely no thinkingConfig)', supportsFunctionCalling: false },
+  { name: 'gemini-2.5-flash-preview-05-20', displayName: 'Gemini 2.5 Flash Preview (05-20, User Requested)', description: 'Fast, multimodal, preview version. (Check API for thinkingConfig support)', supportsFunctionCalling: false },
+  { name: 'gemini-2.5-flash-preview-native-audio-dialog', displayName: 'Gemini 2.5 Flash Native Audio (User Requested)', description: 'High quality conversational audio outputs. (May have implicit thinking)', supportsFunctionCalling: false },
+  { name: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash (User Requested)', description: 'Next generation features, speed. (Likely no thinkingConfig)', supportsFunctionCalling: false },
+  { name: 'gemini-2.0-flash-lite', displayName: 'Gemini 2.0 Flash Lite (User Requested)', description: 'Cost efficiency and low latency. (Likely no thinkingConfig)', supportsFunctionCalling: false },
 ] as const;
 
 
@@ -225,6 +228,7 @@ export interface AutologosIterativeEngineData {
   rateLimitCooldownActiveSeconds?: number;
   stagnationNudgeEnabled?: boolean;
   isSearchGroundingEnabled?: boolean;
+  isUrlBrowsingEnabled?: boolean;
   inputComplexity?: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
   strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
@@ -385,6 +389,7 @@ export interface ProcessState {
   currentAppliedModelConfig?: ModelConfig | null;
   stagnationNudgeEnabled: boolean;
   isSearchGroundingEnabled: boolean;
+  isUrlBrowsingEnabled: boolean;
   stagnationInfo: StagnationInfo;
   isPlanActive: boolean;
   planStages: PlanStage[];

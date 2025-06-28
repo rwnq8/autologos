@@ -1,13 +1,13 @@
 import React from 'react';
 import type { CommonControlProps } from '../types.ts'; 
 
-import ProjectActions from './controls/ProjectActions';
-import InputDataControls from './controls/InputDataControls';
-import IterativePlanEditor from './controls/IterativePlanEditor';
-import ModelParameterControls from './controls/ModelParameterControls';
-import OutputStructureDefaults from './controls/OutputStructureDefaults';
-import MainActionButtons from './controls/MainActionButtons';
-import DevLogControls from './controls/DevLogControls'; // Import new component
+import ProjectActions from './controls/ProjectActions.tsx';
+import InputDataControls from './controls/InputDataControls.tsx';
+import IterativePlanEditor from './controls/IterativePlanEditor.tsx';
+import ModelParameterControls from './controls/ModelParameterControls.tsx';
+import OutputStructureDefaults from './controls/OutputStructureDefaults.tsx';
+import MainActionButtons from './controls/MainActionButtons.tsx';
+import DevLogControls from './controls/DevLogControls.tsx'; // Import new component
 
 interface ControlsProps {
   commonControlProps: CommonControlProps;

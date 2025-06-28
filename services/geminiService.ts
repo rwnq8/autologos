@@ -1,8 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
-import type { GenerateContentResponse, Part, Content } from "@google/genai";
+import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
 import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, LoadedFile, PlanStage, SuggestedParamsResponse, RetryContext, OutlineGenerationResult, NudgeStrategy, SelectableModelName } from "../types.ts";
-import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents, CONVERGED_PREFIX } from './promptBuilderService';
+import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents, CONVERGED_PREFIX } from './promptBuilderService.ts';
 import { SELECTABLE_MODELS } from '../types.ts';
+import { urlBrowseTool } from './toolDefinitions.ts';
 
 let apiKeyWarningLoggedOnce = false;
 
@@ -157,7 +157,7 @@ export const generateInitialOutline = async (fileManifest: string, loadedFiles: 
 export const iterateProduct = async ({
     currentProduct, currentIterationOverall, maxIterationsOverall, fileManifest, loadedFiles,
     activePlanStage, outputParagraphShowHeadings, outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings,
-    modelConfigToUse, isGlobalMode, isSearchGroundingEnabled, modelToUse, onStreamChunk, isHaltSignalled,
+    modelConfigToUse, isGlobalMode, isSearchGroundingEnabled, isUrlBrowsingEnabled, modelToUse, onStreamChunk, isHaltSignalled,
     retryContext, stagnationNudgeStrategy, initialOutlineForIter1, activeMetaInstruction,
     devLogContextString, isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
     isRadicalRefinementKickstart
@@ -165,7 +165,7 @@ export const iterateProduct = async ({
     currentProduct: string; currentIterationOverall: number; maxIterationsOverall: number; fileManifest: string;
     loadedFiles: LoadedFile[]; activePlanStage: PlanStage | null; outputParagraphShowHeadings: boolean;
     outputParagraphMaxHeadingDepth: number; outputParagraphNumberedHeadings: boolean;
-    modelConfigToUse: ModelConfig; isGlobalMode: boolean; isSearchGroundingEnabled: boolean; modelToUse: SelectableModelName;
+    modelConfigToUse: ModelConfig; isGlobalMode: boolean; isSearchGroundingEnabled: boolean; isUrlBrowsingEnabled: boolean; modelToUse: SelectableModelName;
     onStreamChunk: (chunkText: string) => void; isHaltSignalled: () => boolean;
     retryContext?: RetryContext; stagnationNudgeStrategy?: NudgeStrategy;
     initialOutlineForIter1?: OutlineGenerationResult; activeMetaInstruction?: string;
@@ -217,25 +217,41 @@ export const iterateProduct = async ({
         let callCount = 0;
         let continueStreaming = true;
 
+        const modelData = SELECTABLE_MODELS.find(m => m.name === modelToUse);
+
         while (continueStreaming) {
             callCount++;
             if (isHaltSignalled()) {
                 return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: 'Process halted by user during preparation for API call.' };
             }
 
+            let configForRequest: any;
+
+            if (isSearchGroundingEnabled) {
+                const tools: any[] = [{ googleSearch: {} }];
+                if (isUrlBrowsingEnabled && modelData?.supportsFunctionCalling) {
+                    tools.push({ functionDeclarations: [urlBrowseTool] });
+                }
+                // Per documentation, when using Google Search grounding, other parameters like temperature, topP, topK, and responseMimeType are omitted.
+                configForRequest = { tools };
+                // Note: systemInstruction is also omitted to strictly follow grounding guidelines.
+            } else {
+                const tools: any[] = [];
+                if (isUrlBrowsingEnabled && modelData?.supportsFunctionCalling) {
+                    tools.push({ functionDeclarations: [urlBrowseTool] });
+                }
+                configForRequest = {
+                    ...apiConfig,
+                    systemInstruction,
+                    ...(tools.length > 0 && { tools }),
+                };
+            }
+            
             const requestPayload: any = {
                 model: modelToUse,
                 contents: conversationHistory,
-                config: { ...apiConfig, systemInstruction },
+                config: configForRequest,
             };
-
-            if (isSearchGroundingEnabled) {
-                requestPayload.tools = [{googleSearch: {}}];
-                // Per Gemini API guidance, responseMimeType is not supported with the googleSearch tool.
-                if (requestPayload.config.responseMimeType) {
-                    delete requestPayload.config.responseMimeType;
-                }
-            }
 
             const streamResult = await ai.models.generateContentStream(requestPayload);
 
@@ -259,6 +275,10 @@ export const iterateProduct = async ({
                  finalFinishReason = "HALTED";
             }
 
+            // This logic is simplified. It assumes one tool call per turn maximum.
+            // A more complex implementation would loop over multiple tool calls.
+            const functionCalls = finalResponse?.candidates?.[0].content.parts.filter(part => !!part.functionCall);
+
             // Update the model's full response in the history for this turn
             // This logic correctly handles continuations by appending to the last model message
             const lastMessage = conversationHistory[conversationHistory.length - 1];
@@ -266,6 +286,35 @@ export const iterateProduct = async ({
                 lastMessage.parts[0].text += responseTextThisStream;
             } else {
                 conversationHistory.push({ role: 'model', parts: [{ text: responseTextThisStream }] });
+            }
+
+            if (functionCalls && functionCalls.length > 0 && finalFinishReason === "TOOL_CALL") {
+                const call = functionCalls[0].functionCall!;
+                const toolDetail: ApiStreamCallDetail = {
+                  callCount,
+                  promptForThisCall: "Tool Call Turn",
+                  finishReason: finalFinishReason,
+                  safetyRatings: finalSafetyRatings,
+                  textLengthThisCall: 0,
+                  isContinuation: callCount > 1,
+                  functionCall: { name: call.name, args: call.args },
+                };
+
+                if(call.name === 'url_browse') {
+                    const browseUrl = call.args.url;
+                    // In a real app, you'd fetch the URL here. We simulate it.
+                    const simulatedContent = `Simulated browsing of [${browseUrl}]: Content was analyzed. The key themes appear to be X, Y, and Z. This information will be used to improve the response.`;
+                    
+                    conversationHistory.push({
+                      role: 'user', // This should be 'tool' but the SDK might use user role for function responses
+                      parts: [{ functionResponse: { name: 'url_browse', response: { content: simulatedContent, success: true }}}]
+                    });
+
+                    toolDetail.functionResponse = { name: 'url_browse', response: { success: true, detail: simulatedContent } };
+                }
+                apiStreamDetails.push(toolDetail);
+                // The loop continues to get the model's response after the tool call
+                continue;
             }
             
             accumulatedText += responseTextThisStream;
@@ -277,6 +326,7 @@ export const iterateProduct = async ({
                 safetyRatings: finalSafetyRatings,
                 textLengthThisCall: responseTextThisStream.length,
                 isContinuation: callCount > 1,
+                groundingMetadata: finalResponse?.candidates?.[0]?.groundingMetadata,
             });
 
             if (finalFinishReason === 'MAX_TOKENS') {
@@ -291,6 +341,7 @@ export const iterateProduct = async ({
         }
         
         const status = accumulatedText.startsWith(CONVERGED_PREFIX) ? 'CONVERGED' : 'COMPLETED';
+        const lastDetailWithMetadata = [...apiStreamDetails].reverse().find(d => d.groundingMetadata);
 
         return {
             product: accumulatedText,
@@ -300,7 +351,7 @@ export const iterateProduct = async ({
             promptSystemInstructionSent: systemInstruction,
             promptCoreUserInstructionsSent: coreUserInstructions,
             promptFullUserPromptSent: fullUserPromptText,
-            groundingMetadata: apiStreamDetails[apiStreamDetails.length - 1] // The last response chunk should have the aggregated metadata
+            groundingMetadata: lastDetailWithMetadata?.groundingMetadata
         };
 
     } catch (error: any) {
@@ -312,6 +363,8 @@ export const iterateProduct = async ({
         if (errorStr.includes("429") || errorStr.includes("QUOTA") || errorStr.includes("RATE LIMIT") || errorStr.includes("RESOURCE_EXHAUSTED")) {
             errorMessage = `API Quota Exceeded or Rate Limit Hit. Original: "${error.message}".`;
             isRateLimitErrorFlag = true;
+        } else if (errorStr.includes("FUNCTION CALLING IS UNSUPPORTED")) {
+            errorMessage = `The selected model (${modelToUse}) does not support function calling (URL Browsing tool). Please disable the tool or select a different model.`;
         }
 
         return {

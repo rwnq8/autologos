@@ -1,7 +1,8 @@
 
+
 import { useState, useEffect, useCallback } from 'react';
 import type { ModelConfig, SettingsSuggestionSource, ParameterAdvice, ModelParameterGuidance, SuggestedParamsResponse, StagnationInfo, NudgeStrategy, SelectableModelName } from '../types.ts';
-import * as geminiService from '../services/geminiService';
+import * as geminiService from '../services/geminiService.ts';
 
 export const STAGNATION_TEMP_NUDGE_LIGHT = 0.05;
 export const STAGNATION_TOPP_NUDGE_LIGHT = 0.02;

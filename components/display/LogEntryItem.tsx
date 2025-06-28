@@ -1,10 +1,14 @@
+
 import React, { useState, useContext } from 'react';
 import type { IterationLogEntry, ReconstructedProductResult, ModelConfig, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, SelectableModelName, IterationEntryType } from '../../types.ts';
 import * as GeminaiDiff from 'diff';
-import { useProcessContext } from '../../contexts/ProcessContext';
-import { countWords } from '../../services/textAnalysisService';
+import { useProcessContext } from '../../contexts/ProcessContext.tsx';
+import { countWords } from '../../services/textAnalysisService.ts';
 import { SELECTABLE_MODELS } from '../../types.ts';
-import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter'; 
+import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter.ts'; 
+import ChevronDownIcon from '../shared/ChevronDownIcon.tsx';
+import ChevronUpIcon from '../shared/ChevronUpIcon.tsx';
+import DocumentDuplicateIcon from '../shared/DocumentDuplicateIcon.tsx';
 
 
 interface LogEntryItemProps {
@@ -37,6 +41,40 @@ const getDiffTitle = (entry: IterationLogEntry): string => {
   // or other unexpected scenarios.
   return `Product at Iteration ${entry.iteration}`;
 };
+
+const getEntryTypeFriendlyName = (entryType?: IterationEntryType): string => {
+    switch(entryType) {
+        case 'initial_state': return 'Initial State';
+        case 'ai_iteration': return 'AI Iteration';
+        case 'manual_edit': return 'Manual Edit';
+        case 'segmented_synthesis_milestone': return 'Segmented Synthesis';
+        case 'targeted_refinement': return 'Targeted Refinement';
+        default: return 'AI Iteration';
+    }
+}
+
+const renderDiff = (diffStr: string) => {
+  if (diffStr.length > MAX_DIFF_RENDER_SIZE) {
+    return <pre className="text-xs text-yellow-600 dark:text-yellow-400">Diff is too large to render ({diffStr.length} chars). Use 'Export Iteration Diffs' to view.</pre>;
+  }
+  const diffJson = GeminaiDiff.parsePatch(diffStr);
+  return diffJson.map((file, i) => (
+    <div key={i}>
+      {file.hunks.map((hunk, j) => (
+        <pre key={j} className="text-xs font-mono whitespace-pre-wrap break-all">
+          <div className="bg-blue-100/50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 px-2 py-0.5 rounded-t-md">{hunk.header}</div>
+          {hunk.lines.map((line, k) => {
+            const colorClass = line.startsWith('+') ? 'bg-green-100/50 dark:bg-green-800/20 text-green-800 dark:text-green-200'
+                             : line.startsWith('-') ? 'bg-red-100/50 dark:bg-red-800/20 text-red-800 dark:text-red-200'
+                             : 'text-slate-600 dark:text-slate-400';
+            return <div key={k} className={`${colorClass} px-2`}>{line}</div>;
+          })}
+        </pre>
+      ))}
+    </div>
+  ));
+};
+
 
 export const LogEntryItem: React.FC<LogEntryItemProps> = ({
   logEntry,
@@ -79,391 +117,59 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
   const getProductSummaryForDisplay = (entry: IterationLogEntry): string => {
     return entry.productSummary || "Summary N/A";
   };
-
-  const getReadabilityInterpretation = (score: number | undefined): string => {
-    if (score === undefined) return "";
-    if (score >= 90) return " (Very Easy)";
-    if (score >= 80) return " (Easy)";
-    if (score >= 70) return " (Fairly Easy)";
-    if (score >= 60) return " (Standard / Plain English)";
-    if (score >= 50) return " (Fairly Difficult)";
-    if (score >= 30) return " (Difficult)";
-    return " (Very Confusing)";
-  };
-
-  const renderWordDiffDisplay = (oldStr: string, newStr: string): JSX.Element[] => {
-    if (newStr.length > MAX_DIFF_RENDER_SIZE) {
-        return [<span key="large_diff_warning" className="text-orange-500 dark:text-orange-400 block">Diff not shown due to excessive size ({newStr.length} chars). Export diagnostics to view full content.</span>];
-    }
-    const changes = GeminaiDiff.diffWordsWithSpace(oldStr, newStr);
-    return changes.map((part, index) => {
-      const partClasses = part.added ? 'bg-green-100 dark:bg-green-600/30 text-green-700 dark:text-green-200'
-        : part.removed ? 'bg-red-100 dark:bg-red-600/30 text-red-700 dark:text-red-200 line-through'
-        : 'text-slate-600 dark:text-slate-300';
-      return (<span key={index} className={partClasses}>{part.value}</span>);
-    });
-  };
-
-  let diffDisplayComponent: JSX.Element[] | null = null;
-  let netWordChange: number | undefined = undefined;
-
-  const isAiEntry = logEntry.entryType === 'ai_iteration' || logEntry.entryType === 'targeted_refinement' || logEntry.entryType === 'segmented_synthesis_milestone';
-
-
-  if (isExpanded) {
-    try {
-      let oldTextResult: ReconstructedProductResult;
-      let newTextResult: ReconstructedProductResult;
-      let overallReconstructionError: string | undefined;
-
-      newTextResult = reconstructProductCallback(logEntry.iteration, iterationHistory);
-
-      if (logEntry.entryType === 'initial_state' && logEntry.iteration === 0) {
-         oldTextResult = { product: "", error: undefined }; // Diff initial state from empty
-      } else if (logEntry.entryType === 'segmented_synthesis_milestone' && logEntry.iteration === 1) {
-         // Diff segmented synthesis result from the initial state (Iter 0)
-         oldTextResult = reconstructProductCallback(0, iterationHistory);
-      } else {
-        // For other AI iterations, manual edits, targeted refinements, diff from previous iteration's state
-         oldTextResult = reconstructProductCallback(logEntry.iteration - 1 , iterationHistory);
-      }
-
-      if (newTextResult.error && oldTextResult.error && !(logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) {
-        overallReconstructionError = `Error reconstructing Iter. ${logEntry.iteration}: ${newTextResult.error}\nError reconstructing Prev. Iter. (${logEntry.iteration -1}): ${oldTextResult.error}`;
-      }
-      else if (newTextResult.error) overallReconstructionError = `Error reconstructing Iteration ${logEntry.iteration}: ${newTextResult.error}`;
-      else if (oldTextResult.error && !(logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) overallReconstructionError = `Error reconstructing Previous Iteration (${logEntry.iteration -1}): ${oldTextResult.error}`;
-
-
-      if (overallReconstructionError) {
-        diffDisplayComponent = [<span key="recon_error" className="text-red-500 dark:text-red-400 block whitespace-pre-wrap">{overallReconstructionError}</span>];
-      } else if (logEntry.iteration > 0 && !logEntry.productDiff && !overallReconstructionError && logEntry.entryType !== 'initial_state') {
-        const productToShow = typeof newTextResult.product === 'string' ? newTextResult.product : "Content unavailable";
-        diffDisplayComponent = [<span key="no_change" className="text-slate-600 dark:text-slate-300 block">No textual changes recorded from Iteration ${logEntry.iteration - 1}.<br />Current Content:<br />{productToShow}</span>];
-      } else if (!overallReconstructionError && typeof oldTextResult.product === 'string' && typeof newTextResult.product === 'string') {
-        diffDisplayComponent = renderWordDiffDisplay(oldTextResult.product, newTextResult.product);
-        const prevWords = countWords(oldTextResult.product);
-        const currentWords = countWords(newTextResult.product);
-        netWordChange = currentWords - prevWords;
-      } else {
-        diffDisplayComponent = [<span key="unknown_error" className="text-orange-500 dark:text-orange-400 block">Could not display diff due to an unknown reconstruction issue.</span>];
-      }
-    } catch (e: any) {
-      console.error(`Error preparing diff display for iteration ${logEntry.iteration}:`, e);
-      diffDisplayComponent = [<span key="diff_error" className="text-red-500 dark:text-red-400 block">Error displaying diff: {e.message}</span>];
-    }
-  }
   
-  const canRewind = logEntry.iteration >= 0 && !isProcessing;
-  const iterZeroResultForExportCheck = logEntry.iteration === 0 ? reconstructProductCallback(0, iterationHistory) : null;
-  const canExportIteration = 
-    (logEntry.entryType === 'initial_state' && logEntry.iteration === 0 && iterZeroResultForExportCheck && !iterZeroResultForExportCheck.error && iterZeroResultForExportCheck.product.trim() !== "") ||
-    (logEntry.entryType === 'segmented_synthesis_milestone' && logEntry.iteration === 1) ||
-    (logEntry.iteration > 0 && logEntry.productDiff && logEntry.productDiff.trim() !== "" && logEntry.entryType !== 'initial_state' && logEntry.entryType !== 'segmented_synthesis_milestone');
+    const getReadabilityInterpretation = (score: number | undefined): { text: string; color: string } => {
+        if (score === undefined) return { text: "N/A", color: "text-slate-500" };
+        if (score >= 90) return { text: "Very Easy", color: "text-green-700 dark:text-green-300" };
+        if (score >= 70) return { text: "Easy", color: "text-green-600 dark:text-green-400" };
+        if (score >= 60) return { text: "Fairly Easy", color: "text-lime-600 dark:text-lime-400" };
+        if (score >= 50) return { text: "Standard", color: "text-yellow-600 dark:text-yellow-400" };
+        if (score >= 30) return { text: "Fairly Difficult", color: "text-orange-500 dark:text-orange-400" };
+        return { text: "Very Difficult", color: "text-red-600 dark:text-red-400" };
+    };
 
-
-  const modelUsedDisplayName = logEntry.currentModelForIteration
-    ? SELECTABLE_MODELS.find(m => m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration
-    : (logEntry.entryType === 'manual_edit' ? "N/A (Manual Edit)" : (logEntry.entryType === 'initial_state' ? "N/A (Initial State)" : "N/A"));
-    
-  const entryTypeDisplay: Record<IterationEntryType, string> = {
-    'initial_state': "Initial State",
-    'ai_iteration': "AI Iteration",
-    'manual_edit': "Manual Edit",
-    'segmented_synthesis_milestone': "Segmented Synthesis Milestone",
-    'targeted_refinement': "Targeted Refinement"
-  };
-  const displayEntryType = entryTypeDisplay[logEntry.entryType || 'ai_iteration'];
-
-
-  const renderStrategyRationale = (rationale: string | undefined) => {
-    if (!rationale) return <p className="mt-1 text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-black/40 p-1.5 rounded">No specific strategy rationale logged.</p>;
-
-    const parts = rationale.split(' | ');
-    const knownPrefixes: { prefix: string; className: string; label?: string }[] = [
-        { prefix: "Strategist LLM Advice Received:", className: "text-purple-600 dark:text-purple-400 font-semibold", label: "Strategist LLM Advice:" },
-        { prefix: "Strategist overrode heuristic model.", className: "text-amber-600 dark:text-amber-400 font-semibold", label: "Strategist Model Override:" },
-        { prefix: "Strategist concurred with heuristic model choice:", className: "text-sky-500 dark:text-sky-300", label: "Strategist Model Concurrence:" },
-        { prefix: "Strategist suggested model", className: "text-slate-500 dark:text-slate-400 italic", label: "Strategist Model Suggestion (Ignored/Logged):" },
-        { prefix: "Strategist set Flash thinking budget to:", className: "text-teal-600 dark:text-teal-400 font-semibold", label: "Strategist Flash Config:" },
-        { prefix: "Strategist adjusted core parameters:", className: "text-rose-600 dark:text-rose-400 font-semibold", label: "Strategist Core Param Adjust:" },
-        { prefix: "Strategist parameter advice", className: "text-slate-500 dark:text-slate-400 italic", label: "Strategist Param Advice (Ignored/Logged):" },
-        { prefix: "Strategist provided dynamic meta-instruction:", className: "text-fuchsia-600 dark:text-fuchsia-400 font-semibold", label: "Strategist Meta-Instruction:" },
-        { prefix: "Strategist suggested meta-instruction", className: "text-slate-500 dark:text-slate-400 italic", label: "Strategist Meta-Instruction Suggestion (Ignored/Logged):" },
-        { prefix: "Strategist LLM consultation skipped", className: "text-slate-500 dark:text-slate-500", label: "Strategist Skipped:" },
-        { prefix: "Strategist consultation skipped", className: "text-slate-500 dark:text-slate-500", label: "Strategist Skipped:" },
-        { prefix: "Heuristic Sweep:", className: "text-indigo-600 dark:text-indigo-400", label: "Heuristic Sweep:" },
-        { prefix: "Heuristic Nudge (Code):", className: "text-purple-600 dark:text-purple-400", label: "Heuristic Nudge (Code):" },
-        { prefix: "Heuristic Model Switch (Code):", className: "text-orange-600 dark:text-orange-400", label: "Heuristic Model Switch (Code):" },
-        { prefix: "Heuristic Fallback:", className: "text-gray-500 dark:text-gray-400", label: "Heuristic Fallback:" },
-        { prefix: "Heuristic Correction:", className: "text-yellow-600 dark:text-yellow-400", label: "Heuristic Correction:" },
-        { prefix: "Heuristic:", className: "text-indigo-600 dark:text-indigo-400", label: "Heuristic:" },
-        { prefix: "Parameter Clamp:", className: "text-red-500 dark:text-red-400 font-semibold", label: "System Param Clamp:" },
-        { prefix: "Plan Mode:", className: "text-blue-600 dark:text-blue-400", label: "Mode:" },
-    ];
-
-    return (
-        <ul className="list-none mt-1 text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-black/40 p-1.5 rounded space-y-0.5 text-xs">
-            {parts.map((part, index) => {
-                let styledPart: React.ReactNode = part.trim();
-                let matched = false;
-                for (const item of knownPrefixes) {
-                    if (part.trim().startsWith(item.prefix)) {
-                        styledPart = <><strong className={item.className}>{item.label || item.prefix}</strong>{part.trim().substring(item.prefix.length)}</>;
-                        matched = true;
-                        break;
-                    }
-                }
-                return <li key={index} className={`break-words ${matched ? "pl-1" : "pl-3"}`}>{styledPart}</li>;
-            })}
-        </ul>
-    );
-  };
-
-  const PROMPT_UI_TRUNCATE_LENGTH = 300; // Length for initial UI truncation
-
-  const renderExpandablePrompt = (promptText: string | undefined, promptKey: string, title: string) => {
-    if (!promptText) return <p className="text-xs text-slate-500 dark:text-slate-400">({title} not available)</p>;
-
-    const isPromptExpanded = expandedPrompts[promptKey];
-    const canExpand = promptText.length > PROMPT_UI_TRUNCATE_LENGTH;
-
-    return (
-      <div className="text-xs">
-        <div className="flex justify-between items-center mb-0.5">
-          <h5 className="font-semibold text-slate-700 dark:text-slate-300">{title}</h5>
-          {canExpand && (
-            <button
-              onClick={() => togglePromptExpansion(promptKey)}
-              className="text-xs text-primary-600 dark:text-primary-400 hover:underline focus:outline-none"
-              aria-expanded={isPromptExpanded}
-              aria-controls={`prompt-content-${promptKey}`}
-            >
-              {isPromptExpanded ? 'Show Less' : 'Show More'}
-            </button>
-          )}
-        </div>
-        <pre
-          id={`prompt-content-${promptKey}`}
-          className={`whitespace-pre-wrap break-words bg-slate-100 dark:bg-black/40 p-1.5 rounded text-slate-600 dark:text-slate-400 ${isPromptExpanded ? 'max-h-96 overflow-y-auto' : ''}`}
-        >
-          {isPromptExpanded ? promptText : (promptText.length > PROMPT_UI_TRUNCATE_LENGTH ? promptText.substring(0, PROMPT_UI_TRUNCATE_LENGTH) + "..." : promptText)}
-        </pre>
-      </div>
-    );
-  };
-
+    const readability = getReadabilityInterpretation(logEntry.readabilityScoreFlesch);
+    const commonButtonClasses = "inline-flex items-center px-2 py-1 border text-xxs font-medium rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-slate-800 focus:ring-primary-500 disabled:opacity-50 transition-colors";
+    const neutralButtonClasses = `${commonButtonClasses} border-slate-300 dark:border-white/20 text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20`;
 
   return (
-    <div className="bg-slate-50 dark:bg-white/5 p-4 rounded-md shadow hover:bg-slate-100/80 dark:hover:bg-white/10 transition-colors duration-150">
-      <div className="flex justify-between items-start flex-wrap gap-2">
-        <button
-          onClick={() => onToggleExpand(logEntry.iteration)}
-          className="flex-grow flex justify-between items-center w-full text-left focus:outline-none focus:ring-2 focus:ring-primary-500 rounded mr-2"
-          aria-expanded={isExpanded}
-          aria-controls={`log-details-${logEntry.iteration}`}
-        >
-          <div>
-            <p className="font-medium text-primary-600 dark:text-primary-400">
-              Iteration {logEntry.iteration}
-              <span className="text-xs text-slate-500 dark:text-slate-400 ml-1">({displayEntryType})</span>
-              <span className="ml-2 text-xs text-slate-500 dark:text-slate-400">({new Date(logEntry.timestamp).toLocaleTimeString()})</span>
-            </p>
-            <p className="text-sm text-slate-600 dark:text-slate-300 break-words">{logEntry.status}</p>
-            {!isExpanded && <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 italic">Summary: {getProductSummaryForDisplay(logEntry)}</p>}
-
-            {(logEntry.iteration >= 0 && !isExpanded) && (
-              <p className="text-xs mt-1">
-                {(logEntry.linesAdded !== undefined || logEntry.linesRemoved !== undefined ) && (
-                  <>
-                    Changes: {logEntry.linesAdded !== undefined ? <span className="text-green-600 dark:text-green-400">+{logEntry.linesAdded} lines</span> : ''}
-                    {(logEntry.linesAdded !== undefined && logEntry.linesRemoved !== undefined) ? ', ' : ''}
-                    {logEntry.linesRemoved !== undefined ? <span className="text-red-600 dark:text-red-400">-{logEntry.linesRemoved} lines</span> : ''}
-                  </>
-                )}
-                {logEntry.netLineChange !== undefined && (
-                    <span className="ml-2">Net Lines: <span className={logEntry.netLineChange > 0 ? "text-green-600 dark:text-green-400" : logEntry.netLineChange < 0 ? "text-red-600 dark:text-red-400" : "text-slate-500 dark:text-slate-400"}>
-                        {logEntry.netLineChange > 0 ? "+" : ""}{logEntry.netLineChange}
-                    </span></span>
-                )}
-                {logEntry.charDelta !== undefined && (
-                    <span className="ml-2">Net Chars: <span className={logEntry.charDelta > 0 ? "text-green-600 dark:text-green-400" : logEntry.charDelta < 0 ? "text-red-600 dark:text-red-400" : "text-slate-500 dark:text-slate-400"}>
-                        {logEntry.charDelta > 0 ? "+" : ""}{logEntry.charDelta}
-                    </span></span>
-                )}
-                {isAiEntry && logEntry.currentModelForIteration && <span className="ml-2 text-slate-500 dark:text-slate-400">Model: {SELECTABLE_MODELS.find(m=>m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration}</span>}
-              </p>
-            )}
-            {isExpanded && (
-               <p className="text-xs mt-1">
-                {netWordChange !== undefined && (
-                  <>
-                    Net Word Change: <span className={netWordChange >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
-                      {netWordChange >= 0 ? "+" : ""}{netWordChange}
-                    </span>
-                  </>
-                )}
-              </p>
-            )}
-          </div>
-          <span className="text-xs text-slate-500 dark:text-slate-400">{isExpanded ? 'Collapse' : 'Expand'}</span>
+    <div className={`p-3 rounded-md transition-colors duration-200 ${isExpanded ? 'bg-white dark:bg-slate-800 shadow-lg border border-primary-500/30 dark:border-primary-500/50' : 'bg-slate-100/70 dark:bg-black/10 hover:bg-slate-200/70 dark:hover:bg-black/20'}`}>
+        <button onClick={() => onToggleExpand(logEntry.iteration)} className="w-full text-left flex justify-between items-start gap-2 focus:outline-none">
+            <div className="flex-grow">
+                <div className="flex items-baseline gap-2">
+                    <span className="font-bold text-primary-600 dark:text-primary-300">Iter. {logEntry.iteration}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${logEntry.isCriticalFailure ? 'bg-red-200 dark:bg-red-800/70 text-red-800 dark:text-red-100' : 'bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200'}`}>{logEntry.status}</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">{getEntryTypeFriendlyName(logEntry.entryType)}</span>
+                </div>
+                <p className="text-sm text-slate-700 dark:text-slate-200 mt-1 break-words">{getProductSummaryForDisplay(logEntry)}</p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400 mt-1.5">
+                    {logEntry.linesAdded !== undefined && <span className="text-green-600 dark:text-green-400">+{logEntry.linesAdded} lines</span>}
+                    {logEntry.linesRemoved !== undefined && <span className="text-red-600 dark:text-red-400">-{logEntry.linesRemoved} lines</span>}
+                    <span>Readability: <span className={readability.color}>{readability.text} ({logEntry.readabilityScoreFlesch?.toFixed(1) || 'N/A'})</span></span>
+                </div>
+            </div>
+            <div className="flex-shrink-0 text-slate-500 dark:text-slate-400">
+                {isExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
+            </div>
         </button>
-        <div className="flex-shrink-0 flex items-center space-x-2 mt-2 sm:mt-0 self-start">
-          {canExportIteration && (
-            <button
-              onClick={() => onExportIterationMarkdown(logEntry.iteration)}
-              disabled={!canExportIteration} 
-              className="inline-flex items-center px-2.5 py-1 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 disabled:opacity-50 transition-colors"
-              title={`Download Iteration ${logEntry.iteration} as Markdown`}
-              aria-label={`Download Iteration ${logEntry.iteration} as Markdown`}
-            >
-              Iter. .md
-            </button>
-          )}
-          {canRewind && (
-            <button
-              onClick={() => onRewind(logEntry.iteration)}
-              disabled={isProcessing}
-              className="inline-flex items-center px-2.5 py-1 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title={`Use Iteration ${logEntry.iteration}'s output as new starting point`}
-              aria-label={`Use Iteration ${logEntry.iteration}'s output as new starting point`}
-            >
-              Use as Start
-            </button>
-          )}
-          <button
-            onClick={handleCopySingleDiagnostic}
-            className="inline-flex items-center px-2.5 py-1 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 disabled:opacity-50 transition-colors relative"
-            title="Copy diagnostics for this iteration to clipboard"
-            aria-label="Copy diagnostics for this iteration"
-            disabled={isProcessing}
-          >
-            {localCopyStatus || "Copy Diag."}
-          </button>
-        </div>
-      </div>
-      {isExpanded && (
-        <div
-          id={`log-details-${logEntry.iteration}`}
-          className="mt-3 pt-3 border-t border-slate-300/70 dark:border-white/10 space-y-3"
-        >
-          {diffDisplayComponent && (
-            <div>
-              <div className="flex justify-between items-center mb-2">
-                <h4 className="text-sm font-semibold text-primary-600 dark:text-primary-300">
-                  {getDiffTitle(logEntry)}
-                </h4>
-              </div>
-              <pre className="whitespace-pre-wrap break-words text-xs bg-slate-100 dark:bg-black/40 p-2 rounded max-h-96 overflow-y-auto">
-                {diffDisplayComponent}
-              </pre>
-            </div>
-          )}
-          
-          {logEntry.groundingMetadata?.groundingChunks?.length > 0 && (
-             <div className="text-xs">
-                 <button onClick={() => toggleDiagnosticSection(`grounding-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
-                     Grounding Sources {expandedDiagnostics[`grounding-${logEntry.iteration}`] ? '▼' : '▶'}
-                 </button>
-                 {expandedDiagnostics[`grounding-${logEntry.iteration}`] && (
-                     <ul className="ml-2 pl-2 border-l border-slate-300 dark:border-slate-600 space-y-1 list-disc list-inside">
-                         {logEntry.groundingMetadata.groundingChunks.filter((c: any) => c.web && c.web.uri).map((chunk: any, index: number) => (
-                             <li key={index} className="text-blue-600 dark:text-blue-400 hover:underline">
-                                 <a href={chunk.web.uri} target="_blank" rel="noopener noreferrer">
-                                     {chunk.web.title || chunk.web.uri}
-                                 </a>
-                             </li>
-                         ))}
-                     </ul>
-                 )}
-             </div>
-          )}
 
-          {(logEntry.similarityWithPreviousLogged !== undefined || logEntry.charDelta !== undefined || logEntry.netLineChange !== undefined) && (
-            <div className="text-xs">
-                <button onClick={() => toggleDiagnosticSection(`stagnationMetrics-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
-                  Stagnation Analysis for this Iteration {expandedDiagnostics[`stagnationMetrics-${logEntry.iteration}`] ? '▼' : '▶'}
-                </button>
-                {expandedDiagnostics[`stagnationMetrics-${logEntry.iteration}`] && (
-                  <div className="ml-2 pl-2 border-l border-slate-300 dark:border-slate-600 space-y-0.5">
-                    {logEntry.similarityWithPreviousLogged !== undefined && <p>Similarity with Previous: {logEntry.similarityWithPreviousLogged.toFixed(4)}</p>}
-                    {logEntry.charDelta !== undefined && <p>Character Delta: {logEntry.charDelta > 0 ? `+${logEntry.charDelta}` : logEntry.charDelta}</p>}
-                    {logEntry.netLineChange !== undefined && <p>Net Line Change: {logEntry.netLineChange > 0 ? `+${logEntry.netLineChange}` : logEntry.netLineChange}</p>}
-                    <p className="font-medium mt-1">Flags Triggered:</p>
-                    {logEntry.isStagnantIterationLogged && <p className="text-orange-600 dark:text-orange-400 ml-2">- Stagnant Iteration (High Similarity, Low Change)</p>}
-                    {logEntry.isEffectivelyIdenticalLogged && <p className="text-red-600 dark:text-red-400 ml-2">- Effectively Identical to Previous</p>}
-                    {logEntry.isLowValueIterationLogged && <p className="text-yellow-600 dark:text-yellow-400 ml-2">- Low Value Iteration</p>}
-                    {!(logEntry.isStagnantIterationLogged || logEntry.isEffectivelyIdenticalLogged || logEntry.isLowValueIterationLogged) && <p className="text-green-600 dark:text-green-400 ml-2">- No Stagnation Flags Triggered</p>}
-                  </div>
+        {isExpanded && (
+            <div className="mt-3 pt-3 border-t border-slate-300/80 dark:border-white/10 space-y-4 animate-fadeIn">
+                <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={() => onRewind(logEntry.iteration)} disabled={isProcessing} className={neutralButtonClasses}>Rewind to this Iteration</button>
+                    <button onClick={() => onExportIterationMarkdown(logEntry.iteration)} disabled={isProcessing} className={neutralButtonClasses}>Export Markdown</button>
+                    <button onClick={handleCopySingleDiagnostic} className={`${neutralButtonClasses} min-w-[120px]`}>
+                       <DocumentDuplicateIcon className="w-3 h-3 mr-1"/> {localCopyStatus || 'Copy Diagnostics'}
+                    </button>
+                </div>
+                {logEntry.productDiff && logEntry.productDiff.trim() && (
+                    <details className="space-y-1" open>
+                        <summary className="text-sm font-medium cursor-pointer text-primary-600 dark:text-primary-400 hover:underline">{getDiffTitle(logEntry)}</summary>
+                        <div className="p-2 bg-slate-50 dark:bg-black/20 rounded-md border border-slate-200 dark:border-white/10 max-h-96 overflow-y-auto">{renderDiff(logEntry.productDiff)}</div>
+                    </details>
                 )}
             </div>
-          )}
-
-
-          {(isAiEntry || (logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) && logEntry.modelConfigUsed && (
-            <div className="text-xs">
-              <button onClick={() => toggleDiagnosticSection(`modelConfig-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
-                Model Config Used {expandedDiagnostics[`modelConfig-${logEntry.iteration}`] ? '▼' : '▶'}
-              </button>
-              {expandedDiagnostics[`modelConfig-${logEntry.iteration}`] && (
-                <div className="ml-2 pl-2 border-l border-slate-300 dark:border-slate-600">
-                  <p>Model: {modelUsedDisplayName}</p>
-                  <p>Temp: {logEntry.modelConfigUsed.temperature.toFixed(2)}, Top-P: {logEntry.modelConfigUsed.topP.toFixed(2)}, Top-K: {logEntry.modelConfigUsed.topK}</p>
-                  {logEntry.modelConfigUsed.thinkingConfig && (
-                    <p>Thinking Budget: {logEntry.modelConfigUsed.thinkingConfig.thinkingBudget}</p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {logEntry.fileProcessingInfo && (logEntry.fileProcessingInfo.fileManifestProvidedCharacterCount > 0 || logEntry.fileProcessingInfo.numberOfFilesActuallySent > 0) && (
-            <div className="text-xs">
-              <button onClick={() => toggleDiagnosticSection(`fileInfo-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
-                File Processing Info {expandedDiagnostics[`fileInfo-${logEntry.iteration}`] ? '▼' : '▶'}
-              </button>
-              {expandedDiagnostics[`fileInfo-${logEntry.iteration}`] && (
-                <div className="ml-2 pl-2 border-l border-slate-300 dark:border-slate-600">
-                  <p>File Manifest Chars (this iter prompt): {logEntry.fileProcessingInfo.fileManifestProvidedCharacterCount}</p>
-                  {logEntry.fileProcessingInfo.filesSentToApiIteration !== null ? (
-                    <>
-                      <p>Actual File Data Sent in Iteration (API Call): {logEntry.fileProcessingInfo.filesSentToApiIteration}</p>
-                      <p>Number of Files Sent (API Call): {logEntry.fileProcessingInfo.numberOfFilesActuallySent}</p>
-                      <p>Total Bytes Sent (API Data): {logEntry.fileProcessingInfo.totalFilesSizeBytesSent}</p>
-                    </>
-                  ) : logEntry.iteration === 0 && logEntry.fileProcessingInfo.numberOfFilesActuallySent > 0 ? (
-                     <>
-                      <p>Files Loaded into Application: Yes</p>
-                      <p>Number of Files Loaded: {logEntry.fileProcessingInfo.numberOfFilesActuallySent}</p>
-                      <p>Total Bytes Loaded (App Data): {logEntry.fileProcessingInfo.totalFilesSizeBytesSent}</p>
-                    </>
-                  ) : (
-                     <p>Actual File Data: Not sent in this API call (expected if files were sent initially or no files loaded).</p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-          
-          {logEntry.aiValidationInfo && (
-             <div className="text-xs">
-                <button onClick={() => toggleDiagnosticSection(`validation-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
-                  AI Response Validation {expandedDiagnostics[`validation-${logEntry.iteration}`] ? '▼' : '▶'}
-                </button>
-                {expandedDiagnostics[`validation-${logEntry.iteration}`] && (
-                  <div className={`ml-2 pl-2 border-l ${logEntry.aiValidationInfo.passed ? 'border-green-500' : 'border-red-500'}`}>
-                    <p>Passed: <span className={logEntry.aiValidationInfo.passed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>{logEntry.aiValidationInfo.passed ? 'Yes' : 'No'}</span></p>
-                    {logEntry.aiValidationInfo.reason && <p>Reason: {logEntry.aiValidationInfo.reason}</p>}
-                    {logEntry.aiValidationInfo.details && (
-                      <p>Details Type: {logEntry.aiValidationInfo.details.type} | Value: {
-                          typeof logEntry.aiValidationInfo.details.value === 'string' ? `"${logEntry.aiValidationInfo.details.value}"`
-                          : logEntry.aiValidationInfo.details.value && typeof logEntry.aiValidationInfo.details.value === 'object' ? JSON.stringify(logEntry.aiValidationInfo.details.value)
-                          : 'N/A'
-                      }</p>
-                    )}
-                  </div>
-                )}
-             </div>
-          )}
-
-          {(isAiEntry || (logEntry.entryType === 'initial_state' && logEntry.iteration === 0
+        )}
+    </div>
+  );
+};

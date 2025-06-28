@@ -1,8 +1,8 @@
 import React, { useContext } from 'react';
 import type { CommonControlProps } from '../../types.ts';
-import { useApplicationContext } from '../../contexts/ApplicationContext';
-import { useProcessContext } from '../../contexts/ProcessContext';
-import { usePlanContext } from '../../contexts/PlanContext'; // Added for plan-related conditions
+import { useApplicationContext } from '../../contexts/ApplicationContext.tsx';
+import { useProcessContext } from '../../contexts/ProcessContext.tsx';
+import { usePlanContext } from '../../contexts/PlanContext.tsx'; // Added for plan-related conditions
 
 // MainActionButtonsProps removed
 

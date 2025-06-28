@@ -1,7 +1,7 @@
 // services/iterationUtils.ts
 
 import type { OutputLength, OutputFormat, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, AiResponseValidationInfoDetailsValue_InitialSynthesis, FileProcessingInfo, IsLikelyAiErrorResponseResult } from '../types.ts';
-import { countWords } from './textAnalysisService'; // Assuming countWords is exported
+import { countWords } from './textAnalysisService.ts'; // Assuming countWords is exported
 
 // --- Constants for Content Reduction Checks ---
 const MIN_CHARS_FOR_REDUCTION_CHECK = 100;

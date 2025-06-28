@@ -1,16 +1,17 @@
 
 
+
 import React, { useContext } from 'react';
 import type { IterationLogEntry, PlanStage } from '../types.ts'; // Removed unused ReconstructedProductResult and DiffViewType
-import { generateFileName } from '../services/utils';
-import { useApplicationContext } from '../contexts/ApplicationContext';
-import { useProcessContext } from '../contexts/ProcessContext';
+import { generateFileName } from '../services/utils.ts';
+import { useApplicationContext } from '../contexts/ApplicationContext.tsx';
+import { useProcessContext } from '../contexts/ProcessContext.tsx';
 // PlanContext is not directly used for rendering by DisplayArea itself, 
 // but its state (isPlanActive, planStages) is available via processCtx for YAML.
 
-import ProcessStatusDisplay from './display/ProcessStatusDisplay';
-import ProductOutputDisplay from './display/ProductOutputDisplay';
-import IterationLog from './display/IterationLog';
+import ProcessStatusDisplay from './display/ProcessStatusDisplay.tsx';
+import ProductOutputDisplay from './display/ProductOutputDisplay.tsx';
+import IterationLog from './display/IterationLog.tsx';
 
 const DisplayArea: React.FC = () => {
   const appCtx = useApplicationContext();

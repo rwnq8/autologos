@@ -1,6 +1,6 @@
 
 import type { IterationLogEntry, ReconstructedProductResult, PromptLeakageDetailValue, ReductionDetailValue } from '../types.ts';
-import { reconstructProduct } from './diffService'; // Assuming reconstructProduct is in diffService
+import { reconstructProduct } from './diffService.ts'; // Assuming reconstructProduct is in diffService
 import { SELECTABLE_MODELS } from '../types.ts';
 
 const DIAG_PROMPT_COPY_MAX_LENGTH = 100000;

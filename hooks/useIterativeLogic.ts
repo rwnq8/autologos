@@ -1,14 +1,14 @@
 import { useRef, useState, useCallback } from 'react';
-import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType } from '../types.ts';
-import * as GeminaiService from '../services/geminiService';
-import { getUserPromptComponents } from '../services/promptBuilderService';
-import { isLikelyAiErrorResponse, getProductSummary, parseAndCleanJsonOutput, CONVERGED_PREFIX, MIN_CHARS_FOR_DEVELOPED_PRODUCT, isDataDump } from '../services/iterationUtils';
-import { calculateFleschReadingEase, calculateJaccardSimilarity, calculateLexicalDensity, calculateAvgSentenceLength, calculateSimpleTTR } from '../services/textAnalysisService';
-import { DETERMINISTIC_TARGET_ITERATION, FOCUSED_END_DEFAULTS } from '../hooks/useModelParameters';
+import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType, DevLogEntry } from '../types.ts';
+import * as GeminaiService from '../services/geminiService.ts';
+import { getUserPromptComponents } from '../services/promptBuilderService.ts';
+import { isLikelyAiErrorResponse, getProductSummary, parseAndCleanJsonOutput, CONVERGED_PREFIX, MIN_CHARS_FOR_DEVELOPED_PRODUCT, isDataDump } from '../services/iterationUtils.ts';
+import { calculateFleschReadingEase, calculateJaccardSimilarity, calculateLexicalDensity, calculateAvgSentenceLength, calculateSimpleTTR } from '../services/textAnalysisService.ts';
+import { DETERMINISTIC_TARGET_ITERATION, FOCUSED_END_DEFAULTS } from '../hooks/useModelParameters.ts';
 import * as Diff from 'diff';
-import type { AddLogEntryParams } from './useProcessState';
-import { getRelevantDevLogContext } from '../services/devLogContextualizerService';
-import { reconstructProduct } from '../services/diffService';
+import type { AddLogEntryParams } from './useProcessState.ts';
+import { getRelevantDevLogContext } from '../services/devLogContextualizerService.ts';
+import { reconstructProduct } from '../services/diffService.ts';
 
 
 const SELF_CORRECTION_MAX_ATTEMPTS = 2;
@@ -27,19 +27,20 @@ const WORDSMITHING_LINE_CHANGE_THRESHOLD = 1;
 const STAGNATION_NUDGE_IGNORE_AFTER_ITERATION_PERCENT = 0.85;
 
 interface UseIterativeLogicReturn {
-  handleStart: (options?: {
+  handleStartProcess: (options?: {
     isTargetedRefinement?: boolean;
     targetedSelection?: string;
     targetedInstructions?: string;
     userRawPromptForContextualizer?: string;
   }) => Promise<void>;
-  handleHalt: () => void;
+  handleHaltProcess: () => void;
 }
 
 export const useIterativeLogic = (
   processState: ProcessState,
   updateProcessState: (updates: Partial<ProcessState>) => void,
   addLogEntryFromHook: (logData: AddLogEntryParams) => void,
+  addDevLogEntry: (newEntryData: Omit<DevLogEntry, 'id' | 'timestamp' | 'lastModified'>) => void,
   getUserSetBaseConfig: () => ModelConfig,
   performAutoSave: () => Promise<void>,
   handleRateLimitErrorEncountered: () => void,
@@ -143,17 +144,17 @@ export const useIterativeLogic = (
     performAutoSave();
   };
 
-  const handleHalt = () => {
-    haltSignalRef.current = true;
-  };
-
   const onStreamChunk = (chunkText: string) => {
     if (haltSignalRef.current) return;
     currentStreamBufferRef.current += chunkText;
     updateProcessState({ currentProduct: currentStreamBufferRef.current });
   };
   
-  const handleStart = async (
+  const handleHaltProcess = () => {
+    haltSignalRef.current = true;
+  };
+
+  const handleStartProcess = async (
     options?: {
       isTargetedRefinement?: boolean;
       targetedSelection?: string;
@@ -316,6 +317,7 @@ export const useIterativeLogic = (
             modelConfigToUse: nextConfig,
             isGlobalMode: !processState.isPlanActive,
             isSearchGroundingEnabled: processState.isSearchGroundingEnabled,
+            isUrlBrowsingEnabled: processState.isUrlBrowsingEnabled,
             modelToUse: processState.selectedModelName,
             onStreamChunk,
             isHaltSignalled: () => haltSignalRef.current,
@@ -331,6 +333,15 @@ export const useIterativeLogic = (
         if (apiResultForLog.isRateLimitError) {
           handleRateLimitErrorEncountered();
           updateProcessState({ statusMessage: `API Rate Limit Hit. Process halted. ${apiResultForLog.errorMessage || ''}`});
+          addDevLogEntry({
+            type: 'issue',
+            summary: `API Rate Limit Hit at Iteration ${currentIter}`,
+            details: `The process was halted due to an API rate limit or quota exhaustion error. Error message: ${apiResultForLog.errorMessage || 'No details.'}`,
+            status: 'open',
+            resolution: 'Process halted. Check API billing/quota, wait for cooldown, or switch models.',
+            relatedIteration: currentIter,
+            tags: ['api', 'quota']
+          });
           handleProcessHalt(currentIter, currentProd, 'Process Halted (API Rate Limit)', apiResultForLog);
           break;
         }
@@ -402,6 +413,19 @@ export const useIterativeLogic = (
           return;
       }
 
+      if (isCurrentIterationCriticalFailure) {
+        addDevLogEntry({
+            type: 'issue',
+            summary: `Critical validation failure at Iteration ${currentIter}`,
+            details: `The AI's response failed a critical validation check: "${validationResult?.reason || 'Unknown reason'}". The process was stopped to prevent corrupted output.`,
+            status: 'open',
+            relatedIteration: currentIter,
+            tags: ['validation', 'critical-error']
+        });
+        handleProcessHalt(currentIter, currentProd, `Process Halted due to Critical Failure: ${validationResult?.reason}`, apiResultForLog);
+        return;
+      }
+      
       let finalProductForIter = apiResultForLog.product.startsWith(CONVERGED_PREFIX) ? apiResultForLog.product.substring(CONVERGED_PREFIX.length) : apiResultForLog.product;
       currentProd = finalProductForIter;
       
@@ -444,12 +468,21 @@ export const useIterativeLogic = (
       
       if (apiResultForLog.status === 'CONVERGED') {
         updateProcessState({ isProcessing: false, finalProduct: currentProd, statusMessage: `Process converged at Iteration ${currentIter}.`, configAtFinalization: nextConfig, aiProcessInsight: `Convergence declared at Iteration ${currentIter}. AI declared.` });
-        isProcessingRef.current = false; await performAutoSave(); return;
+        isProcessingRef.current = false;
+        addDevLogEntry({
+          type: 'decision',
+          summary: `AI declared convergence at Iteration ${currentIter}`,
+          details: `The AI signaled that the product is complete and no further meaningful improvements could be made according to the current goals.`,
+          status: 'implemented',
+          relatedIteration: currentIter,
+          tags: ['convergence', 'ai-decision']
+        });
+        await performAutoSave(); return;
       }
 
       await performAutoSave();
     }
   };
 
-  return { handleStart, handleHalt };
+  return { handleStartProcess, handleHaltProcess };
 };
