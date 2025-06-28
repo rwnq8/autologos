@@ -27,15 +27,16 @@ const formatDevLogForPrompt = (devLog: DevLogEntry[]): string => {
 };
 
 const devLogContextualizerSystemPrompt = `You are an AI assistant acting as a pre-processor for a primary AI developer.
-Your task is to analyze a user's current request for code changes and a development log.
-Identify up to 3-4 entries from the development log that are MOST RELEVANT to the user's current request.
+Your task is to analyze a user's current request for code changes (or an AI's internal refinement task) and a development log.
+Identify up to 3-4 entries from the development log that are MOST RELEVANT to the current request/task.
 Relevance means the log entry might help the primary AI developer:
 - Avoid repeating a past mistake described in an 'issue' or 'fix' entry.
-- Recall a key 'decision' that impacts the current request.
+- Recall a key 'decision' that impacts the current request (e.g., a chosen architectural pattern, a decision about handling a specific edge case).
 - Incorporate or be aware of a related 'feature' request.
-- Understand context from a relevant 'note'.
+- Understand context from a relevant 'note', especially if that note describes previous quality issues (like truncation, unhelpful tangents, problematic AI behaviors) that might be pertinent to the current refinement task.
 
-Focus on direct relevance. If an issue was 'resolved' or 'closed', it's relevant if the current request touches the same area, to ensure the fix/decision is upheld.
+Focus on direct relevance. If an issue was 'resolved' or 'closed', it's relevant if the current request touches the same area, to ensure the fix/decision is upheld or to understand the history.
+Prioritize entries that offer actionable insights or warnings for the current task.
 
 OUTPUT FORMAT:
 Your response MUST strictly be ONLY one of the following:
@@ -48,7 +49,7 @@ Relevant DevLog Context (for primary AI awareness):
 No specific, highly relevant DevLog entries found for the current task.
 
 Do NOT be conversational. Do NOT explain your reasoning beyond the brief "why it's relevant" parenthetical note for each identified entry.
-Do NOT list more than 4 entries. Prioritize critical issues/fixes and key decisions.
+Do NOT list more than 4 entries. Prioritize critical issues/fixes and key decisions or notes about past problematic AI behavior relevant to current refinement.
 `;
 
 
@@ -71,18 +72,18 @@ export const getRelevantDevLogContext = async (
     formattedDevLog;
 
   const promptToContextualizer = `
-User's Current Request to Primary AI Developer:
+User's Current Request to Primary AI Developer (or AI's current refinement task):
 ---
 ${currentUserPrompt.substring(0, 2000)} 
 ---
-(Note: Above is the user's raw request. Analyze it against the DevLog below.)
+(Note: Above is the user's raw request or the AI's current internal task. Analyze it against the DevLog below.)
 
 Development Log:
 ---
 ${truncatedDevLog}
 ---
 
-Based on the system prompt, identify relevant DevLog entries for the user's current request.
+Based on the system prompt, identify relevant DevLog entries for the current request/task.
   `;
 
   try {

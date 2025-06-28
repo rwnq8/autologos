@@ -97,8 +97,9 @@ export const useAutoSave = (
         rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
         stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,
         inputComplexity: currentState.inputComplexity,
-        strategistInfluenceLevel: currentState.strategistInfluenceLevel, // Added
-        stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, // Added
+        strategistInfluenceLevel: currentState.strategistInfluenceLevel, 
+        stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, 
+        devLog: currentState.devLog,
     };
 
     try {
@@ -126,26 +127,35 @@ export const useAutoSave = (
         } else {
           overwriteUserPlanTemplates([]);
         }
+        
+        let correctedInitialPrompt = engineData.initialPrompt;
+        const loadedFilesFromData = engineData.loadedFiles || [];
+        if (loadedFilesFromData.length > 0) {
+            correctedInitialPrompt = `Input consists of ${loadedFilesFromData.length} file(s): ${loadedFilesFromData.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
+        }
 
         const lastIter = engineData.iterationHistory.length > 0 ? engineData.iterationHistory[engineData.iterationHistory.length - 1].iteration : 0;
-        const productAtLastIter = engineData.finalProduct || (engineData.iterationHistory.length > 0 ? reconstructProduct(lastIter, engineData.iterationHistory, engineData.initialPrompt).product : engineData.initialPrompt);
+        const productAtLastIter = engineData.finalProduct || 
+                                 (engineData.iterationHistory.length > 0 
+                                    ? reconstructProduct(lastIter, engineData.iterationHistory, correctedInitialPrompt).product 
+                                    : correctedInitialPrompt);
 
         const restoredProcessState: ProcessState = {
           ...initialProcessStateValues,
           ...engineData,
+          initialPrompt: correctedInitialPrompt, // Use corrected prompt
+          loadedFiles: loadedFilesFromData,     // Use loaded files from data
 
-          apiKeyStatus: initialProcessStateValues.apiKeyStatus, // Preserve current API key status
-          isProcessing: false, // Ensure not processing on restore
+          apiKeyStatus: initialProcessStateValues.apiKeyStatus, 
+          isProcessing: false, 
           statusMessage: "Session restored from auto-save.",
 
           currentProduct: engineData.currentProductBeforeHalt || productAtLastIter,
           currentIteration: engineData.currentIterationBeforeHalt ?? lastIter,
 
           selectedModelName: engineData.selectedModelName || initialProcessStateValues.selectedModelName,
-
-          loadedFiles: engineData.loadedFiles || [],
+          
           planStages: engineData.planStages || [],
-          // savedPlanTemplates is handled by overwriteUserPlanTemplates
           iterationHistory: engineData.iterationHistory || [],
 
           outputParagraphShowHeadings: engineData.outputParagraphShowHeadings ?? initialProcessStateValues.outputParagraphShowHeadings,
@@ -153,10 +163,11 @@ export const useAutoSave = (
           outputParagraphNumberedHeadings: engineData.outputParagraphNumberedHeadings ?? initialProcessStateValues.outputParagraphNumberedHeadings,
           isPlanActive: engineData.isPlanActive ?? false,
           currentDiffViewType: engineData.currentDiffViewType || 'words',
-          aiProcessInsight: initialProcessStateValues.aiProcessInsight, // Don't restore old insights, let it re-evaluate
+          aiProcessInsight: initialProcessStateValues.aiProcessInsight, 
           stagnationNudgeEnabled: engineData.stagnationNudgeEnabled ?? initialProcessStateValues.stagnationNudgeEnabled,
-          strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, // Added
-          stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness, // Added
+          strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, 
+          stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness,
+          devLog: engineData.devLog || [],
         };
         updateProcessState(restoredProcessState);
 

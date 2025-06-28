@@ -1,29 +1,36 @@
 
 import { GoogleGenAI } from "@google/genai";
 import type { GenerateContentResponse, Part, Content, GenerateContentParameters } from "@google/genai";
-import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, LoadedFile, PlanStage, SuggestedParamsResponse, RetryContext, OutlineGenerationResult, NudgeStrategy, SelectableModelName, StrategistAdvice, IterationLogEntry, AiResponseValidationInfo, StagnationInfo } from "../types.ts";
+import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, LoadedFile, PlanStage, SuggestedParamsResponse, RetryContext, OutlineGenerationResult, NudgeStrategy, SelectableModelName, StrategistAdvice, IterationLogEntry, AiResponseValidationInfo, StagnationInfo, StrategistLLMContext } from "../types.ts"; // Added StrategistLLMContext
 import { getUserPromptComponents, buildTextualPromptPart, CONVERGED_PREFIX, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents } from './promptBuilderService';
 import { SELECTABLE_MODELS } from '../types.ts';
 
+let apiKeyWarningLoggedOnce = false; // Log API key warnings only once
+
 const API_KEY: string | undefined = (() => {
   try {
-    if (typeof process !== 'undefined' && process.env) {
-      const key = process.env.API_KEY;
-      if (typeof key === 'string' && key.length > 0) {
-        return key;
-      } else if (key === undefined) {
-        console.warn("process.env.API_KEY is undefined. Gemini API calls will be disabled if a key is not found by other means.");
-        return undefined;
-      } else {
-        console.warn("process.env.API_KEY found but is not a non-empty string. Gemini API calls will be disabled if a key is not found by other means.");
-        return undefined;
+    if (typeof process !== 'undefined' && process.env && typeof process.env.API_KEY === 'string' && process.env.API_KEY.length > 0) {
+      return process.env.API_KEY;
+    } else if (typeof process !== 'undefined' && process.env && process.env.API_KEY === undefined) {
+      if (!apiKeyWarningLoggedOnce) {
+          console.warn("process.env.API_KEY is undefined. Gemini API calls will be disabled if a key is not found by other means.");
+          apiKeyWarningLoggedOnce = true;
+      }
+    } else if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+      if (!apiKeyWarningLoggedOnce) {
+          console.warn("process.env.API_KEY found but is not a non-empty string. Gemini API calls will be disabled if a key is not found by other means.");
+          apiKeyWarningLoggedOnce = true;
       }
     } else {
-      console.warn("Could not access process.env. This is expected in some environments (like browsers). Gemini API calls will be disabled if a key is not found by other means.");
-      return undefined;
+        // This case is common in browser environments, so logging it as a general info or debug might be better if frequent.
+        // console.info("Could not access process.env or API_KEY. This is expected in some environments. Checking other sources if applicable.");
     }
+    return undefined;
   } catch (e) {
-    console.error("Error accessing process.env.API_KEY. Gemini API calls will be disabled.", e);
+    if (!apiKeyWarningLoggedOnce) {
+        console.error("Error accessing process.env.API_KEY. Gemini API calls will be disabled.", e);
+        apiKeyWarningLoggedOnce = true;
+    }
     return undefined;
   }
 })();
@@ -41,7 +48,10 @@ if (API_KEY) {
         apiKeyAvailable = false;
     }
 } else {
-    console.warn("API_KEY was not found or is not configured. GoogleGenAI client not initialized. Gemini API calls will be disabled.");
+    if (!apiKeyWarningLoggedOnce && (typeof process !== 'undefined' && process.env)) { // Only log if process.env was accessible but key wasn't there
+        console.warn("API_KEY was not found or is not configured. GoogleGenAI client not initialized. Gemini API calls will be disabled.");
+        apiKeyWarningLoggedOnce = true; // Prevent repeated warnings from this specific path
+    }
     apiKeyAvailable = false;
 }
 
@@ -88,64 +98,72 @@ export const getModelParameterGuidance = (config: ModelConfig, isGlobalMode: boo
 };
 
 const selectableModelsListString = SELECTABLE_MODELS.map(m => `'${m.name}' ('${m.description.split('.')[0]}')`).join(', ');
-const strategistSystemPrompt = `You are an AI Process Strategist. Your task is to analyze the current state of an iterative content generation process and suggest the optimal Gemini model, its thinking configuration (if applicable for 'gemini-2.5-flash-preview-04-17'), optionally minor adjustments to temperature/TopP/TopK, and optionally a meta-instruction for the *next* iteration of the main content generation AI.
-    Provide your response strictly in JSON format with the following fields: "suggestedModelName" (optional string from valid list), "suggestedThinkingBudget" (optional, 0 or 1 for 'gemini-2.5-flash-preview-04-17' only), "suggestedTemperature" (optional number 0.0-2.0), "suggestedTopP" (optional number 0.0-1.0), "suggestedTopK" (optional integer >=1), "suggestedMetaInstruction" (optional string, 1-2 concise sentences for the main AI if it's highly stagnant or needs a new approach), and a mandatory "rationale" (1-3 sentences explaining your overall advice).
+const strategistSystemPrompt = `You are an AI Process Strategist. Your task is to analyze the current state of an iterative content generation process (provided as qualitative assessments) and suggest the optimal Gemini model, its thinking configuration (if applicable for 'gemini-2.5-flash-preview-04-17'), optionally minor adjustments to temperature/TopP/TopK, and optionally a meta-instruction for the *next* iteration of the main content generation AI.
+    Provide your response strictly in JSON format with the following fields: "suggestedModelName" (optional string from valid list), "suggestedThinkingBudget" (optional, 0 or 1 for 'gemini-2.5-flash-preview-04-17' only), "suggestedTemperature" (optional number), "suggestedTopP" (optional number), "suggestedTopK" (optional integer), "suggestedMetaInstruction" (optional string, 1-2 concise sentences for the main AI if it's highly stagnant or needs a new approach), and a mandatory "rationale" (1-3 sentences explaining your overall advice).
     Valid models for 'suggestedModelName': ${selectableModelsListString}.
-    Temperature range: 0.0 to 2.0. TopP range: 0.0 to 1.0. TopK integer >= 1.
     
     Value is not just refinement; for underdeveloped products, value lies in substantial conceptual expansion, addition of new details, examples, or arguments. Distinguish between a product needing polish and one needing growth.
 
-    PRIORITIZE EXPANSION FOR UNDERDEVELOPED KERNELS / WORDSMITHING:
-    - "Wordsmithing" refers to minor, repetitive, or purely stylistic changes without adding significant conceptual value or new information.
-    - If 'Current Goal' or 'Content Stage Assessment' implies a need for more detailed output, but recent iteration summaries (and product length, if provided) show a very short product OR a product with consistently minor changes (wordsmithing), this strongly indicates an underdeveloped kernel.
-    - In such cases:
-        1. Your **primary goal** is to suggest a 'suggestedMetaInstruction' that explicitly directs the main AI to **substantially expand** the content (e.g., "The current product is a good starting point but is stuck in minor edits and needs significant expansion. Elaborate on [strategist-identified key concept], provide concrete examples, and explore related arguments to substantially increase its depth and breadth." or "Elaborate on the core thesis, add 2-3 supporting examples for key points, and explore counter-arguments or future implications to significantly increase depth and breadth. Move beyond surface-level edits.").
-        2. If \`strategistInfluenceLevel\` allows parameter overrides AND the main AI's *effective* parameters (from 'Last Config Used' and considering the rapid Global Mode sweep) are already very low (e.g., Temperature <= 0.2), **strongly consider suggesting a temporary, controlled increase in 'suggestedTemperature' (e.g., to 0.3-0.6) for 1-2 iterations** to facilitate this expansion. Clearly state this is a temporary measure for expansion. This is critical to avoid premature convergence on shallow content.
+    INTERPRETATION OF STAGNATION:
+    - If \`stagnationSeverity\` is 'MILD', 'MODERATE', 'SEVERE', or 'CRITICAL', OR if \`recentIterationPerformance\` is 'LOW_VALUE' or 'STALLED', then the process IS showing signs of stagnation. Your rationale and suggestions should reflect this understanding. Do NOT state 'no stagnation' if these indicators are present.
 
-    COST-BENEFIT OF ITERATION & POTENTIAL CONVERGENCE: Analyze 'Recent Iteration Summaries' and 'Stagnation Status (especially consecutiveLowValueIterations provided in user prompt)'.
-    - If 'consecutiveLowValueIterations' is 2 or more:
-        - If the product is still short or the 'Current Goal' implies underdevelopment (see "UNDERDEVELOPED KERNELS" above), prioritize expansionary meta-instructions and possibly a temporary temperature increase first.
-        - Only if the product is genuinely substantial and well-developed should you then recommend convergence (meta-instruction like '${CONVERGED_PREFIX} Product is mature...' and deterministic params if influence allows).
-    - If 'consecutiveLowValueIterations' is 1 AND parameters are already highly deterministic (e.g., Temp <= 0.1 from 'Last Config Used'), also lean towards convergence, UNLESS the product is clearly underdeveloped (then prioritize expansion).
-    - Only suggest continued creative exploration or substantial refinement if there's a clear, high-value path for conceptual development or expansion, AND 'consecutiveLowValueIterations' is 0.
+    PRIORITIZE EXPANSION FOR UNDERDEVELOPED KERNELS / AVOID WORDSMITHING:
+    - "Wordsmithing" or "minimal meaningful change" is indicated by a 'STALLED' or 'LOW_VALUE' \`recentIterationPerformance\` or high \`stagnationInfo.consecutiveLowValueIterations\` or \`stagnationInfo.consecutiveIdenticalProductIterations\`.
+    - If \`productDevelopmentState\` is 'UNDERDEVELOPED_KERNEL' or 'NEEDS_EXPANSION_STALLED', OR if \`recentIterationPerformance\` is 'LOW_VALUE' or 'STALLED' while \`productDevelopmentState\` is not 'MATURE_PRODUCT':
+        This strongly indicates an underdeveloped kernel.
+    - In such cases, your **primary goal** is to suggest a 'suggestedMetaInstruction' that explicitly directs the main AI to **substantially expand** the content. Examples:
+        - "The product is currently '\${productDevelopmentState}'. Substantially expand on [strategist-identified key concept or section from outline/summaries], provide concrete examples, and explore related arguments to significantly increase its depth and breadth."
+        - "Elaborate on the core thesis, add 2-3 supporting examples for key points, and explore counter-arguments or future implications. The goal is significant conceptual growth, not surface-level edits."
+    - If the main AI's effective parameters (from 'Last Config Used' and considering Global Mode sweep) appear overly restrictive (e.g., Temperature <= 0.2) hindering necessary expansion, **strongly consider suggesting a 'suggestedTemperature' that encourages more creative exploration (e.g., in the 0.3-0.6 range) for the next 1-2 iterations.** Clearly state this is a temporary measure in your rationale. This is critical to avoid premature convergence on shallow content, especially if 'StagnationNudgeAggressiveness' is LOW.
+
+    CRITICAL STAGNATION ON MATURE PRODUCTS:
+    - If \`stagnationSeverity\` is 'SEVERE' or 'CRITICAL' AND \`productDevelopmentState\` is 'MATURE_PRODUCT':
+        The process might be conceptually stuck despite the document appearing mature.
+    - In this case, your 'suggestedMetaInstruction' should prompt the main AI to either:
+        a) Declare '\${CONVERGED_PREFIX}' if truly complete and no further valuable refinement is possible.
+        b) Undertake a *significant, novel expansion* on a specific, narrowly defined underdeveloped aspect (you should try to identify one from summaries).
+        c) Attempt a *bold structural refactoring* of a major section.
+    - Discourage minor stylistic changes. Consider suggesting more exploratory parameters ONLY IF paired with a strong directive for novel content generation.
+
+    COST-BENEFIT OF ITERATION & POTENTIAL CONVERGENCE (Pay close attention to \`stagnationSeverity\`, \`recentIterationPerformance\`, and \`productDevelopmentState\`):
+    - If \`stagnationSeverity\` is 'MODERATE', 'SEVERE' or 'CRITICAL' (reflecting high values in \`stagnationInfo\` for consecutive low value/identical/stagnant iterations):
+        - If \`productDevelopmentState\` is 'UNDERDEVELOPED_KERNEL' or 'NEEDS_EXPANSION_STALLED', prioritize expansionary meta-instructions and possibly more exploratory parameters first.
+        - Only if \`productDevelopmentState\` is 'MATURE_PRODUCT' and \`recentIterationPerformance\` is 'LOW_VALUE' or 'STALLED' should you then recommend convergence (meta-instruction like '\${CONVERGED_PREFIX} Product is mature and further iteration offers minimal value.' and deterministic params if appropriate).
+    - If \`recentIterationPerformance\` is 'LOW_VALUE' AND parameters are already highly deterministic (e.g., Temp <= 0.1 from 'Last Config Used'), also lean towards convergence, UNLESS \`productDevelopmentState\` indicates underdevelopment (then prioritize expansion).
+    - Only suggest continued creative exploration or substantial refinement if there's a clear, high-value path for conceptual development or expansion, AND \`recentIterationPerformance\` is 'PRODUCTIVE'.
     - Avoid suggesting changes that are merely stylistic if the conceptual core is sound and previous iterations have yielded little substantive change on that core, UNLESS the 'Current Refinement Focus Hint' is explicitly 'Polish'.
     
     GLOBAL MODE PARAMETER SWEEP AWARENESS:
-    - In Global Mode, core generation parameters (Temperature, Top-P, Top-K) generally sweep from more creative values towards more deterministic values over the course of total iterations. The system's code heuristics manage this sweep.
-    - Only suggest a specific 'suggestedTemperature', 'suggestedTopP', or 'suggestedTopK' IF:
-      a) You have a VERY STRONG, EXPLICIT RATIONALE to temporarily deviate from the default sweep (e.g., a brief, controlled increase in temperature to break severe 'wordsmithing' on an underdeveloped product, or accelerating the move to deterministic values if convergence is crystal clear and the product is mature).
-      b) OR if 'strategistInfluenceLevel' is 'OVERRIDE_FULL' and you assess that the current heuristically determined parameters (visible in 'Last Config Used' if available for the *next* iteration's calculation, or inferred from sweep stage) are genuinely suboptimal for the *immediate next step*.
-    - If suggesting a temporary parameter increase, clearly state it is temporary.
-    - In most Global Mode cases, if you don't have a compelling reason to override core generation parameters, OMIT 'suggestedTemperature', 'suggestedTopP', and 'suggestedTopK' from your JSON response. This allows the system's default sweep and code-based nudges to control them.
-    - Focus your advice more on 'suggestedModelName', 'suggestedThinkingBudget' (for Flash), and 'suggestedMetaInstruction' as these are primary levers for strategic shifts.
+    - In Global Mode, core generation parameters (Temperature, Top-P, Top-K) generally sweep from more creative values towards more deterministic values. The system's code heuristics (and 'StagnationNudgeAggressiveness') manage this sweep and nudges.
+    - Suggest specific core generation parameters ('suggestedTemperature', 'suggestedTopP', 'suggestedTopK') only when you have a strong strategic rationale for the main AI to deviate from its default parameter sweep for the *immediate next step*. For instance, recommend more exploratory parameters to overcome stagnation on an underdeveloped product, or more deterministic parameters if a mature product should converge. If suggesting such deviations, clearly state your reasoning in the 'rationale' field.
+    - In most Global Mode cases, if you don't have a compelling reason to alter the core parameter sweep, omit these optional fields from your JSON response. Focus on 'suggestedModelName', 'suggestedThinkingBudget', and 'suggestedMetaInstruction'.
 
-    CRITICAL ASSESSMENT (General):
-    - If stagnation is high (e.g., system nudge strategy is 'meta_instruct') or last validation failed critically, strongly consider suggesting a 'suggestedMetaInstruction' to guide the main AI's refinement approach.
-    - Consider the 'Current Refinement Focus Hint' provided in the user prompt. Align your suggestions or explicitly state why you deviate.
+    RECENT VALIDATION HISTORY AWARENESS (Handling Truncation/Incompleteness):
+    - If 'Last N Validation Summaries' show a pattern of non-critical warnings like 'max_tokens_with_incomplete_sentence' or 'unknown_finish_reason_abrupt_end', this might indicate the AI is struggling with output length or completeness.
+    - In such cases, strongly consider suggesting a 'suggestedMetaInstruction' to the main AI like: "Focus on providing more concise but complete responses, ensuring final paragraphs/sections are fully concluded and all requested parts of the output are present." This is especially relevant if \`productDevelopmentState\` is 'UNDERDEVELOPED_KERNEL' or 'NEEDS_EXPANSION_STALLED', as incomplete outputs hinder development.
     
-    If you suggest a 'suggestedMetaInstruction', make it actionable. Examples: "Focus on improving logical flow between sections X and Y." or "Simplify complex terminology in the discussion of Z." or "Re-evaluate argument A for consistency with source data." or "Substantially expand on topic X, adding specific examples and detailed explanations."
-    Suggest parameter changes sparingly. Any suggested parameter change should be a specific value.
-    Ensure your 'rationale' is comprehensive yet concise (2-4 sentences) and clearly justifies ALL your suggestions.
-    Ensure any suggested parameters are within valid ranges: Temperature (0.0-2.0), TopP (0.0-1.0), TopK (integer >=1).`;
+    CRITICAL ASSESSMENT (General):
+    - If \`stagnationSeverity\` is 'SEVERE' or 'CRITICAL', or system nudge strategy (\`stagnationInfo.nudgeStrategyApplied\`) is 'meta_instruct', or last validation failed critically, strongly consider suggesting a 'suggestedMetaInstruction'.
+    - Consider the 'Current Refinement Focus Hint' and 'StagnationNudgeAggressiveness' level. If Aggressiveness is 'HIGH', be more decisive in suggesting changes to break stagnation or converge.
+    
+    Actionable Meta-Instructions: Examples: "Focus on improving logical flow between sections X and Y." or "Simplify complex terminology in the discussion of Z." or "Re-evaluate argument A for consistency with source data." or "Substantially expand on topic X, adding specific examples and detailed explanations."
+    Suggest parameter changes sparingly. Ensure 'rationale' is comprehensive (2-4 sentences) and justifies ALL suggestions.`;
 
 
 export const getStrategicAdviceFromLLM = async (
-    currentIteration: number,
-    maxIterations: number,
-    inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX',
-    lastUsedModel: SelectableModelName | undefined,
-    lastUsedConfig: ModelConfig | null | undefined,
-    stagnationInfo: StagnationInfo,
-    lastValidationInfo: AiResponseValidationInfo | undefined,
-    currentGoal: string,
-    recentIterationSummaries: string[],
-    currentProductLengthChars?: number,
-    currentRefinementFocusHint?: string
+    context: StrategistLLMContext // Use the new context type
 ): Promise<StrategistAdvice | null> => {
     if (!ai || !apiKeyAvailable) {
-        console.warn("Strategist LLM call skipped: API key or client not available.");
+        // console.warn("Strategist LLM call skipped: API key or client not available."); // Reduced verbosity
         return null;
     }
+
+    const {
+        currentIteration, maxIterations, inputComplexity, lastUsedModel, lastUsedConfig,
+        stagnationInfo, stagnationNudgeAggressiveness, lastNValidationSummariesString,
+        currentGoal, recentIterationSummaries, productDevelopmentState,
+        stagnationSeverity, recentIterationPerformance, currentRefinementFocusHint
+    } = context;
 
     const maxRetries = 1;
     const retryDelayMs = 1000;
@@ -161,26 +179,32 @@ export const getStrategicAdviceFromLLM = async (
     const iterationSummariesText = recentIterationSummaries.length > 0
         ? `\nRecent Iteration Summaries (last ${recentIterationSummaries.length}):\n${recentIterationSummaries.map(s => `- ${s}`).join('\n')}`
         : "\nNo recent iteration summaries available (or first few iterations).";
+    
+    const stagnationDetails = `IsStagnant: ${stagnationInfo.isStagnant}, ConsecutiveStagnant: ${stagnationInfo.consecutiveStagnantIterations}, ConsecutiveIdentical: ${stagnationInfo.consecutiveIdenticalProductIterations}, ConsecutiveLowValue: ${stagnationInfo.consecutiveLowValueIterations}, NudgeAppliedBySystem: ${stagnationInfo.nudgeStrategyApplied}, SimilarityWithPrevious: ${(stagnationInfo.similarityWithPrevious || 0).toFixed(3)}, LastMeaningfulChangeProductLength (Qualitative): ${productDevelopmentState}`;
+
 
     const strategistUserPrompt = `
     Process State for Next Iteration (${currentIteration + 1}/${maxIterations}):
     - Current Iteration: ${currentIteration} (completed)
     - Max Iterations for current run: ${maxIterations}
-    - Input Complexity: ${inputComplexity}
-    - Current Product Length: ${currentProductLengthChars || 'N/A'} chars.
+    - Input Complexity (Qualitative): ${inputComplexity}
+    - StagnationNudgeAggressiveness (System Setting): ${stagnationNudgeAggressiveness}
+    - Product Development State (Qualitative): ${productDevelopmentState}
+    - Stagnation Severity (Qualitative): ${stagnationSeverity}
+    - Recent Iteration Performance (Qualitative): ${recentIterationPerformance}
     - Last Model Used: ${lastUsedModel || "N/A (First iteration)"}
-    - Last Config Used: ${lastConfigSummary}
-    - Stagnation Status: ${stagnationInfo.isStagnant ? `Stagnant for ${stagnationInfo.consecutiveStagnantIterations} iterations.` : "Not stagnant."} (Similarity with prev: ${(stagnationInfo.similarityWithPrevious || 0).toFixed(3)}) (Consecutive Low Value Iterations: ${stagnationInfo.consecutiveLowValueIterations}) (System Nudge Strategy applied: ${stagnationInfo.nudgeStrategyApplied})
+    - Last Config Used (effective params for this iteration if no override): ${lastConfigSummary}
+    - Stagnation Status (Raw Data for Context): ${stagnationDetails}
+    - Last N Validation Summaries: ${lastNValidationSummariesString || "N/A (No validation history or first iteration)"}
     - Current Refinement Focus Hint: ${currentRefinementFocusHint || 'General Refinement'}
-    - Last Iteration Validation: ${lastValidationInfo ? `${lastValidationInfo.passed ? 'Passed.' : 'Failed.'} Reason: ${lastValidationInfo.reason || 'N/A'}` : 'N/A'}
     - Current Goal: ${currentGoal}
-    - Content Stage Assessment: Is the current product a nascent idea needing expansion (wordsmithing small details), a developed draft needing refinement, or a near-final piece needing polish? Is stagnation due to minor repetitive edits on an idea that actually needs to grow rather than just be polished?
-    - Expansion Potential & Value Assessment: Given the product length, current goal, and recent iteration summaries (paying attention to the magnitude and nature of changes, and 'Consecutive Low Value Iterations'), is substantial expansion the highest value action for the *next* iteration? Or would focused refinement, consolidation, or even preparing for convergence be more appropriate? If expansion, what specific areas offer the most value and why? If refinement, what specific aspect should be targeted?
+    - Content Stage Assessment: Based on 'Product Development State', 'Recent Iteration Performance', and 'Stagnation Severity', is the current product a nascent idea needing expansion, a developed draft needing refinement, or a near-final piece needing polish? Is stagnation due to minor repetitive edits on an idea that actually needs to grow?
+    - Expansion Potential & Value Assessment: Given the qualitative assessments, current goal, and recent iteration summaries, is substantial expansion the highest value action for the *next* iteration? Or would focused refinement, consolidation, or even preparing for convergence be more appropriate? If expansion, what specific areas offer the most value and why? If refinement, what specific aspect should be targeted?
     ${iterationSummariesText}
 
     Suggest 'suggestedModelName', 'suggestedThinkingBudget', optionally 'suggestedTemperature'/'suggestedTopP'/'suggestedTopK', and optionally a 'suggestedMetaInstruction'. Provide a 'rationale'.
-    If 'stagnationInfo.nudgeStrategyApplied' is 'meta_instruct', this is a strong signal to provide a 'suggestedMetaInstruction'.
-    If 'Consecutive Low Value Iterations' is high (e.g., 2+), carefully consider if convergence is appropriate or if expansion is still needed based on product maturity.
+    If system nudge strategy (\`stagnationInfo.nudgeStrategyApplied\`) is 'meta_instruct' or if \`stagnationSeverity\` is 'SEVERE' or 'CRITICAL', this is a strong signal to provide a 'suggestedMetaInstruction'.
+    If \`stagnationSeverity\` is high, carefully consider if convergence is appropriate or if expansion is still needed based on \`productDevelopmentState\` and \`StagnationNudgeAggressiveness\`.
     Prioritize 'gemini-2.5-flash-preview-04-17' or 'gemini-2.5-pro' for most tasks.
     `;
 
@@ -206,28 +230,28 @@ export const getStrategicAdviceFromLLM = async (
             const advice = JSON.parse(jsonStr) as Partial<StrategistAdvice>;
 
             if (typeof advice.rationale !== 'string' || advice.rationale.trim() === "") {
-                console.warn(`Strategist LLM advice (Attempt ${attempt + 1}) missing or empty rationale. Advice:`, advice);
+                // console.warn(`Strategist LLM advice (Attempt ${attempt + 1}) missing or empty rationale. Advice:`, advice); // Reduced verbosity
                 if (attempt === maxRetries) return null;
                 await new Promise(resolve => setTimeout(resolve, retryDelayMs));
                 continue;
             }
             if (advice.suggestedModelName && !SELECTABLE_MODELS.find(m => m.name === advice.suggestedModelName)) {
-                console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested an invalid model name: ${advice.suggestedModelName}. Ignoring suggestion.`);
+                // console.info(`Strategist LLM (Attempt ${attempt + 1}) suggested an invalid model name: ${advice.suggestedModelName}. System will ignore this part of the advice.`); // Reduced verbosity
                 advice.suggestedModelName = undefined;
             }
             if (advice.suggestedThinkingBudget !== undefined && ![0, 1].includes(advice.suggestedThinkingBudget)) {
-                console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested an invalid thinking budget: ${advice.suggestedThinkingBudget}. Ignoring suggestion.`);
+                 // console.info(`Strategist LLM (Attempt ${attempt + 1}) suggested an invalid thinking budget: ${advice.suggestedThinkingBudget}. System will ignore this part of the advice.`); // Reduced verbosity
                 advice.suggestedThinkingBudget = undefined;
             }
             if (advice.suggestedMetaInstruction && typeof advice.suggestedMetaInstruction !== 'string') {
-                console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested an invalid meta instruction type: ${typeof advice.suggestedMetaInstruction}. Ignoring suggestion.`);
+                // console.info(`Strategist LLM (Attempt ${attempt + 1}) suggested an invalid meta instruction type: ${typeof advice.suggestedMetaInstruction}. System will ignore this part of the advice.`); // Reduced verbosity
                 advice.suggestedMetaInstruction = undefined;
             }
 
             // Validate and clamp suggested parameters
             if (advice.suggestedTemperature !== undefined) {
                 if (typeof advice.suggestedTemperature !== 'number' || advice.suggestedTemperature < 0.0 || advice.suggestedTemperature > 2.0) {
-                    console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested invalid temperature: ${advice.suggestedTemperature}. Ignoring suggestion.`);
+                    // console.info(`Strategist LLM (Attempt ${attempt + 1}) suggested invalid temperature: ${advice.suggestedTemperature}. System will ignore this part of the advice.`); // Reduced verbosity
                     advice.suggestedTemperature = undefined;
                 } else {
                     advice.suggestedTemperature = parseFloat(advice.suggestedTemperature.toFixed(2));
@@ -235,7 +259,7 @@ export const getStrategicAdviceFromLLM = async (
             }
             if (advice.suggestedTopP !== undefined) {
                 if (typeof advice.suggestedTopP !== 'number' || advice.suggestedTopP < 0.0 || advice.suggestedTopP > 1.0) {
-                    console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested invalid TopP: ${advice.suggestedTopP}. Ignoring suggestion.`);
+                    // console.info(`Strategist LLM (Attempt ${attempt + 1}) suggested invalid TopP: ${advice.suggestedTopP}. System will ignore this part of the advice.`); // Reduced verbosity
                     advice.suggestedTopP = undefined;
                 } else {
                      advice.suggestedTopP = parseFloat(advice.suggestedTopP.toFixed(2));
@@ -243,7 +267,7 @@ export const getStrategicAdviceFromLLM = async (
             }
             if (advice.suggestedTopK !== undefined) {
                  if (typeof advice.suggestedTopK !== 'number' || advice.suggestedTopK < 1 || !Number.isInteger(advice.suggestedTopK)) {
-                    console.warn(`Strategist LLM (Attempt ${attempt + 1}) suggested invalid TopK: ${advice.suggestedTopK}. Ignoring suggestion.`);
+                    // console.info(`Strategist LLM (Attempt ${attempt + 1}) suggested invalid TopK: ${advice.suggestedTopK}. System will ignore this part of the advice.`); // Reduced verbosity
                     advice.suggestedTopK = undefined;
                 } else {
                     advice.suggestedTopK = Math.round(advice.suggestedTopK);
@@ -268,10 +292,10 @@ export const getStrategicAdviceFromLLM = async (
             }
 
             if (isRetriable && attempt < maxRetries) {
-                console.warn(`Retrying Strategist LLM call (Attempt ${attempt + 2}) in ${retryDelayMs}ms due to ${error.name || 'Error'}: ${error.message}`);
+                // console.warn(`Retrying Strategist LLM call (Attempt ${attempt + 2}) in ${retryDelayMs}ms due to ${error.name || 'Error'}: ${error.message}`); // Reduced verbosity
                 await new Promise(resolve => setTimeout(resolve, retryDelayMs));
             } else {
-                console.error(`Strategist LLM call failed after all ${maxRetries + 1} attempts or due to non-retriable error. Falling back to code heuristics. Final Error: ${error.message}`);
+                // console.error(`Strategist LLM call failed after all ${maxRetries + 1} attempts or due to non-retriable error. Final Error: ${error.message}`); // Reduced verbosity
                 return null;
             }
         }
@@ -284,21 +308,27 @@ export const generateInitialOutline = async (
     fileManifest: string,
     loadedFiles: LoadedFile[],
     modelConfig: ModelConfig,
-    modelToUse: SelectableModelName
+    modelToUse: SelectableModelName,
+    devLogContextString?: string
 ): Promise<OutlineGenerationResult> => {
     if (!ai || !apiKeyAvailable) {
         return { outline: "", identifiedRedundancies: "", errorMessage: "Gemini API client not initialized or API key missing." };
     }
-    const { systemInstruction: outlineSystemInstruction, coreUserInstructions: outlineCoreUserInstructions } = getOutlineGenerationPromptComponents(fileManifest);
+    const { systemInstruction: baseOutlineSystemInstruction, coreUserInstructions: outlineCoreUserInstructions } = getOutlineGenerationPromptComponents(fileManifest);
+    
+    let finalOutlineSystemInstruction = baseOutlineSystemInstruction;
+    if (devLogContextString) {
+      finalOutlineSystemInstruction = `SYSTEM_INTERNAL_CONTEXT (from DevLog analysis for your awareness):\n${devLogContextString}\n\n---\n\n${baseOutlineSystemInstruction}`;
+    }
+
     const apiParts: Part[] = [];
-    // For outline generation, all files are sent as context.
     loadedFiles.forEach(file => {
         apiParts.push({ inlineData: { mimeType: file.mimeType, data: file.base64Data } });
     });
-    apiParts.push({ text: outlineCoreUserInstructions }); // Core instructions follow file data
+    apiParts.push({ text: outlineCoreUserInstructions }); 
 
     const generationConfigForApi: any = {
-        temperature: modelConfig.temperature, // Use a moderate temperature for outlining
+        temperature: modelConfig.temperature, 
         topP: modelConfig.topP,
         topK: modelConfig.topK,
     };
@@ -311,20 +341,18 @@ export const generateInitialOutline = async (
         contents: [{ role: "user", parts: apiParts }],
         config: {
             ...generationConfigForApi,
-            systemInstruction: outlineSystemInstruction
+            systemInstruction: finalOutlineSystemInstruction // Use potentially modified system instruction
         },
     };
 
     const apiStreamDetails: ApiStreamCallDetail[] = [];
     let accumulatedText = "";
     try {
-        // Outline generation is usually not a very long response, so a non-streaming call is okay.
         const response: GenerateContentResponse = await ai.models.generateContent(requestPayload); 
         accumulatedText = response.text;
         let outline = "";
         let identifiedRedundancies = "";
         
-        // More robust parsing for "Outline:" and "Redundancies:" sections
         const outlineRegex = /Outline:\s*([\s\S]*?)(?=\nRedundancies:|\n\n\n|$)/i;
         const redundanciesRegex = /Redundancies:\s*([\s\S]*)/i;
 
@@ -332,12 +360,11 @@ export const generateInitialOutline = async (
         if (outlineMatch && outlineMatch[1]) {
             outline = outlineMatch[1].trim();
         } else {
-            // Fallback if "Redundancies:" is missing or format is slightly off
             const redIndex = accumulatedText.toLowerCase().indexOf("redundancies:");
             if (redIndex !== -1) {
                 outline = accumulatedText.substring(0, redIndex).replace(/^outline:/i, "").trim();
             } else {
-                outline = accumulatedText.replace(/^outline:/i, "").trim(); // Assume whole output is outline if no Redundancies marker
+                outline = accumulatedText.replace(/^outline:/i, "").trim(); 
             }
         }
 
@@ -348,7 +375,7 @@ export const generateInitialOutline = async (
         
         apiStreamDetails.push({
             callCount: 1,
-            promptForThisCall: outlineCoreUserInstructions, // Log the core instructions part
+            promptForThisCall: outlineCoreUserInstructions, 
             finishReason: response.candidates?.[0]?.finishReason || "UNKNOWN",
             safetyRatings: response.candidates?.[0]?.safetyRatings || null,
             textLengthThisCall: accumulatedText.length,
@@ -359,16 +386,14 @@ export const generateInitialOutline = async (
     } catch (error: any) {
         console.error(`Error during Gemini API call for outline generation:`, error);
         let errorMessage = `An unknown API error occurred during outline generation. Name: ${error.name || 'N/A'}, Message: ${error.message || 'No message'}.`;
-        // Add more specific error handling if possible based on error structure
         if (error.error && error.error.message) errorMessage += ` API Detail: ${error.error.message}`;
         return { outline: "", identifiedRedundancies: "", errorMessage, apiDetails: apiStreamDetails };
     }
 };
 
-// IterateProductParams interface to define parameters for iterateProduct
 export interface IterateProductParams {
     currentProduct: string;
-    currentIterationOverall: number; // True overall iteration. For segment synthesis sub-calls, this will be 0.
+    currentIterationOverall: number; 
     maxIterationsOverall: number;
     fileManifest: string;
     loadedFiles: LoadedFile[];
@@ -376,30 +401,29 @@ export interface IterateProductParams {
     outputParagraphShowHeadings: boolean;
     outputParagraphMaxHeadingDepth: number;
     outputParagraphNumberedHeadings: boolean;
-    modelConfigToUse: ModelConfig; // This is strictly temp, topP, topK, thinkingConfig
+    modelConfigToUse: ModelConfig; 
     isGlobalMode: boolean;
     modelToUse: SelectableModelName;
     onStreamChunk: (chunkText: string) => void;
     isHaltSignalled: () => boolean;
     retryContext?: RetryContext;
     stagnationNudgeStrategy?: NudgeStrategy;
-    initialOutlineForIter1?: OutlineGenerationResult; // For single-pass Iter 1 or full outline context for segment mode
+    initialOutlineForIter1?: OutlineGenerationResult; 
     activeMetaInstruction?: string;
     devLogContextString?: string; 
-    // New parameters for segmented synthesis
-    operationType?: "full" | "segment_synthesis"; // Default to "full" if not provided
-    currentSegmentOutlineText?: string; // Text of the current segment being synthesized
-    fullOutlineForContext?: string; // The entire original outline for context
-    // New parameters for targeted refinement
+    operationType?: "full" | "segment_synthesis"; 
+    currentSegmentOutlineText?: string; 
+    fullOutlineForContext?: string; 
     isTargetedRefinementMode?: boolean;
     targetedSelectionText?: string;
     targetedRefinementInstructions?: string;
 }
 
+const MIN_CHARS_FOR_STUCK_CONTINUATION_CHECK = 50;
 
 export const iterateProduct = async ({
   currentProduct,
-  currentIterationOverall, // If 0, it's a segment synthesis sub-call
+  currentIterationOverall, 
   maxIterationsOverall,
   fileManifest,
   loadedFiles,
@@ -414,15 +438,15 @@ export const iterateProduct = async ({
   isHaltSignalled,
   retryContext,
   stagnationNudgeStrategy,
-  initialOutlineForIter1, // Full outline if in segment mode, or outline for Iter 1 single-pass
+  initialOutlineForIter1, 
   activeMetaInstruction,
   devLogContextString, 
-  operationType = "full", // Default to "full" operation
-  currentSegmentOutlineText, // For segment synthesis
-  fullOutlineForContext, // For segment synthesis
-  isTargetedRefinementMode, // For targeted refinement
-  targetedSelectionText, // For targeted refinement
-  targetedRefinementInstructions // For targeted refinement
+  operationType = "full", 
+  currentSegmentOutlineText, 
+  fullOutlineForContext, 
+  isTargetedRefinementMode, 
+  targetedSelectionText, 
+  targetedRefinementInstructions 
 }: IterateProductParams): Promise<IterateProductResult> => {
   if (!ai || !apiKeyAvailable) {
     return { product: currentProduct, status: 'ERROR', errorMessage: "Gemini API client not initialized or API key missing." };
@@ -468,6 +492,7 @@ export const iterateProduct = async ({
   let accumulatedTextFromAllSegments = ""; 
   const apiStreamDetails: ApiStreamCallDetail[] = [];
   let streamCallCount = 0;
+  let isStuckOnMaxTokensContinuationFlag = false;
   
   let currentConversationHistoryForApi: Content[] = [];
   let promptTextForThisApiSegmentCall: string = ""; 
@@ -515,11 +540,11 @@ export const iterateProduct = async ({
     while (continueGenerationViaApi) {
         streamCallCount++;
         if (isHaltSignalled()) {
-          return { product: accumulatedTextFromAllSegments || currentProduct, status: 'HALTED', errorMessage: "Process halted by user during API call preparation.", promptSystemInstructionSent: finalSystemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: promptTextForFullIterationLogged, apiStreamDetails };
+          return { product: accumulatedTextFromAllSegments || currentProduct, status: 'HALTED', errorMessage: "Process halted by user during API call preparation.", promptSystemInstructionSent: finalSystemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: promptTextForFullIterationLogged, apiStreamDetails, isStuckOnMaxTokensContinuation: isStuckOnMaxTokensContinuationFlag };
         }
 
         if (streamCallCount > 1) { 
-            const continuationInstructionText = `---PREVIOUSLY_GENERATED_PARTIAL_RESPONSE_THIS_ITERATION---\n${accumulatedTextFromAllSegments}\n---CONTINUATION_REQUEST---\nContinue generating the response from where you left off. Ensure you complete the thought or task. Adhere to all original instructions provided at the start of this iteration, especially regarding output format and not including conversational filler.`;
+            const continuationInstructionText = `---PREVIOUSLY_GENERATED_PARTIAL_RESPONSE_THIS_ITERATION---\n${accumulatedTextFromAllSegments}\n---CONTINUATION_REQUEST---\nContinue generating the response from where you left off. Ensure you complete the thought or task. Adhere to all original instructions provided at the start of this iteration (including system instructions and any specific stage goals for format/length), and do not include conversational filler.`;
             currentConversationHistoryForApi.push({ role: "user", parts: [{ text: continuationInstructionText }] });
             promptTextForThisApiSegmentCall = continuationInstructionText; 
         }
@@ -572,12 +597,18 @@ export const iterateProduct = async ({
         });
 
         if (isHaltSignalled()) {
-             return { product: accumulatedTextFromAllSegments, status: 'HALTED', promptSystemInstructionSent: finalSystemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: promptTextForFullIterationLogged, apiStreamDetails };
+             return { product: accumulatedTextFromAllSegments, status: 'HALTED', promptSystemInstructionSent: finalSystemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: promptTextForFullIterationLogged, apiStreamDetails, isStuckOnMaxTokensContinuation: isStuckOnMaxTokensContinuationFlag };
         }
 
         const MIN_CHARS_FOR_UNKNOWN_FINISH_AS_SUCCESS = 200; 
         if (currentFinishReason === "MAX_TOKENS") {
-            continueGenerationViaApi = true; 
+            if (streamCallCount > 1 && textFromThisApiSegment.length < MIN_CHARS_FOR_STUCK_CONTINUATION_CHECK) {
+                isStuckOnMaxTokensContinuationFlag = true;
+                continueGenerationViaApi = false; // Don't continue further in this call if stuck
+                 // console.warn(`Stuck on MAX_TOKENS continuation loop. Iteration ${currentIterationOverall}, Call ${streamCallCount}. Text this segment: ${textFromThisApiSegment.length} chars.`); // Reduced verbosity
+            } else {
+                continueGenerationViaApi = true; // Normal MAX_TOKENS, try to continue
+            }
         } else if (currentFinishReason === null || ["UNKNOWN", "OTHER", "FINISH_REASON_UNSPECIFIED"].includes(currentFinishReason)) {
             if (accumulatedTextFromAllSegments.trim().length < MIN_CHARS_FOR_UNKNOWN_FINISH_AS_SUCCESS) {
                  return { 
@@ -587,10 +618,11 @@ export const iterateProduct = async ({
                     promptSystemInstructionSent: finalSystemInstruction, 
                     promptCoreUserInstructionsSent: coreUserInstructions, 
                     promptFullUserPromptSent: promptTextForFullIterationLogged, 
-                    apiStreamDetails 
+                    apiStreamDetails,
+                    isStuckOnMaxTokensContinuation: isStuckOnMaxTokensContinuationFlag
                 };
             }
-            console.warn(`API stream finished with reason '${currentFinishReason}' but provided substantial text (${accumulatedTextFromAllSegments.trim().length} chars). Proceeding, but this might indicate an issue.`);
+            // console.warn(`API stream finished with reason '${currentFinishReason}' but provided substantial text (${accumulatedTextFromAllSegments.trim().length} chars). Proceeding, but this might indicate an issue.`); // Reduced verbosity
             continueGenerationViaApi = false; 
         } else { 
             continueGenerationViaApi = false; 
@@ -598,9 +630,9 @@ export const iterateProduct = async ({
     } 
 
     if (accumulatedTextFromAllSegments.startsWith(CONVERGED_PREFIX)) {
-        return { product: accumulatedTextFromAllSegments, status: 'CONVERGED', promptSystemInstructionSent: finalSystemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: promptTextForFullIterationLogged, apiStreamDetails };
+        return { product: accumulatedTextFromAllSegments, status: 'CONVERGED', promptSystemInstructionSent: finalSystemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: promptTextForFullIterationLogged, apiStreamDetails, isStuckOnMaxTokensContinuation: isStuckOnMaxTokensContinuationFlag };
      }
-    return { product: accumulatedTextFromAllSegments, status: 'COMPLETED', promptSystemInstructionSent: finalSystemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: promptTextForFullIterationLogged, apiStreamDetails };
+    return { product: accumulatedTextFromAllSegments, status: 'COMPLETED', promptSystemInstructionSent: finalSystemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: promptTextForFullIterationLogged, apiStreamDetails, isStuckOnMaxTokensContinuation: isStuckOnMaxTokensContinuationFlag };
 
   } catch (error: any) {
     console.error(`Error during Gemini API call for Iteration ${currentIterationOverall}, Call ${streamCallCount}:`, error);
@@ -645,7 +677,8 @@ export const iterateProduct = async ({
         promptCoreUserInstructionsSent: coreUserInstructions, 
         promptFullUserPromptSent: promptTextForFullIterationLogged, 
         apiStreamDetails, 
-        isRateLimitError: isRateLimitErrorFlag 
+        isRateLimitError: isRateLimitErrorFlag,
+        isStuckOnMaxTokensContinuation: isStuckOnMaxTokensContinuationFlag
     };
   }
 };

@@ -1,12 +1,60 @@
 
 
+
 import React, { useState, useContext } from 'react';
 import { useProcessContext } from '../../contexts/ProcessContext';
 import { useApplicationContext } from '../../contexts/ApplicationContext';
 import { usePlanContext } from '../../contexts/PlanContext';
 import { useModelConfigContext } from '../../contexts/ModelConfigContext';
-import { SELECTABLE_MODELS, type ProcessState } from '../../types';
+import { SELECTABLE_MODELS, type ProcessState, type StrategistLLMContext } from '../../types'; // Added StrategistLLMContext
 import * as ModelStrategyService from '../../services/ModelStrategyService';
+import { MIN_CHARS_FOR_DEVELOPED_PRODUCT, MIN_CHARS_SHORT_PRODUCT_THRESHOLD, MIN_CHARS_MATURE_PRODUCT_THRESHOLD } from '../../services/iterationUtils'; // For qualitative state calculation context
+
+// Re-define calculateQualitativeStatesForStrategist locally for display purposes
+// This ensures the display logic is self-contained and mirrors the logic used for the Strategist LLM.
+const calculateQualitativeStatesForDisplay = (
+    currentProduct: string | null,
+    stagnationInfo: ProcessState['stagnationInfo'],
+    inputComplexity: ProcessState['inputComplexity'],
+    stagnationNudgeAggressiveness: ProcessState['stagnationNudgeAggressiveness']
+): Pick<StrategistLLMContext, 'productDevelopmentState' | 'stagnationSeverity' | 'recentIterationPerformance'> => {
+    const currentProductLength = currentProduct?.length || 0;
+
+    let productDevelopmentState: StrategistLLMContext['productDevelopmentState'] = 'UNKNOWN';
+    if (stagnationInfo.consecutiveLowValueIterations >= 2 && currentProductLength < MIN_CHARS_FOR_DEVELOPED_PRODUCT) {
+        productDevelopmentState = 'NEEDS_EXPANSION_STALLED';
+    } else if (currentProductLength < MIN_CHARS_SHORT_PRODUCT_THRESHOLD && (inputComplexity !== 'SIMPLE' || (stagnationInfo.lastMeaningfulChangeProductLength && currentProductLength < stagnationInfo.lastMeaningfulChangeProductLength * 0.7))) {
+        productDevelopmentState = 'UNDERDEVELOPED_KERNEL';
+    } else if (currentProductLength > MIN_CHARS_MATURE_PRODUCT_THRESHOLD) {
+        productDevelopmentState = 'MATURE_PRODUCT';
+    } else {
+        productDevelopmentState = 'DEVELOPED_DRAFT';
+    }
+
+    let stagnationSeverity: StrategistLLMContext['stagnationSeverity'] = 'NONE';
+    const identThreshold = stagnationNudgeAggressiveness === 'HIGH' ? 1 : (stagnationNudgeAggressiveness === 'MEDIUM' ? 2 : 3);
+    const lowValueThresholdSevere = stagnationNudgeAggressiveness === 'HIGH' ? 2 : (stagnationNudgeAggressiveness === 'MEDIUM' ? 3 : 4);
+    const stagnantThresholdSevere = stagnationNudgeAggressiveness === 'HIGH' ? 2 : (stagnationNudgeAggressiveness === 'MEDIUM' ? 3 : 4);
+    
+    if (stagnationInfo.consecutiveIdenticalProductIterations >= identThreshold) {
+        stagnationSeverity = 'CRITICAL';
+    } else if (stagnationInfo.consecutiveLowValueIterations >= lowValueThresholdSevere || stagnationInfo.consecutiveStagnantIterations >= stagnantThresholdSevere) {
+        stagnationSeverity = 'SEVERE';
+    } else if (stagnationInfo.consecutiveLowValueIterations >=1 || stagnationInfo.consecutiveStagnantIterations >=1) {
+        stagnationSeverity = 'MODERATE';
+    } else if (stagnationInfo.isStagnant) {
+        stagnationSeverity = 'MILD';
+    }
+
+    let recentIterationPerformance: StrategistLLMContext['recentIterationPerformance'] = 'PRODUCTIVE';
+    if (stagnationInfo.consecutiveIdenticalProductIterations > 0) {
+        recentIterationPerformance = 'STALLED';
+    } else if (stagnationInfo.consecutiveLowValueIterations > 0) {
+        recentIterationPerformance = 'LOW_VALUE';
+    }
+    return { productDevelopmentState, stagnationSeverity, recentIterationPerformance };
+};
+
 
 const ProcessStatusDisplay: React.FC = () => {
   const processCtx = useProcessContext();
@@ -27,7 +75,6 @@ const ProcessStatusDisplay: React.FC = () => {
   if (processCtx.isProcessing) {
     const iter1LogEntry = processCtx.iterationHistory.find(e => e.iteration === 1 && e.isSegmentedSynthesis);
     if (iter1LogEntry && processCtx.currentIteration === 0) { // Special case: currentIter is 0 during segmented Iter 1 processing
-        // Extract current segment info from statusMessage if it's there
         const segmentMatch = processCtx.statusMessage.match(/Segmented Iteration 1 \((\d+)\/(\d+)\): Synthesizing "(.*?)"\.\.\./);
         if (segmentMatch) {
             const currentSegmentNum = parseInt(segmentMatch[1], 10);
@@ -36,8 +83,7 @@ const ProcessStatusDisplay: React.FC = () => {
             progressText = `Iter. 1 (Segment ${currentSegmentNum}/${totalSegments}) | Overall ${Math.round(progressPercentValue)}%`;
             statusMessageForDisplay = `Iteration 1 (Segmented): Processing segment ${currentSegmentNum}/${totalSegments} - "${segmentMatch[3]}"...`;
         } else {
-            // Fallback if statusMessage format doesn't match expected for segments
-            progressPercentValue = 0; // Or some other heuristic
+            progressPercentValue = 0; 
             progressText = `Iter. 1 (Segmented Processing)`;
         }
     } else if (planCtx.isPlanActive && planCtx.planStages.length > 0 && planCtx.currentPlanStageIndex != null) {
@@ -49,10 +95,23 @@ const ProcessStatusDisplay: React.FC = () => {
       }
       const overallCompletedIterations = completedIterationsInPreviousStages + processCtx.currentStageIteration;
       progressPercentValue = totalPlanIterations > 0 ? (overallCompletedIterations / totalPlanIterations) * 100 : 0;
-      progressText = `Stage ${planCtx.currentPlanStageIndex + 1}/${planCtx.planStages.length} (Iter. ${processCtx.currentStageIteration}/${currentStage.stageIterations}) | Overall ${Math.round(progressPercentValue)}%`;
+      progressText = `Stage ${planCtx.currentPlanStageIndex + 1}/${planCtx.planStages.length} (Iter. ${processCtx.currentStageIteration +1 }/${currentStage.stageIterations}) | Overall ${Math.round(progressPercentValue)}%`;
     } else {
-      progressPercentValue = modelConfigCtx.maxIterations > 0 ? (processCtx.currentIteration / modelConfigCtx.maxIterations) * 100 : 0;
-      progressText = `Global Iter. ${processCtx.currentIteration > 0 ? processCtx.currentIteration : (processCtx.isProcessing ? 1 : 0)} / ${modelConfigCtx.maxIterations}`;
+      // For Global Mode, show iteration being processed / total
+      const iterationBeingProcessedGlobal = processCtx.currentIteration + 1;
+      progressPercentValue = modelConfigCtx.maxIterations > 0 ? (iterationBeingProcessedGlobal / modelConfigCtx.maxIterations) * 100 : 0;
+      progressText = `Global Iter. ${Math.max(1, iterationBeingProcessedGlobal)} / ${modelConfigCtx.maxIterations}`;
+    }
+  } else {
+     // Not processing: Show last completed iteration for Global Mode if applicable
+    if (!planCtx.isPlanActive) {
+        progressPercentValue = modelConfigCtx.maxIterations > 0 ? (processCtx.currentIteration / modelConfigCtx.maxIterations) * 100 : 0;
+        progressText = `Global Iter. ${processCtx.currentIteration} / ${modelConfigCtx.maxIterations} (Completed)`;
+    } else if (planCtx.isPlanActive && planCtx.planStages.length > 0 && planCtx.currentPlanStageIndex != null) {
+        // For completed plan
+        const totalPlanIterations = planCtx.planStages.reduce((sum, stage) => sum + stage.stageIterations, 0);
+        progressPercentValue = totalPlanIterations > 0 ? ( (processCtx.currentIteration) / totalPlanIterations) * 100 : 0; // Assuming currentIteration reflects total completed plan iters
+        progressText = `Plan Completed (${processCtx.currentIteration} iters) | Overall ${Math.round(progressPercentValue)}%`;
     }
   }
   const clampedProgressPercent = Math.min(100, Math.max(0, progressPercentValue));
@@ -128,24 +187,15 @@ const ProcessStatusDisplay: React.FC = () => {
   const modelDisplayName = SELECTABLE_MODELS.find(m => m.name === modelNameInUse)?.displayName || modelNameInUse;
 
   let strategyRationaleText = processCtx.aiProcessInsight || 'System Idle. Ready for input.';
-  const lastLogEntry = processCtx.iterationHistory.length > 0 ? processCtx.iterationHistory[processCtx.iterationHistory.length - 1] : null;
+  // const lastLogEntry = processCtx.iterationHistory.length > 0 ? processCtx.iterationHistory[processCtx.iterationHistory.length - 1] : null; // Not directly used here now
 
   if (processCtx.isProcessing) {
-    if (lastLogEntry && lastLogEntry.iteration === processCtx.currentIteration) { 
-        strategyRationaleText = lastLogEntry.strategyRationale || processCtx.aiProcessInsight || 'Evaluating strategy...';
-    } else if (lastLogEntry && lastLogEntry.iteration === processCtx.currentIteration -1 && processCtx.currentIteration > 0) { 
-        strategyRationaleText = processCtx.aiProcessInsight || 'Preparing next strategy...';
-    } else if (processCtx.currentIteration === 0 && processCtx.statusMessage.startsWith("Segmented Iteration 1")) { // During segmented Iter 1
-        strategyRationaleText = processCtx.aiProcessInsight || 'Segmented synthesis in progress...';
-    }
-
-
+    strategyRationaleText = processCtx.aiProcessInsight || 'Evaluating strategy...';
     const modelConfig = processCtx.currentAppliedModelConfig;
     let modelDetails = `Using: ${modelDisplayName}`;
     if (modelConfig) {
         modelDetails += ` (T:${modelConfig.temperature.toFixed(2)}, P:${modelConfig.topP.toFixed(2)}, K:${modelConfig.topK}${modelConfig.thinkingConfig !== undefined ? `, Budget:${modelConfig.thinkingConfig.thinkingBudget}` : ''})`;
     }
-
     let nudgeInfo = "";
     if (processCtx.stagnationInfo.nudgeStrategyApplied !== 'none') {
       switch (processCtx.stagnationInfo.nudgeStrategyApplied) {
@@ -163,18 +213,17 @@ const ProcessStatusDisplay: React.FC = () => {
           break;
       }
     }
-    const iterationNumberForDisplay = processCtx.currentIteration + 1; // For non-segmented display
+    const iterationBeingProcessed = processCtx.currentIteration + 1;
     let modeText = "";
     if (processCtx.currentIteration === 0 && processCtx.statusMessage.startsWith("Segmented Iteration 1")) {
         modeText = "Segmented Iteration 1.";
-    } else if (planCtx.isPlanActive) {
-        modeText = `Plan Mode (Next: Stage ${ (processCtx.currentPlanStageIndex ?? -1) +1}, Iter ${processCtx.currentStageIteration + 1}).`;
+    } else if (planCtx.isPlanActive && planCtx.currentPlanStageIndex !== null && planCtx.planStages[planCtx.currentPlanStageIndex]) {
+        const currentStageInfo = planCtx.planStages[planCtx.currentPlanStageIndex];
+        modeText = `Plan Mode (Stage ${planCtx.currentPlanStageIndex + 1}, Iter ${processCtx.currentStageIteration + 1}/${currentStageInfo.stageIterations}).`;
     } else {
-        modeText = `Global Mode (Next: Iter ${iterationNumberForDisplay}/${modelConfigCtx.maxIterations}).`;
+        modeText = `Global Mode (Iter ${iterationBeingProcessed}/${modelConfigCtx.maxIterations}).`;
     }
-    
     dynamicInsightText = `${modeText} ${modelDetails}${nudgeInfo ? ' ' + nudgeInfo : ''}. Strategy: ${strategyRationaleText}`;
-
   } else if (processCtx.finalProduct) {
       dynamicInsightText = `Process completed. Final product generated. Input Complexity: ${processCtx.inputComplexity || 'N/A'}. ${strategyRationaleText}`;
   } else if (processCtx.currentProductBeforeHalt) {
@@ -186,6 +235,19 @@ const ProcessStatusDisplay: React.FC = () => {
       const initialStrategy = ModelStrategyService.determineInitialStrategy(initialStrategyArgs, modelConfigCtx);
       dynamicInsightText = `Input Complexity: ${processCtx.inputComplexity || 'N/A'}. Initial Strategy: ${initialStrategy.rationale}`;
   }
+
+  // Stagnation Status Display Logic
+  const { stagnationInfo } = processCtx;
+  const { stagnationSeverity } = calculateQualitativeStatesForDisplay(
+      processCtx.currentProduct, 
+      stagnationInfo, 
+      processCtx.inputComplexity,
+      processCtx.stagnationNudgeAggressiveness
+  );
+  
+  let stagnationStatusText = `System Stagnation Assessment: ${stagnationSeverity}. `;
+  stagnationStatusText += `Details: Identical Prods: ${stagnationInfo.consecutiveIdenticalProductIterations}, Low Value Iters: ${stagnationInfo.consecutiveLowValueIterations}, Stagnant Iters: ${stagnationInfo.consecutiveStagnantIterations}. `;
+  stagnationStatusText += `Nudge Strategy System Applied: ${stagnationInfo.nudgeStrategyApplied || 'none'}.`;
 
 
   return (
@@ -217,7 +279,10 @@ const ProcessStatusDisplay: React.FC = () => {
       </p>
 
       {quotaErrorDisplay ? quotaErrorDisplay : (
-        dynamicInsightText && <p className="text-xs text-sky-600 dark:text-sky-400 italic min-h-[1.25em] break-words" aria-live="polite">{dynamicInsightText}</p>
+        <>
+          {dynamicInsightText && <p className="text-xs text-sky-600 dark:text-sky-400 italic min-h-[1.25em] break-words mb-1" aria-live="polite">{dynamicInsightText}</p>}
+          <p className="text-xs text-amber-600 dark:text-amber-400 min-h-[1.25em] break-words" aria-live="polite">{stagnationStatusText}</p>
+        </>
       )}
 
       {processCtx.isProcessing && (
@@ -233,7 +298,7 @@ const ProcessStatusDisplay: React.FC = () => {
           ></div>
         </div>
       )}
-      {processCtx.isProcessing && <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 text-right" aria-live="polite">{progressText}</p>}
+      { (processCtx.isProcessing || (!processCtx.isProcessing && processCtx.iterationHistory.length > 0 && !processCtx.finalProduct )) && progressText && <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 text-right" aria-live="polite">{progressText}</p>}
     </div>
   );
 };

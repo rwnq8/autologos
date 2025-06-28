@@ -1,8 +1,9 @@
 
 
+
 import React, { useEffect, useCallback, useRef, useState } from 'react';
 import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType, DevLogEntry } from './types.ts'; // Added DevLogEntry
-import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION } from './types.ts';
+import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID } from './types.ts';
 import * as GeminaiService from './services/geminiService';
 import { DEFAULT_PROJECT_NAME_FALLBACK, INITIAL_PROJECT_NAME_STATE, generateFileName } from './services/utils';
 import Controls from './components/Controls';
@@ -234,6 +235,8 @@ const App: React.FC = () => {
       stagnationInfo: { 
         isStagnant: false, 
         consecutiveStagnantIterations: 0, 
+        consecutiveIdenticalProductIterations: 0,
+        lastMeaningfulChangeProductLength: (reconstructedProductValue || "").length,
         similarityWithPrevious: undefined, 
         nudgeStrategyApplied: 'none',
         consecutiveLowValueIterations: 0,
@@ -339,9 +342,49 @@ const App: React.FC = () => {
     }
   };
 
-  const handleExportPortableDiffs = useCallback(() => {
-    updateProcessState({ statusMessage: "Exporting portable diffs has been removed. Download the main log file (.json) for iteration diffs."});
-  }, [updateProcessState]);
+  const handleExportIterationDiffs = useCallback(() => {
+    if (processState.iterationHistory.length === 0) {
+        updateProcessState({ statusMessage: "No iteration history to export diffs from." });
+        return;
+    }
+
+    let diffsText = `AUTOLOGOS ITERATIVE ENGINE - ITERATION DIFFS\n`;
+    diffsText += `Project: ${processState.projectName || DEFAULT_PROJECT_NAME_FALLBACK}\n`;
+    diffsText += `Exported At: ${new Date().toISOString()}\n\n`;
+
+    processState.iterationHistory.forEach(entry => {
+        diffsText += `== ITERATION ${entry.iteration} ==\n`;
+        diffsText += `Timestamp: ${new Date(entry.timestamp).toISOString()}\n`;
+        diffsText += `Status: ${entry.status}\n`;
+        diffsText += `Entry Type: ${entry.entryType || 'ai_iteration'}\n`;
+        const modelDisplayName = entry.currentModelForIteration 
+            ? (SELECTABLE_MODELS.find(m => m.name === entry.currentModelForIteration)?.displayName || entry.currentModelForIteration)
+            : "N/A";
+        diffsText += `Model: ${modelDisplayName}\n`;
+        if (entry.modelConfigUsed) {
+            diffsText += `Config: T:${entry.modelConfigUsed.temperature.toFixed(2)}, P:${entry.modelConfigUsed.topP.toFixed(2)}, K:${entry.modelConfigUsed.topK}\n`;
+        }
+        diffsText += `Lines Added: ${entry.linesAdded ?? 'N/A'}\n`;
+        diffsText += `Lines Removed: ${entry.linesRemoved ?? 'N/A'}\n`;
+        diffsText += `Product Summary: ${entry.productSummary}\n`;
+        diffsText += `--- DIFF START (Iteration ${entry.iteration}) ---\n`;
+        diffsText += `${entry.productDiff || "No diff recorded (e.g., no change or initial state from empty prompt without files)"}\n`;
+        diffsText += `--- DIFF END (Iteration ${entry.iteration}) ---\n\n\n`;
+    });
+
+    const fileName = generateFileName(processState.projectName, "iteration_diffs", "txt");
+    const blob = new Blob([diffsText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    updateProcessState({ statusMessage: "Iteration diffs exported." });
+  }, [processState.iterationHistory, processState.projectName, updateProcessState]);
+
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -435,7 +478,7 @@ const App: React.FC = () => {
     handleImportProjectData: projectIO.handleImportProjectData,
     handleImportIterationLogData: projectIO.handleImportIterationLogData,
     handleExportProject: projectIO.handleExportProject,
-    handleExportPortableDiffs,
+    handleExportIterationDiffs, // Updated
     handleRateLimitErrorEncountered,
     staticAiModelDetails: currentModelUIDetails, onSelectedModelChange: handleSelectedModelChange,
     onFilesSelectedForImport,

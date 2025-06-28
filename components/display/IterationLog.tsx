@@ -1,12 +1,12 @@
 
 
 
-
 import React, { useState, useContext } from 'react';
 import type { IterationLogEntry, ReconstructedProductResult, DiffViewType } from '../../types'; 
 import { LogEntryItem } from './LogEntryItem';
 import { useProcessContext } from '../../contexts/ProcessContext';
-import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter'; // Import the new formatter
+import { useApplicationContext } from '../../contexts/ApplicationContext'; // Added
+import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter'; 
 
 export interface IterationLogProps {
   onSaveLog: () => void; 
@@ -16,9 +16,9 @@ const IterationLog: React.FC<IterationLogProps> = ({
   onSaveLog,
 }) => {
   const processCtx = useProcessContext();
+  const appCtx = useApplicationContext(); // Added
   const [expandedLogItem, setExpandedLogItem] = useState<number | null>(null);
-  // individualCopyStatus is no longer needed here if LogEntryItem handles its own status
-  const [globalCopyStatus, setGlobalCopyStatus] = useState<string>(''); // For "Copy All" button
+  const [globalCopyStatus, setGlobalCopyStatus] = useState<string>(''); 
 
 
   const toggleLogItem = (iteration: number) => {
@@ -46,34 +46,46 @@ const IterationLog: React.FC<IterationLogProps> = ({
   if (processCtx.iterationHistory.length === 0) {
     return null;
   }
+  
+  const commonButtonClasses = "inline-flex items-center px-3 py-1.5 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md shadow-sm text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 transition-colors";
+
 
   return (
     <div className="bg-white/50 dark:bg-black/20 p-6 rounded-lg border border-slate-300/70 dark:border-white/10">
       <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
         <h2 className="text-xl font-semibold text-primary-600 dark:text-primary-300">Iteration Log</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={handleCopyAllDiagnostics}
             disabled={processCtx.iterationHistory.length === 0 || processCtx.isProcessing}
-            className="inline-flex items-center px-3 py-1.5 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md shadow-sm text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 transition-colors"
+            className={commonButtonClasses}
             aria-label="Copy all iteration diagnostics to clipboard"
           >
             {globalCopyStatus || "Copy All Diagnostics"}
           </button>
           <button
+            onClick={appCtx.handleExportIterationDiffs} // Changed to use appCtx for diff export
+            disabled={processCtx.iterationHistory.length === 0 || processCtx.isProcessing}
+            className={commonButtonClasses}
+            aria-label="Download iteration diffs"
+            title="Export a text file containing the diff for each iteration."
+          >
+            Export Iteration Diffs (.txt)
+          </button>
+          <button
             onClick={onSaveLog}
-            className="inline-flex items-center px-3 py-1.5 border border-slate-300 dark:border-white/20 text-xs font-medium rounded-md shadow-sm text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-black/50 focus:ring-primary-500 transition-colors"
-            aria-label="Download iteration log"
+            className={commonButtonClasses}
+            aria-label="Download full iteration log"
             disabled={processCtx.iterationHistory.length === 0}
           >
-            Download Log (.json)
+            Download Full Log (.json)
           </button>
         </div>
       </div>
       <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
         {processCtx.iterationHistory.slice().reverse().map((log) => (
           <LogEntryItem
-            key={log.iteration + (log.attemptCount || 0) * 0.1} // Ensure unique key for re-attempts if logged separately
+            key={log.iteration + (log.attemptCount || 0) * 0.1} 
             logEntry={log}
             isExpanded={expandedLogItem === log.iteration}
             onToggleExpand={toggleLogItem}
@@ -90,4 +102,3 @@ const IterationLog: React.FC<IterationLogProps> = ({
 };
 
 export default IterationLog;
-    

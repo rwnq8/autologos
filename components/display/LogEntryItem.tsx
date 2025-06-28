@@ -1,4 +1,5 @@
 
+
 import React, { useState, useContext } from 'react';
 import type { IterationLogEntry, ReconstructedProductResult, ModelConfig, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, SelectableModelName, IterationEntryType } from '../../types.ts';
 import * as GeminaiDiff from 'diff';
@@ -277,6 +278,16 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     {logEntry.linesRemoved !== undefined ? <span className="text-red-600 dark:text-red-400">-{logEntry.linesRemoved} lines</span> : ''}
                   </>
                 )}
+                {logEntry.netLineChange !== undefined && (
+                    <span className="ml-2">Net Lines: <span className={logEntry.netLineChange > 0 ? "text-green-600 dark:text-green-400" : logEntry.netLineChange < 0 ? "text-red-600 dark:text-red-400" : "text-slate-500 dark:text-slate-400"}>
+                        {logEntry.netLineChange > 0 ? "+" : ""}{logEntry.netLineChange}
+                    </span></span>
+                )}
+                {logEntry.charDelta !== undefined && (
+                    <span className="ml-2">Net Chars: <span className={logEntry.charDelta > 0 ? "text-green-600 dark:text-green-400" : logEntry.charDelta < 0 ? "text-red-600 dark:text-red-400" : "text-slate-500 dark:text-slate-400"}>
+                        {logEntry.charDelta > 0 ? "+" : ""}{logEntry.charDelta}
+                    </span></span>
+                )}
                 {isAiEntry && logEntry.currentModelForIteration && <span className="ml-2 text-slate-500 dark:text-slate-400">Model: {SELECTABLE_MODELS.find(m=>m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration}</span>}
               </p>
             )}
@@ -345,6 +356,27 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
               </pre>
             </div>
           )}
+
+          {(logEntry.similarityWithPreviousLogged !== undefined || logEntry.charDelta !== undefined || logEntry.netLineChange !== undefined) && (
+            <div className="text-xs">
+                <button onClick={() => toggleDiagnosticSection(`stagnationMetrics-${logEntry.iteration}`)} className="font-semibold text-slate-700 dark:text-slate-300 mb-0.5 hover:underline w-full text-left">
+                  Stagnation Analysis for this Iteration {expandedDiagnostics[`stagnationMetrics-${logEntry.iteration}`] ? '▼' : '▶'}
+                </button>
+                {expandedDiagnostics[`stagnationMetrics-${logEntry.iteration}`] && (
+                  <div className="ml-2 pl-2 border-l border-slate-300 dark:border-slate-600 space-y-0.5">
+                    {logEntry.similarityWithPreviousLogged !== undefined && <p>Similarity with Previous: {logEntry.similarityWithPreviousLogged.toFixed(4)}</p>}
+                    {logEntry.charDelta !== undefined && <p>Character Delta: {logEntry.charDelta > 0 ? `+${logEntry.charDelta}` : logEntry.charDelta}</p>}
+                    {logEntry.netLineChange !== undefined && <p>Net Line Change: {logEntry.netLineChange > 0 ? `+${logEntry.netLineChange}` : logEntry.netLineChange}</p>}
+                    <p className="font-medium mt-1">Flags Triggered:</p>
+                    {logEntry.isStagnantIterationLogged && <p className="text-orange-600 dark:text-orange-400 ml-2">- Stagnant Iteration (High Similarity, Low Change)</p>}
+                    {logEntry.isEffectivelyIdenticalLogged && <p className="text-red-600 dark:text-red-400 ml-2">- Effectively Identical to Previous</p>}
+                    {logEntry.isLowValueIterationLogged && <p className="text-yellow-600 dark:text-yellow-400 ml-2">- Low Value Iteration</p>}
+                    {!(logEntry.isStagnantIterationLogged || logEntry.isEffectivelyIdenticalLogged || logEntry.isLowValueIterationLogged) && <p className="text-green-600 dark:text-green-400 ml-2">- No Stagnation Flags Triggered</p>}
+                  </div>
+                )}
+            </div>
+          )}
+
 
           {(isAiEntry || (logEntry.entryType === 'initial_state' && logEntry.iteration === 0)) && logEntry.modelConfigUsed && (
             <div className="text-xs">

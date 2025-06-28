@@ -78,8 +78,9 @@ export const useProjectIO = (
       rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
       stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,
       inputComplexity: currentState.inputComplexity,
-      strategistInfluenceLevel: currentState.strategistInfluenceLevel, // Added
-      stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, // Added
+      strategistInfluenceLevel: currentState.strategistInfluenceLevel, 
+      stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, 
+      devLog: currentState.devLog,
     };
 
     const projectFile: AutologosProjectFile = {
@@ -120,14 +121,28 @@ export const useProjectIO = (
       overwriteUserPlanTemplates([]);
     }
 
+    let correctedInitialPrompt = engineData.initialPrompt;
+    const loadedFilesFromData = engineData.loadedFiles || [];
+    if (loadedFilesFromData.length > 0) {
+        correctedInitialPrompt = `Input consists of ${loadedFilesFromData.length} file(s): ${loadedFilesFromData.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
+    }
+
+
     const lastIter = engineData.iterationHistory && engineData.iterationHistory.length > 0 ? engineData.iterationHistory[engineData.iterationHistory.length -1].iteration : 0;
-    const productAtLastIter = engineData.finalProduct || (engineData.iterationHistory && engineData.iterationHistory.length > 0 ? reconstructProduct(lastIter, engineData.iterationHistory, engineData.initialPrompt).product : engineData.initialPrompt);
+    
+    const productAtLastIter = engineData.finalProduct || 
+                             (engineData.iterationHistory && engineData.iterationHistory.length > 0 
+                                ? reconstructProduct(lastIter, engineData.iterationHistory, correctedInitialPrompt).product 
+                                : correctedInitialPrompt);
 
     const importedProcessStateBase: Partial<ProcessState> = {
       ...engineData,
+      initialPrompt: correctedInitialPrompt, // Use corrected prompt
+      loadedFiles: loadedFilesFromData,     // Use loaded files from data
       projectId: projectFile.header.projectId,
       projectName: projectFile.header.projectName || DEFAULT_PROJECT_NAME_FALLBACK,
       projectObjective: projectFile.header.projectObjective || null,
+      devLog: engineData.devLog || [],
     };
 
     const fullNewState: ProcessState = {
@@ -139,9 +154,8 @@ export const useProjectIO = (
       currentProduct: engineData.currentProductBeforeHalt || productAtLastIter,
       currentIteration: engineData.currentIterationBeforeHalt ?? lastIter,
       selectedModelName: engineData.selectedModelName || initialProcessStateValues.selectedModelName,
-      loadedFiles: engineData.loadedFiles || [],
       planStages: engineData.planStages || [],
-      savedPlanTemplates: engineData.savedPlanTemplates || [], // ensure this is from engineData if present
+      savedPlanTemplates: engineData.savedPlanTemplates || [], 
       iterationHistory: engineData.iterationHistory || [],
       outputParagraphShowHeadings: engineData.outputParagraphShowHeadings ?? initialProcessStateValues.outputParagraphShowHeadings,
       outputParagraphMaxHeadingDepth: engineData.outputParagraphMaxHeadingDepth ?? initialProcessStateValues.outputParagraphMaxHeadingDepth,
@@ -150,8 +164,8 @@ export const useProjectIO = (
       currentDiffViewType: engineData.currentDiffViewType || 'words',
       aiProcessInsight: "Project loaded. Review state and resume or start new process.",
       stagnationNudgeEnabled: engineData.stagnationNudgeEnabled ?? initialProcessStateValues.stagnationNudgeEnabled,
-      strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, // Added
-      stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness, // Added
+      strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, 
+      stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness, 
     };
     updateProcessState(fullNewState);
 
@@ -185,29 +199,29 @@ export const useProjectIO = (
     const lastLogEntry = logData[logData.length - 1];
     restoredState.currentIteration = lastLogEntry.iteration;
     
-    // Try to find the initial prompt from Iteration 0 if it exists and no files were used for it.
     const iterZeroEntry = logData.find(entry => entry.iteration === 0);
     let basePromptForReconstruction = "";
+    let loadedFilesForRestoredState: LoadedFile[] = [];
+    let promptSourceForRestoredState: string | null = "Restored from Log (Prompt Unavailable)";
+
     if (iterZeroEntry) {
-        if (iterZeroEntry.fileProcessingInfo && iterZeroEntry.fileProcessingInfo.numberOfFilesActuallySent === 0 && iterZeroEntry.promptFullUserPromptSent) {
-           // If iter 0 had no files but had a full user prompt, use that as the base
+        if (iterZeroEntry.fileProcessingInfo && iterZeroEntry.fileProcessingInfo.loadedFilesForIterationContext && iterZeroEntry.fileProcessingInfo.loadedFilesForIterationContext.length > 0) {
+            loadedFilesForRestoredState = iterZeroEntry.fileProcessingInfo.loadedFilesForIterationContext;
+            basePromptForReconstruction = `Input consists of ${loadedFilesForRestoredState.length} file(s): ${loadedFilesForRestoredState.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
+            promptSourceForRestoredState = "Restored from Log (Files Manifest from Log)";
+        } else if (iterZeroEntry.fileProcessingInfo && iterZeroEntry.fileProcessingInfo.numberOfFilesActuallySent === 0 && iterZeroEntry.promptFullUserPromptSent) {
            basePromptForReconstruction = iterZeroEntry.promptFullUserPromptSent;
-           restoredState.initialPrompt = basePromptForReconstruction;
-           restoredState.loadedFiles = [];
-           restoredState.promptSourceName = "Restored from Log (Direct Prompt)";
+           promptSourceForRestoredState = "Restored from Log (Direct Prompt from Log)";
         } else if (iterZeroEntry.fileProcessingInfo && iterZeroEntry.fileProcessingInfo.fileManifestProvidedCharacterCount > 0 && iterZeroEntry.promptFullUserPromptSent) {
-            // If iter 0 had files, the manifest from its full prompt is the "initialPrompt" for consistency
             basePromptForReconstruction = iterZeroEntry.promptFullUserPromptSent.substring(0, iterZeroEntry.fileProcessingInfo.fileManifestProvidedCharacterCount);
-            restoredState.initialPrompt = basePromptForReconstruction;
-            // We don't have the actual file content here, so loadedFiles remains empty. The process relied on the manifest.
-            restoredState.loadedFiles = []; 
-            restoredState.promptSourceName = "Restored from Log (Files Manifest Only)";
+            promptSourceForRestoredState = "Restored from Log (Manifest Substring from Log)";
         } else {
-            restoredState.initialPrompt = "Initial prompt not available in log for Iteration 0.";
-            restoredState.loadedFiles = [];
-            restoredState.promptSourceName = "Restored from Log (Prompt Unavailable)";
+            basePromptForReconstruction = "Initial prompt not fully recoverable from Iteration 0 log entry.";
         }
     }
+    restoredState.initialPrompt = basePromptForReconstruction;
+    restoredState.loadedFiles = loadedFilesForRestoredState;
+    restoredState.promptSourceName = promptSourceForRestoredState;
 
 
     const { product: reconstructedLastProduct, error: reconstructionError } = reconstructProduct(
@@ -243,7 +257,7 @@ export const useProjectIO = (
     if (!modelNameFromLog && lastLogEntry.modelConfigUsed?.modelName) {
         modelNameFromLog = lastLogEntry.modelConfigUsed.modelName;
     }
-    if (!modelNameFromLog) { // Fallback further if still not found
+    if (!modelNameFromLog) { 
         const modelMatch = lastLogEntry.status.match(/model ['"](.*?)['"]/i) ||
                            (lastLogEntry.promptSystemInstructionSent || "").match(/model:\s*['"]?(.*?)['"\s]/i);
         if (modelMatch && modelMatch[1]) {
@@ -262,13 +276,14 @@ export const useProjectIO = (
     }
     restoredState.projectName = pName;
     restoredState.projectId = uuidv4();
+    restoredState.devLog = []; // DevLog is not part of iteration log import
 
     restoredState.finalProduct = null;
     restoredState.isProcessing = false;
     restoredState.configAtFinalization = null;
     restoredState.currentProductBeforeHalt = null;
     restoredState.currentIterationBeforeHalt = undefined;
-    restoredState.isPlanActive = false; // Logs don't store full plan state easily
+    restoredState.isPlanActive = false; 
     restoredState.planStages = [];
     restoredState.currentPlanStageIndex = null;
     restoredState.currentStageIteration = 0;
@@ -278,7 +293,7 @@ export const useProjectIO = (
     restoredState.currentDiffViewType = 'words';
     restoredState.strategistInfluenceLevel = initialProcessStateValues.strategistInfluenceLevel;
     restoredState.stagnationNudgeAggressiveness = initialProcessStateValues.stagnationNudgeAggressiveness;
-    restoredState.inputComplexity = initialProcessStateValues.inputComplexity; // Or re-calculate based on reconstructed product
+    restoredState.inputComplexity = initialProcessStateValues.inputComplexity; 
 
 
     updateProcessState(restoredState as ProcessState);

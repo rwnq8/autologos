@@ -13,7 +13,7 @@ export interface ApplicationContextType {
   handleImportProjectData: (projectFile: AutologosProjectFile) => void;
   handleImportIterationLogData: (logData: IterationLogEntry[], originalFilename: string) => void;
   handleExportProject: () => void;
-  handleExportPortableDiffs: () => void; 
+  handleExportIterationDiffs: () => void; 
   handleRateLimitErrorEncountered: () => void;
   staticAiModelDetails: StaticAiModelDetails | null;
   onSelectedModelChange: (modelName: SelectableModelName) => void;

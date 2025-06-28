@@ -1,3 +1,6 @@
+
+
+
 import { useState, useCallback } from 'react';
 import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, ParameterAdvice, PlanTemplate, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry } from '../types.ts'; // Added DevLogEntry
 import * as geminiService from '../services/geminiService';
@@ -48,6 +51,8 @@ export const createInitialProcessState = (
   stagnationInfo: { 
     isStagnant: false, 
     consecutiveStagnantIterations: 0, 
+    consecutiveIdenticalProductIterations: 0, // Added
+    lastMeaningfulChangeProductLength: undefined, // Added
     similarityWithPrevious: undefined, 
     nudgeStrategyApplied: 'none',
     consecutiveLowValueIterations: 0, 
@@ -108,6 +113,14 @@ export type AddLogEntryParams = {
   isTargetedRefinement?: boolean;
   targetedSelection?: string;
   targetedRefinementInstructions?: string;
+  isCriticalFailure?: boolean; 
+  netLineChange?: number; 
+  charDelta?: number; 
+  // New fields for per-iteration stagnation metrics
+  similarityWithPreviousLogged?: number;
+  isStagnantIterationLogged?: boolean;
+  isEffectivelyIdenticalLogged?: boolean;
+  isLowValueIterationLogged?: boolean;
 };
 
 
@@ -196,7 +209,16 @@ export const useProcessState = () => {
         updates.finalProduct = null;
         updates.currentIteration = 0;
         updates.projectName = INITIAL_PROJECT_NAME_STATE; 
-        updates.stagnationInfo = { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none', consecutiveLowValueIterations: 0, lastProductLengthForStagnation: undefined };
+        updates.stagnationInfo = { 
+            isStagnant: false, 
+            consecutiveStagnantIterations: 0, 
+            consecutiveIdenticalProductIterations: 0, // Reset
+            lastMeaningfulChangeProductLength: undefined, // Reset
+            similarityWithPrevious: undefined, 
+            nudgeStrategyApplied: 'none', 
+            consecutiveLowValueIterations: 0, 
+            lastProductLengthForStagnation: undefined 
+        };
         updates.currentProductBeforeHalt = null;
         updates.currentIterationBeforeHalt = undefined;
         updates.configAtFinalization = null;
@@ -230,7 +252,16 @@ export const useProcessState = () => {
               iterationHistory: [],
               finalProduct: null,
               currentIteration: 0,
-              stagnationInfo: { isStagnant: false, consecutiveStagnantIterations: 0, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none', consecutiveLowValueIterations: 0, lastProductLengthForStagnation: undefined },
+              stagnationInfo: { 
+                isStagnant: false, 
+                consecutiveStagnantIterations: 0, 
+                consecutiveIdenticalProductIterations: 0, // Reset
+                lastMeaningfulChangeProductLength: undefined, // Reset
+                similarityWithPrevious: undefined, 
+                nudgeStrategyApplied: 'none',
+                consecutiveLowValueIterations: 0,
+                lastProductLengthForStagnation: undefined 
+              },
               currentProductBeforeHalt: null,
               currentIterationBeforeHalt: undefined,
               configAtFinalization: null,
@@ -252,7 +283,11 @@ export const useProcessState = () => {
     let linesRemoved = 0;
     const entryType = logData.entryType || 'ai_iteration'; // Default to 'ai_iteration' if not specified
 
-    const normalizeNewlines = (str: string | null | undefined): string => (str || "").replace(/\r\n/g, '\n');
+    const normalizeNewlines = (str: string | null | undefined): string => {
+        if (!str) return "";
+        // Replace CRLF with LF, then replace standalone CR with LF
+        return str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    };
 
     const currentPForDiff = normalizeNewlines(
         (logData.currentFullProduct ?? "").startsWith(CONVERGED_PREFIX)
@@ -295,6 +330,8 @@ export const useProcessState = () => {
       productDiff: productDiff,
       linesAdded: linesAdded > 0 ? linesAdded : (logData.iteration === 0 && entryType === 'initial_state' && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
       linesRemoved: linesRemoved > 0 ? linesRemoved : undefined,
+      netLineChange: logData.netLineChange,
+      charDelta: logData.charDelta,     
       readabilityScoreFlesch: logData.readabilityScoreFlesch,
       lexicalDensity: logData.lexicalDensity, 
       avgSentenceLength: logData.avgSentenceLength, 
@@ -320,6 +357,11 @@ export const useProcessState = () => {
       isTargetedRefinement: entryType === 'targeted_refinement',
       targetedSelection: logData.targetedSelection,
       targetedRefinementInstructions: logData.targetedRefinementInstructions,
+      isCriticalFailure: logData.isCriticalFailure, // Ensure this field is passed
+      similarityWithPreviousLogged: logData.similarityWithPreviousLogged,
+      isStagnantIterationLogged: logData.isStagnantIterationLogged,
+      isEffectivelyIdenticalLogged: logData.isEffectivelyIdenticalLogged,
+      isLowValueIterationLogged: logData.isLowValueIterationLogged,
     };
 
     setState(prev => {
@@ -385,6 +427,8 @@ export const useProcessState = () => {
         stagnationInfo: { 
             isStagnant: false, 
             consecutiveStagnantIterations: 0, 
+            consecutiveIdenticalProductIterations: 0, // Reset
+            lastMeaningfulChangeProductLength: undefined, // Reset
             similarityWithPrevious: undefined, 
             nudgeStrategyApplied: 'none',
             consecutiveLowValueIterations: 0,
@@ -449,5 +493,6 @@ export const useProcessState = () => {
 declare module '../types.ts' {
   interface IterationLogEntry {
     entryType?: IterationEntryType;
+    isCriticalFailure?: boolean; // Added this line
   }
 }

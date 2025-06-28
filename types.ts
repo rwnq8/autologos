@@ -36,11 +36,12 @@ export interface IterateProductResult {
   promptFullUserPromptSent?: string;
   apiStreamDetails?: ApiStreamCallDetail[];
   isRateLimitError?: boolean;
+  isStuckOnMaxTokensContinuation?: boolean;
 }
 
 export interface IterationResultDetails extends IterateProductResult {
   modelConfigUsed: ModelConfig;
-  isCriticalFailure?: boolean; // Added to flag severe validation failures
+  isCriticalFailure?: boolean;
 }
 
 export interface StaticAiModelDetails {
@@ -133,13 +134,15 @@ export type IterationEntryType = 'initial_state' | 'ai_iteration' | 'manual_edit
 
 export interface IterationLogEntry {
   iteration: number;
-  entryType?: IterationEntryType; // New field
+  entryType?: IterationEntryType; 
   productSummary: string;
   status: string;
   timestamp: number;
   productDiff?: string;
   linesAdded?: number;
   linesRemoved?: number;
+  netLineChange?: number; 
+  charDelta?: number; 
   readabilityScoreFlesch?: number;
   lexicalDensity?: number;
   avgSentenceLength?: number;
@@ -161,28 +164,32 @@ export interface IterationLogEntry {
   strategyRationale?: string;
   currentModelForIteration?: SelectableModelName;
   activeMetaInstruction?: string;
-  isSegmentedSynthesis?: boolean; // For Iteration 1 segmented synthesis (True if entryType is 'segmented_synthesis_milestone')
-  isTargetedRefinement?: boolean; // For targeted section refinement (True if entryType is 'targeted_refinement')
+  isSegmentedSynthesis?: boolean; 
+  isTargetedRefinement?: boolean; 
   targetedSelection?: string;
   targetedRefinementInstructions?: string;
-  isCriticalFailure?: boolean; // Added
+  isCriticalFailure?: boolean; 
+  // Fields for per-iteration stagnation metrics
+  similarityWithPreviousLogged?: number;
+  isStagnantIterationLogged?: boolean;
+  isEffectivelyIdenticalLogged?: boolean;
+  isLowValueIterationLogged?: boolean;
 }
 
-// Development Log & Roadmap Types
 export type DevLogEntryType = 'issue' | 'fix' | 'feature' | 'decision' | 'note';
 export type DevLogEntryStatus = 'open' | 'in_progress' | 'resolved' | 'implemented' | 'closed' | 'deferred';
 
 export interface DevLogEntry {
-  id: string; // UUID
+  id: string; 
   timestamp: number;
   lastModified: number;
   type: DevLogEntryType;
-  summary: string; // Short description
-  details?: string; // Longer description, steps to reproduce, proposed solution, etc. (Markdown supported)
+  summary: string; 
+  details?: string; 
   status: DevLogEntryStatus;
-  relatedIteration?: number; // Optional link to an iteration number
-  tags?: string[]; // e.g., ["UI", "Gemini API", "Performance"]
-  resolution?: string; // For 'fix' or 'resolved' issues
+  relatedIteration?: number; 
+  tags?: string[]; 
+  resolution?: string; 
 }
 
 export interface AutologosIterativeEngineData {
@@ -218,13 +225,13 @@ export interface AutologosIterativeEngineData {
   inputComplexity?: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
   strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
-  devLog?: DevLogEntry[]; // Added Development Log
+  devLog?: DevLogEntry[];
 }
 
 export interface AutologosProjectFile {
   header: ProjectFileHeader;
   applicationData: {
-    [appId: string]: any; // Should be AutologosIterativeEngineData for THIS_APP_ID
+    [appId: string]: any; 
   };
 }
 
@@ -276,33 +283,38 @@ export interface AiResponseValidationInfoDetailsValue_InitialSynthesis extends P
     outputChars?: number;
     isOutlineDriven?: boolean;
     factorUsed?: number;
-    phrase?: string; // For error phrase variants
+    phrase?: string; 
 }
 
 
 export interface AiResponseValidationInfo {
   checkName: string;
-  passed: boolean; // True if validation passed (no error/warning), False if error/warning detected
+  passed: boolean; 
+  isCriticalFailure?: boolean; 
   reason?: string;
   details?: {
     type:
-      | 'error_phrase'                             // Critical: Generic error phrase detected
-      | 'empty_json'                               // Critical: Empty response when JSON expected
-      | 'invalid_json'                             // Critical: Malformed JSON when expected
-      | 'passed'                                   // Info: All checks passed
-      | 'prompt_leakage'                           // Critical: Prompt content detected in response
-      | 'initial_synthesis_failed_large_output'    // Critical: Iteration 1 output too large vs input (non-outline driven)
-      | 'initial_synthesis_tolerated_large_output_outline_driven' // Info: Iteration 1 (outline-driven) output large, but tolerated
-      | 'catastrophic_collapse'                    // Critical: Output became trivially small uninstructed
-      | 'error_phrase_with_significant_reduction'  // Critical: Error phrase + significant uninstructed reduction
-      | 'extreme_reduction_error'                  // Critical: Uninstructed extreme reduction (e.g., Plan Mode)
-      | 'extreme_reduction_instructed_but_with_error_phrase' // Critical: Instructed extreme reduction + error phrase
-      | 'extreme_reduction_tolerated_global_mode'  // Info: Extreme reduction in Global Mode, no other errors
-      | 'extreme_reduction_tolerated_instruction'  // Info: Extreme reduction, but was instructed
-      | 'drastic_reduction_error_plan_mode'        // Critical: Uninstructed drastic reduction in Plan Mode
-      | 'drastic_reduction_with_error_phrase'      // Critical: Drastic reduction + error phrase
-      | 'drastic_reduction_tolerated_global_mode'  // Info: Drastic reduction in Global Mode, no other errors
-      | 'drastic_reduction_tolerated_instruction'; // Info: Drastic reduction, but was instructed
+      | 'error_phrase'                             
+      | 'empty_json'                               
+      | 'invalid_json'                             
+      | 'passed'                                   
+      | 'prompt_leakage'                           
+      | 'initial_synthesis_failed_large_output'    
+      | 'initial_synthesis_tolerated_large_output_outline_driven' 
+      | 'catastrophic_collapse'                    
+      | 'error_phrase_with_significant_reduction'  
+      | 'extreme_reduction_error'                  
+      | 'extreme_reduction_instructed_but_with_error_phrase' 
+      | 'extreme_reduction_tolerated_global_mode'  
+      | 'extreme_reduction_tolerated_instruction'  
+      | 'drastic_reduction_error_plan_mode'        
+      | 'drastic_reduction_with_error_phrase'      
+      | 'drastic_reduction_tolerated_global_mode'  
+      | 'drastic_reduction_tolerated_instruction'  
+      | 'unknown_finish_reason_minimal_output'     
+      | 'unknown_finish_reason_abrupt_end'       
+      | 'max_tokens_with_incomplete_sentence'    
+      | 'convergence_on_underdeveloped_product';   
     value?: string | ReductionDetailValue | PromptLeakageDetailValue | AiResponseValidationInfoDetailsValue_InitialSynthesis | { [key: string]: any };
   };
 }
@@ -321,9 +333,11 @@ export type NudgeStrategy = 'none' | 'params_light' | 'params_heavy' | 'meta_ins
 export interface StagnationInfo {
   isStagnant: boolean;
   consecutiveStagnantIterations: number;
-  similarityWithPrevious?: number;
+  consecutiveIdenticalProductIterations: number; 
+  lastMeaningfulChangeProductLength?: number; 
+  similarityWithPrevious?: number; 
   nudgeStrategyApplied: NudgeStrategy;
-  consecutiveLowValueIterations: number;     
+  consecutiveLowValueIterations: number; 
   lastProductLengthForStagnation?: number; 
 }
 
@@ -373,11 +387,12 @@ export interface ProcessState {
   instructionsForSelectionRefinement?: string;
   isEditingCurrentProduct?: boolean; 
   editedProductBuffer?: string | null; 
-  devLog?: DevLogEntry[]; // Added Development Log
+  devLog?: DevLogEntry[];
 }
 
 export interface IsLikelyAiErrorResponseResult {
-  isError: boolean; // True if a validation rule considered it an error that should potentially halt or retry
+  isError: boolean; 
+  isCriticalFailure?: boolean; 
   reason: string;
   checkDetails: AiResponseValidationInfo['details'];
 }
@@ -410,9 +425,25 @@ export interface StrategistAdvice {
     suggestedTopK?: number;
 }
 
-// This declaration allows AiResponseValidationInfo.details.type to include the new type
-// and AiResponseValidationInfo.details.value to include the new value shape.
-declare module './types' { // Or the actual path to types.ts from itself if it's nested.
-    // This is often not needed if all types are in one file.
-    // If types.ts is the single source of truth, direct modification is usually sufficient.
+// Strategist context object for getStrategicAdviceFromLLM
+export interface StrategistLLMContext {
+    currentIteration: number;
+    maxIterations: number;
+    inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
+    lastUsedModel?: SelectableModelName;
+    lastUsedConfig?: ModelConfig | null;
+    stagnationInfo: StagnationInfo; 
+    stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
+    lastNValidationSummariesString: string; 
+    currentGoal: string; 
+    recentIterationSummaries: string[]; 
+    productDevelopmentState: 'UNDERDEVELOPED_KERNEL' | 'DEVELOPED_DRAFT' | 'MATURE_PRODUCT' | 'NEEDS_EXPANSION_STALLED' | 'UNKNOWN';
+    stagnationSeverity: 'NONE' | 'MILD' | 'MODERATE' | 'SEVERE' | 'CRITICAL';
+    recentIterationPerformance: 'PRODUCTIVE' | 'LOW_VALUE' | 'STALLED';
+    currentRefinementFocusHint?: string; 
+}
+
+
+declare module './types' { 
+
 }

@@ -1,9 +1,13 @@
 
-import type { ProcessState, ModelConfig, SelectableModelName, IterationLogEntry, PlanStage, StagnationInfo, ModelStrategy, LoadedFile, StrategistAdvice, AiResponseValidationInfo } from '../types.ts';
+
+
+import type { ProcessState, ModelConfig, SelectableModelName, IterationLogEntry, PlanStage, StagnationInfo, ModelStrategy, LoadedFile, StrategistAdvice, AiResponseValidationInfo, StrategistLLMContext } from '../types.ts';
 import { CREATIVE_DEFAULTS, GENERAL_BALANCED_DEFAULTS, DEFAULT_MODEL_NAME, getStrategicAdviceFromLLM } from './geminiService';
 import { CONVERGED_PREFIX } from './promptBuilderService';
 import { STAGNATION_TEMP_NUDGE_LIGHT, STAGNATION_TOPP_NUDGE_LIGHT, STAGNATION_TOPK_NUDGE_FACTOR_LIGHT, STAGNATION_TEMP_NUDGE_HEAVY, STAGNATION_TOPP_NUDGE_HEAVY, STAGNATION_TOPK_NUDGE_FACTOR_HEAVY } from '../hooks/useModelParameters';
 import { SELECTABLE_MODELS } from '../types.ts';
+import { MIN_CHARS_FOR_DEVELOPED_PRODUCT } from './iterationUtils';
+
 
 // Changed from 5 to 20 for a more gradual sweep to deterministic values.
 export const DETERMINISTIC_TARGET_ITERATION = 20;
@@ -73,10 +77,21 @@ export const determineInitialStrategy = (
 };
 
 export const reevaluateStrategy = async (
-    processState: Pick<ProcessState, 'currentProduct' | 'currentIteration' | 'maxIterations' | 'inputComplexity' | 'stagnationInfo' | 'iterationHistory' | 'currentModelForIteration' | 'currentAppliedModelConfig' | 'isPlanActive' | 'planStages'| 'currentPlanStageIndex' | 'selectedModelName' | 'stagnationNudgeEnabled' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness' | 'initialPrompt' | 'loadedFiles'>,
+    processState: Pick<ProcessState, 'currentProduct' | 'currentIteration' | 'maxIterations' | 'inputComplexity' | 'stagnationInfo' | 'iterationHistory' | 'currentModelForIteration' | 'currentAppliedModelConfig' | 'isPlanActive' | 'planStages'| 'currentPlanStageIndex' | 'selectedModelName' | 'stagnationNudgeEnabled' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness' | 'initialPrompt' | 'loadedFiles'> & { 
+        lastNValidationSummariesString?: string,
+        productDevelopmentState: StrategistLLMContext['productDevelopmentState'],
+        stagnationSeverity: StrategistLLMContext['stagnationSeverity'],
+        recentIterationPerformance: StrategistLLMContext['recentIterationPerformance']
+    },
     baseUserConfig: ModelConfig
 ): Promise<ModelStrategy> => {
-    const { currentIteration, maxIterations, inputComplexity, stagnationInfo, iterationHistory, currentModelForIteration, currentAppliedModelConfig, isPlanActive, planStages, currentPlanStageIndex, selectedModelName, stagnationNudgeEnabled, strategistInfluenceLevel, stagnationNudgeAggressiveness, currentProduct, initialPrompt, loadedFiles } = processState;
+    const { 
+        currentIteration, maxIterations, inputComplexity, stagnationInfo, iterationHistory, 
+        currentModelForIteration, currentAppliedModelConfig, isPlanActive, planStages, 
+        currentPlanStageIndex, selectedModelName, stagnationNudgeEnabled, strategistInfluenceLevel, 
+        stagnationNudgeAggressiveness, currentProduct, initialPrompt, loadedFiles, 
+        lastNValidationSummariesString, productDevelopmentState, stagnationSeverity, recentIterationPerformance
+    } = processState;
 
     let nextModelName: SelectableModelName = currentModelForIteration || selectedModelName || DEFAULT_MODEL_NAME;
     let nextConfig: ModelConfig;
@@ -123,9 +138,9 @@ export const reevaluateStrategy = async (
             const actualKFactor = 1.0 + (baseKFactorChange * kFactorMultiplier);
             
             const preNudgeTemp = nextConfig.temperature;
-            if (preNudgeTemp < 0.1) { // If already very low
-                nextConfig.temperature = Math.max(preNudgeTemp + actualTempNudge, 0.2); // Ensure nudge brings it to at least 0.2
-                 if (nextConfig.temperature === 0.2 && preNudgeTemp + actualTempNudge < 0.2) { // Log if boosted to minimum
+            if (preNudgeTemp < 0.1) { 
+                nextConfig.temperature = Math.max(preNudgeTemp + actualTempNudge, 0.2); 
+                 if (nextConfig.temperature === 0.2 && preNudgeTemp + actualTempNudge < 0.2) { 
                     rationales.push(`Heuristic Nudge Detail: Temp was very low (${preNudgeTemp.toFixed(3)}), boosted to minimum 0.2 for nudge effectiveness (planned nudge was to ${(preNudgeTemp + actualTempNudge).toFixed(3)}).`);
                 }
             } else {
@@ -137,24 +152,30 @@ export const reevaluateStrategy = async (
             rationales.push(`Heuristic Nudge (Code): Stagnation (${stagnationInfo.consecutiveStagnantIterations}x) triggered '${stagnationInfo.nudgeStrategyApplied}' (Aggressiveness: ${stagnationNudgeAggressiveness}). Applied T from ${preNudgeTemp.toFixed(3)} to ${nextConfig.temperature.toFixed(3)}, P+=${actualPNudge.toFixed(3)}, K*=${actualKFactor.toFixed(3)} to swept params.`);
         }
 
-        const productIsLikelyUnderdeveloped = (currentProduct?.length || 0) < 2000 && inputComplexity !== 'SIMPLE';
-        if (stagnationNudgeEnabled && stagnationInfo.consecutiveLowValueIterations >= 2 && stagnationInfo.nudgeStrategyApplied !== 'meta_instruct') {
+        const currentProductLength = currentProduct?.length || 0;
+        const lastMeaningfulLength = stagnationInfo.lastMeaningfulChangeProductLength || currentProductLength;
+        const productIsLikelyUnderdeveloped = currentProductLength < MIN_CHARS_FOR_DEVELOPED_PRODUCT &&
+                                             (inputComplexity !== 'SIMPLE' || currentProductLength < (lastMeaningfulLength * 0.8));
+
+
+        const lowValueThresholdForMetaPush = stagnationNudgeAggressiveness === 'HIGH' ? 1 : 2;
+        if (stagnationNudgeEnabled && stagnationInfo.consecutiveLowValueIterations >= lowValueThresholdForMetaPush && stagnationInfo.nudgeStrategyApplied !== 'meta_instruct') {
             if (productIsLikelyUnderdeveloped) {
-                activeMetaInstructionForThisIteration = "The product seems underdeveloped or stuck in minor edits. Please focus on substantial conceptual expansion, adding more details, examples, or exploring new perspectives based on the original source material.";
+                activeMetaInstructionForThisIteration = `The product (currently ${currentProductLength} chars) seems underdeveloped or stuck in minor edits (low value iters: ${stagnationInfo.consecutiveLowValueIterations}). Please focus on substantial conceptual expansion, adding more details, examples, or exploring new perspectives based on the original source material. Avoid mere wordsmithing.`;
                 rationales.push(`Heuristic Expansion Push (Code): High low-value iterations (${stagnationInfo.consecutiveLowValueIterations}) on a potentially underdeveloped product. Applying expansionary meta-instruction.`);
-                if (nextConfig.temperature < 0.2) {
-                    const boostedTemp = Math.max(0.2, Math.min(0.3, baseUserConfig.temperature < 0.1 ? 0.2 : baseUserConfig.temperature * 0.5));
+                if (nextConfig.temperature < 0.2) { // If params are already very low, nudge them up to allow expansion
+                    const boostedTemp = Math.max(0.2, Math.min(0.4, baseUserConfig.temperature < 0.1 ? 0.3 : baseUserConfig.temperature * 0.6));
                     if (boostedTemp > nextConfig.temperature) {
                          rationales.push(`Heuristic Expansion Push (Code): Temporarily nudging temperature from ${nextConfig.temperature.toFixed(2)} to ${boostedTemp.toFixed(2)} to aid expansion.`);
                          nextConfig.temperature = boostedTemp;
                     }
                 }
-            } else {
-                // If product is substantial, then push for convergence
+            } else if (stagnationInfo.consecutiveLowValueIterations >= (lowValueThresholdForMetaPush + (stagnationNudgeAggressiveness === 'LOW' ? 1:0))) { 
+                // If product is substantial, but still high low-value iters, then push for convergence more strongly
                 nextConfig.temperature = FOCUSED_END_DEFAULTS.temperature;
                 nextConfig.topK = FOCUSED_END_DEFAULTS.topK;
                 nextConfig.topP = FOCUSED_END_DEFAULTS.topP;
-                rationales.push(`Heuristic Convergence Push (Code): High low-value iterations (${stagnationInfo.consecutiveLowValueIterations}); aggressively setting params to focused targets (T:${nextConfig.temperature.toFixed(2)}, K:${nextConfig.topK}, P:${nextConfig.topP.toFixed(2)}) to confirm convergence.`);
+                rationales.push(`Heuristic Convergence Push (Code): High low-value iterations (${stagnationInfo.consecutiveLowValueIterations}) on a mature product; aggressively setting params to focused targets (T:${nextConfig.temperature.toFixed(2)}, K:${nextConfig.topK}, P:${nextConfig.topP.toFixed(2)}) to confirm convergence.`);
             }
         } else if (stagnationNudgeEnabled && stagnationInfo.isStagnant && stagnationInfo.consecutiveStagnantIterations >= (stagnationNudgeAggressiveness === 'HIGH' ? 2 : 3) && stagnationInfo.nudgeStrategyApplied !== 'meta_instruct' && (currentIteration + 1) > (maxIterations / 2) && (currentIteration +1) > DETERMINISTIC_TARGET_ITERATION ) {
             const targetTemp = Math.min(nextConfig.temperature, FOCUSED_END_DEFAULTS.temperature + 0.05);
@@ -169,15 +190,15 @@ export const reevaluateStrategy = async (
         const lastModelUsed = currentModelForIteration || nextModelName;
         const stagnationTriggerCount = stagnationNudgeAggressiveness === 'HIGH' ? 1 : (stagnationNudgeAggressiveness === 'MEDIUM' ? 2 : 3);
 
-        if (stagnationNudgeEnabled && stagnationInfo.consecutiveStagnantIterations >= stagnationTriggerCount ) {
+        if (stagnationNudgeEnabled && (stagnationInfo.consecutiveStagnantIterations >= stagnationTriggerCount || stagnationInfo.consecutiveLowValueIterations >= (stagnationTriggerCount +1) ) ) {
             if (lastModelUsed.includes('flash') || lastModelUsed.includes('lite') || lastModelUsed === 'gemini-pro') {
                 nextModelName = 'gemini-2.5-pro';
-                rationales.push(`Heuristic Model Switch (Code): Stagnation (${stagnationInfo.consecutiveStagnantIterations}x with ${lastModelUsed}); switching to Gemini 2.5 Pro for potentially higher reasoning.`);
+                rationales.push(`Heuristic Model Switch (Code): Stagnation/LowValue (${stagnationInfo.consecutiveStagnantIterations}/${stagnationInfo.consecutiveLowValueIterations}x with ${lastModelUsed}); switching to Gemini 2.5 Pro for potentially higher reasoning.`);
             } else if (lastModelUsed.includes('pro') && inputComplexity === 'COMPLEX') {
                 nextModelName = 'gemini-2.5-flash-preview-04-17';
-                rationales.push(`Heuristic Model Switch (Code): Stagnation on ${lastModelUsed} with complex input; switching to Flash Preview for a different approach (cost/speed focus).`);
+                rationales.push(`Heuristic Model Switch (Code): Stagnation/LowValue on ${lastModelUsed} with complex input; switching to Flash Preview for a different approach (cost/speed focus).`);
             }
-        } else if (stagnationNudgeEnabled && stagnationInfo.consecutiveStagnantIterations === 0 && lastModelUsed.includes('pro') && inputComplexity === 'COMPLEX' && currentIteration > 3) {
+        } else if (stagnationNudgeEnabled && stagnationInfo.consecutiveStagnantIterations === 0 && stagnationInfo.consecutiveLowValueIterations === 0 && lastModelUsed.includes('pro') && inputComplexity === 'COMPLEX' && currentIteration > 3) {
              if (iterationHistory.length > 0) {
                 const prevLog = iterationHistory[iterationHistory.length - 1];
                 if (prevLog && ((prevLog.linesAdded || 0) - (prevLog.linesRemoved || 0) > 20) && (prevLog.aiValidationInfo?.passed ?? true) && (stagnationInfo.similarityWithPrevious ?? 1.0) < 0.90) {
@@ -188,18 +209,36 @@ export const reevaluateStrategy = async (
         }
     }
 
+    // Heuristic Thinking Budget Toggle for Flash models in Global Mode when Strategist is OFF
+    if (!isPlanActive && strategistInfluenceLevel === 'OFF' && nextModelName === 'gemini-2.5-flash-preview-04-17' &&
+        (stagnationInfo.consecutiveStagnantIterations >= 2 || stagnationInfo.consecutiveLowValueIterations >=2)) {
+        const currentBudget = nextConfig.thinkingConfig?.thinkingBudget;
+        if (currentBudget === 1) {
+            nextConfig.thinkingConfig = { thinkingBudget: 0 };
+            rationales.push(`Heuristic Thinking Toggle (Code): Stagnation detected, Flash thinking budget set to 0 (was 1).`);
+        } else if (currentBudget === 0) {
+            nextConfig.thinkingConfig = { thinkingBudget: 1 };
+            rationales.push(`Heuristic Thinking Toggle (Code): Stagnation detected, Flash thinking budget set to 1 (was 0).`);
+        } else { // If undefined or other, set to a default (e.g., 1 if not already trying 0)
+            nextConfig.thinkingConfig = { thinkingBudget: 1 };
+            rationales.push(`Heuristic Thinking Toggle (Code): Stagnation detected, Flash thinking budget set to 1 (was undefined/other).`);
+        }
+    }
+
+
     let strategistAdvice: StrategistAdvice | null = null;
     let currentRefinementFocusHint = "General Refinement";
-    if (stagnationInfo.consecutiveLowValueIterations >= 1) {
-      currentRefinementFocusHint = "Polish/Convergence Attempt";
+    const currentProductLength = currentProduct?.length || 0;
+
+    if (stagnationInfo.consecutiveLowValueIterations >= 1 || stagnationInfo.consecutiveIdenticalProductIterations >=1) {
+      currentRefinementFocusHint = currentProductLength < MIN_CHARS_FOR_DEVELOPED_PRODUCT ? "Expansion (Product appears underdeveloped due to low value/identical iters)" : "Polish/Convergence Attempt (High low value/identical iters on mature product)";
     } else if (activeMetaInstructionForThisIteration?.toLowerCase().includes("expand") || activeMetaInstructionForThisIteration?.toLowerCase().includes("elaborate")) {
       currentRefinementFocusHint = "Expansion";
-    } else if (currentProduct && currentProduct.length < 2000 && inputComplexity !== 'SIMPLE') {
+    } else if (currentProductLength < MIN_CHARS_FOR_DEVELOPED_PRODUCT && inputComplexity !== 'SIMPLE') {
       currentRefinementFocusHint = "Expansion (Product appears underdeveloped)";
     }
 
     if (strategistInfluenceLevel !== 'OFF') {
-        const lastLogEntry = iterationHistory.length > 0 ? iterationHistory[iterationHistory.length - 1] : undefined;
         let currentGoal = "Global Mode: General refinement towards user's implicit objective.";
         if (isPlanActive && currentPlanStageIndex !== null && planStages && planStages[currentPlanStageIndex]) {
             const stage = planStages[currentPlanStageIndex];
@@ -219,16 +258,23 @@ export const reevaluateStrategy = async (
             })
             .filter(summary => summary.length > 0);
 
-        const currentProductLength = currentProduct ? currentProduct.length : 0;
-
-        strategistAdvice = await getStrategicAdviceFromLLM(
-            currentIteration, maxIterations, inputComplexity,
-            currentModelForIteration, currentAppliedModelConfig,
+        const strategistContext: StrategistLLMContext = {
+            currentIteration,
+            maxIterations,
+            inputComplexity,
+            lastUsedModel: currentModelForIteration,
+            lastUsedConfig: currentAppliedModelConfig,
             stagnationInfo,
-            lastLogEntry?.aiValidationInfo,
-            currentGoal, recentIterationSummaries, currentProductLength,
-            currentRefinementFocusHint
-        );
+            stagnationNudgeAggressiveness,
+            lastNValidationSummariesString: lastNValidationSummariesString || "No recent validation summaries.",
+            currentGoal,
+            recentIterationSummaries,
+            productDevelopmentState,
+            stagnationSeverity,
+            recentIterationPerformance,
+            currentRefinementFocusHint,
+        };
+        strategistAdvice = await getStrategicAdviceFromLLM(strategistContext);
     } else {
         rationales.push("Strategist LLM consultation skipped: Influence level set to 'OFF'. Using code heuristics only.");
     }
