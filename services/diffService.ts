@@ -10,13 +10,29 @@ const normalizeNewlines = (str: string): string => {
   return str.replace(/\r\n/g, '\n');
 };
 
+// Helper function to remove literal diff markers from the end of a string
+const cleanDiffMarkerLiterals = (text: string): string => {
+  let cleanedText = text;
+  const markers = [
+    "\n\\ No newline at end of file", // Marker on its own line after a newline
+    "\\ No newline at end of file"   // Marker directly after content
+  ];
+  for (const marker of markers) {
+    if (cleanedText.endsWith(marker)) {
+      cleanedText = cleanedText.substring(0, cleanedText.length - marker.length);
+    }
+  }
+  return cleanedText;
+};
+
+
 export const reconstructProduct = (
   targetIteration: number,
   history: IterationLogEntry[],
   baseFileManifestInput: string
 ): ReconstructedProductResult => {
-  // Normalize the baseFileManifestInput upfront.
-  const baseFileManifest = normalizeNewlines(baseFileManifestInput);
+  // Normalize and clean the baseFileManifestInput upfront.
+  const baseFileManifest = cleanDiffMarkerLiterals(normalizeNewlines(baseFileManifestInput));
 
   if (targetIteration < 0) {
     const errorMsg = `reconstructProduct: Called with invalid targetIteration ${targetIteration}. Returning normalized baseFileManifest.`;
@@ -34,7 +50,7 @@ export const reconstructProduct = (
         const patchObject = patchObjects[0];
         const patchedResult = Diff.applyPatch("", patchObject);
         if (typeof patchedResult === 'string') {
-          iterationZeroProduct = patchedResult; // Result from patch should be \n consistent
+          iterationZeroProduct = cleanDiffMarkerLiterals(patchedResult); // Clean here
         } else {
           iterationZeroError = `CRITICAL: Failed to apply patch for Iteration 0 (applyPatch returned false). Base product (from empty string) could not be established. Reconstruction halted.`;
           console.error(`reconstructProduct: ${iterationZeroError} Patch was from "" to intended Iteration 0 product. Hunks (first 2): ${JSON.stringify(patchObject.hunks?.slice(0,2))}`);
@@ -52,12 +68,13 @@ export const reconstructProduct = (
     }
   } else if (iterZeroEntry && (!iterZeroEntry.productDiff || iterZeroEntry.productDiff.trim() === "")) {
      if (history.find(entry => entry.iteration === 0 && entry.fileProcessingInfo && entry.fileProcessingInfo.numberOfFilesActuallySent > 0)){
-        iterationZeroProduct = ""; // Empty string is already normalized
+        iterationZeroProduct = ""; 
      } else {
-        iterationZeroProduct = baseFileManifest; // Already normalized at the start of the function
+        iterationZeroProduct = baseFileManifest; 
      }
+     iterationZeroProduct = cleanDiffMarkerLiterals(iterationZeroProduct); // Clean here as well
   } else if (!iterZeroEntry && targetIteration >= 0) {
-    iterationZeroProduct = baseFileManifest; // Already normalized at the start of the function
+    iterationZeroProduct = baseFileManifest; // Already cleaned at the start
     if (targetIteration > 0) {
         console.warn(`reconstructProduct: No Iteration 0 log entry found, but target is ${targetIteration}. Using baseFileManifest ("${baseFileManifest.substring(0,50)}...") as starting point.`);
     }
@@ -68,7 +85,7 @@ export const reconstructProduct = (
     return { product: iterationZeroProduct, error: iterationZeroError };
   }
 
-  let currentText = iterationZeroProduct; // Starts normalized
+  let currentText = iterationZeroProduct; 
   let cumulativeError = iterationZeroError; 
   
   const sortedHistory = [...history].filter(entry => entry.iteration > 0 && entry.iteration <= targetIteration).sort((a, b) => a.iteration - b.iteration);
@@ -82,10 +99,9 @@ export const reconstructProduct = (
           if (!patchObject.hunks || patchObject.hunks.length === 0) {
             console.warn(`reconstructProduct: Patch for Iteration ${logEntry.iteration} (from diff string) resulted in no hunks. Assuming no textual change from Iteration ${logEntry.iteration-1}.`);
           } else {
-            // currentText should be \n normalized here if previous steps worked.
             const patchedResult = Diff.applyPatch(currentText, patchObject);
             if (typeof patchedResult === 'string') {
-              currentText = patchedResult; // Result of applyPatch with \n patch should also be \n
+              currentText = cleanDiffMarkerLiterals(patchedResult); // Clean after every successful patch
             } else {
               const errorMsg = `Failed to apply parsed patch for Iteration ${logEntry.iteration} (applyPatch returned false). Reconstruction stopped at Iteration ${logEntry.iteration - 1}.`;
               console.error(`reconstructProduct: ${errorMsg} Patch Hunks (first 2): ${JSON.stringify(patchObject.hunks?.slice(0,2))}. Current text (first 100): "${currentText.substring(0, 100)}..."`);

@@ -766,7 +766,15 @@ export const useIterativeLogic = (
             apiStreamDetails: apiResultForLog?.apiStreamDetails,
             linesAdded: 0, linesRemoved: 0,
           };
-          const aiValidationResult: IsLikelyAiErrorResponseResult = isLikelyAiErrorResponse( iterationProductFromApi, previousProductSnapshot || "", tempLogEntryForValidation, isThisIterationTargeted ? undefined : activePlanStage?.length, isThisIterationTargeted ? undefined : activePlanStage?.format );
+
+          const aiValidationResult: IsLikelyAiErrorResponseResult = isLikelyAiErrorResponse(
+            iterationProductFromApi,
+            previousProductSnapshot || "",
+            tempLogEntryForValidation,
+            outlineForSinglePassIter1, // Pass the correctly scoped outline info
+            isThisIterationTargeted ? undefined : activePlanStage?.length,
+            isThisIterationTargeted ? undefined : activePlanStage?.format
+          );
           validationInfoForLog = aiValidationResult.checkDetails ? { checkName: "AIResponseValidation", passed: !aiValidationResult.isError, reason: aiValidationResult.reason, details: aiValidationResult.checkDetails } : undefined;
 
           let isCritFailureFromValidation = false;

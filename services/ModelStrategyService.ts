@@ -5,8 +5,8 @@ import { CONVERGED_PREFIX } from './promptBuilderService';
 import { STAGNATION_TEMP_NUDGE_LIGHT, STAGNATION_TOPP_NUDGE_LIGHT, STAGNATION_TOPK_NUDGE_FACTOR_LIGHT, STAGNATION_TEMP_NUDGE_HEAVY, STAGNATION_TOPP_NUDGE_HEAVY, STAGNATION_TOPK_NUDGE_FACTOR_HEAVY } from '../hooks/useModelParameters';
 import { SELECTABLE_MODELS } from '../types.ts';
 
-// Changed from 20 to 5 for a much faster sweep to deterministic values, especially temperature.
-export const DETERMINISTIC_TARGET_ITERATION = 5;
+// Changed from 5 to 20 for a more gradual sweep to deterministic values.
+export const DETERMINISTIC_TARGET_ITERATION = 20;
 
 // Set temperature to 0.0, topP to 0.9, and topK to 5 for absolute determinism target.
 // Nudges will temporarily make temperature > 0 for topP/topK to have effect.
@@ -121,13 +121,20 @@ export const reevaluateStrategy = async (
             const actualTempNudge = baseTempNudge * tempNudgeMultiplier;
             const actualPNudge = basePNudge * pNudgeMultiplier;
             const actualKFactor = 1.0 + (baseKFactorChange * kFactorMultiplier);
+            
+            const preNudgeTemp = nextConfig.temperature;
+            if (preNudgeTemp < 0.1) { // If already very low
+                nextConfig.temperature = Math.max(preNudgeTemp + actualTempNudge, 0.2); // Ensure nudge brings it to at least 0.2
+                 if (nextConfig.temperature === 0.2 && preNudgeTemp + actualTempNudge < 0.2) { // Log if boosted to minimum
+                    rationales.push(`Heuristic Nudge Detail: Temp was very low (${preNudgeTemp.toFixed(3)}), boosted to minimum 0.2 for nudge effectiveness (planned nudge was to ${(preNudgeTemp + actualTempNudge).toFixed(3)}).`);
+                }
+            } else {
+                nextConfig.temperature += actualTempNudge;
+            }
 
-            // IMPORTANT: Nudge temperature to be non-zero for topP/topK to have effect if base is 0.0
-            if (nextConfig.temperature === 0.0) nextConfig.temperature = 0.01; // Minimal non-zero
-            nextConfig.temperature += actualTempNudge;
             nextConfig.topP += actualPNudge;
             nextConfig.topK = Math.max(1, Math.round(nextConfig.topK * actualKFactor));
-            rationales.push(`Heuristic Nudge (Code): Stagnation (${stagnationInfo.consecutiveStagnantIterations}x) triggered '${stagnationInfo.nudgeStrategyApplied}' (Aggressiveness: ${stagnationNudgeAggressiveness}). Applied T+=${actualTempNudge.toFixed(3)}, P+=${actualPNudge.toFixed(3)}, K*=${actualKFactor.toFixed(3)} to swept params.`);
+            rationales.push(`Heuristic Nudge (Code): Stagnation (${stagnationInfo.consecutiveStagnantIterations}x) triggered '${stagnationInfo.nudgeStrategyApplied}' (Aggressiveness: ${stagnationNudgeAggressiveness}). Applied T from ${preNudgeTemp.toFixed(3)} to ${nextConfig.temperature.toFixed(3)}, P+=${actualPNudge.toFixed(3)}, K*=${actualKFactor.toFixed(3)} to swept params.`);
         }
 
         const productIsLikelyUnderdeveloped = (currentProduct?.length || 0) < 2000 && inputComplexity !== 'SIMPLE';
@@ -136,9 +143,11 @@ export const reevaluateStrategy = async (
                 activeMetaInstructionForThisIteration = "The product seems underdeveloped or stuck in minor edits. Please focus on substantial conceptual expansion, adding more details, examples, or exploring new perspectives based on the original source material.";
                 rationales.push(`Heuristic Expansion Push (Code): High low-value iterations (${stagnationInfo.consecutiveLowValueIterations}) on a potentially underdeveloped product. Applying expansionary meta-instruction.`);
                 if (nextConfig.temperature < 0.2) {
-                    nextConfig.temperature = Math.min(0.3, baseUserConfig.temperature < 0.1 ? 0.2 : baseUserConfig.temperature * 0.5); // Ensure it's not too low if base was 0
-                    if (nextConfig.temperature === 0.0) nextConfig.temperature = 0.1; // Ensure non-zero for expansion nudge
-                    rationales.push(`Heuristic Expansion Push (Code): Temporarily nudging temperature to ${nextConfig.temperature.toFixed(2)} to aid expansion.`);
+                    const boostedTemp = Math.max(0.2, Math.min(0.3, baseUserConfig.temperature < 0.1 ? 0.2 : baseUserConfig.temperature * 0.5));
+                    if (boostedTemp > nextConfig.temperature) {
+                         rationales.push(`Heuristic Expansion Push (Code): Temporarily nudging temperature from ${nextConfig.temperature.toFixed(2)} to ${boostedTemp.toFixed(2)} to aid expansion.`);
+                         nextConfig.temperature = boostedTemp;
+                    }
                 }
             } else {
                 // If product is substantial, then push for convergence
@@ -148,8 +157,8 @@ export const reevaluateStrategy = async (
                 rationales.push(`Heuristic Convergence Push (Code): High low-value iterations (${stagnationInfo.consecutiveLowValueIterations}); aggressively setting params to focused targets (T:${nextConfig.temperature.toFixed(2)}, K:${nextConfig.topK}, P:${nextConfig.topP.toFixed(2)}) to confirm convergence.`);
             }
         } else if (stagnationNudgeEnabled && stagnationInfo.isStagnant && stagnationInfo.consecutiveStagnantIterations >= (stagnationNudgeAggressiveness === 'HIGH' ? 2 : 3) && stagnationInfo.nudgeStrategyApplied !== 'meta_instruct' && (currentIteration + 1) > (maxIterations / 2) && (currentIteration +1) > DETERMINISTIC_TARGET_ITERATION ) {
-            nextConfig.temperature = Math.min(nextConfig.temperature, FOCUSED_END_DEFAULTS.temperature + 0.05); // slightly above target end (0.0 to 0.05)
-            if (nextConfig.temperature === 0.0 && FOCUSED_END_DEFAULTS.temperature === 0.0) nextConfig.temperature = 0.01; // If still 0, make it tiny non-zero
+            const targetTemp = Math.min(nextConfig.temperature, FOCUSED_END_DEFAULTS.temperature + 0.05);
+            nextConfig.temperature = (targetTemp === 0.0 && FOCUSED_END_DEFAULTS.temperature === 0.0) ? 0.01 : targetTemp;
             nextConfig.topK = Math.max(FOCUSED_END_DEFAULTS.topK, Math.min(nextConfig.topK, FOCUSED_END_DEFAULTS.topK + 2)); // close to target
             nextConfig.topP = FOCUSED_END_DEFAULTS.topP;
             rationales.push(`Heuristic Convergence Push (Code): High stagnation (${stagnationInfo.consecutiveStagnantIterations}x) late in process; aggressively pushing params towards focused targets: T->${nextConfig.temperature.toFixed(2)}, K->${nextConfig.topK}, P->${nextConfig.topP.toFixed(2)}.`);
@@ -318,7 +327,7 @@ export const reevaluateStrategy = async (
         if (nextConfig.thinkingConfig) {
             delete nextConfig.thinkingConfig;
             rationales.push(`Heuristic Correction: Removed thinking config as final model chosen ('${nextModelName}') does not support it or is not 'gemini-2.5-flash-preview-04-17'.`);
-        } // Fixed: Added missing closing brace here
+        }
     }
     nextConfig = sanitizeConfig(nextConfig, rationales);
 

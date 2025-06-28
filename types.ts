@@ -271,6 +271,15 @@ export interface PromptLeakageDetailValue {
   snippet: string;
 }
 
+export interface AiResponseValidationInfoDetailsValue_InitialSynthesis extends Partial<ReductionDetailValue> {
+    inputBytes?: number;
+    outputChars?: number;
+    isOutlineDriven?: boolean;
+    factorUsed?: number;
+    phrase?: string; // For error phrase variants
+}
+
+
 export interface AiResponseValidationInfo {
   checkName: string;
   passed: boolean; // True if validation passed (no error/warning), False if error/warning detected
@@ -282,7 +291,8 @@ export interface AiResponseValidationInfo {
       | 'invalid_json'                             // Critical: Malformed JSON when expected
       | 'passed'                                   // Info: All checks passed
       | 'prompt_leakage'                           // Critical: Prompt content detected in response
-      | 'initial_synthesis_failed_large_output'    // Critical: Iteration 1 output too large vs input
+      | 'initial_synthesis_failed_large_output'    // Critical: Iteration 1 output too large vs input (non-outline driven)
+      | 'initial_synthesis_tolerated_large_output_outline_driven' // Info: Iteration 1 (outline-driven) output large, but tolerated
       | 'catastrophic_collapse'                    // Critical: Output became trivially small uninstructed
       | 'error_phrase_with_significant_reduction'  // Critical: Error phrase + significant uninstructed reduction
       | 'extreme_reduction_error'                  // Critical: Uninstructed extreme reduction (e.g., Plan Mode)
@@ -293,9 +303,10 @@ export interface AiResponseValidationInfo {
       | 'drastic_reduction_with_error_phrase'      // Critical: Drastic reduction + error phrase
       | 'drastic_reduction_tolerated_global_mode'  // Info: Drastic reduction in Global Mode, no other errors
       | 'drastic_reduction_tolerated_instruction'; // Info: Drastic reduction, but was instructed
-    value?: string | ReductionDetailValue | PromptLeakageDetailValue | { [key: string]: any };
+    value?: string | ReductionDetailValue | PromptLeakageDetailValue | AiResponseValidationInfoDetailsValue_InitialSynthesis | { [key: string]: any };
   };
 }
+
 
 export interface CommonControlProps {
   commonInputClasses: string;
@@ -397,4 +408,11 @@ export interface StrategistAdvice {
     suggestedTemperature?: number;
     suggestedTopP?: number;
     suggestedTopK?: number;
+}
+
+// This declaration allows AiResponseValidationInfo.details.type to include the new type
+// and AiResponseValidationInfo.details.value to include the new value shape.
+declare module './types' { // Or the actual path to types.ts from itself if it's nested.
+    // This is often not needed if all types are in one file.
+    // If types.ts is the single source of truth, direct modification is usually sufficient.
 }

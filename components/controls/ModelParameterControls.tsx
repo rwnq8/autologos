@@ -26,7 +26,7 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
 - Temperature: ${planCtx.isPlanActive ? 'Fixed creativity level for plan stages.' : 'STARTING creativity level (0.0-2.0). Higher (e.g., 0.9) for diverse, lower (e.g., 0.2) for focused. Will decrease over iterations in Global Mode.'}
 - Top-P: ${planCtx.isPlanActive ? 'Fixed nucleus sampling probability for plan stages.' : 'STARTING nucleus sampling (0.0-1.0). Filters by cumulative probability. Will decrease in Global Mode.'}
 - Top-K: ${planCtx.isPlanActive ? 'Fixed token selection limit for plan stages.' : 'STARTING token selection limit (1-100+). Filters to K most likely tokens. Will decrease in Global Mode.'}
-- Max Iterations: ${planCtx.isPlanActive ? 'Total iterations determined by plan stages.' : 'Max iterations for Global Mode (governs dynamic parameter sweep from creative to focused).'}`;
+- Max Iterations: ${planCtx.isPlanActive ? 'Total iterations determined by plan stages.' : 'Max iterations for Global Mode (governs dynamic parameter sweep from creative to focused). Target for deterministic params: Iteration 20.'}`;
 
   const getSettingsNoteAndRationales = () => {
     let noteText = "";

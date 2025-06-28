@@ -1,6 +1,6 @@
 // services/iterationUtils.ts
 
-import type { OutputLength, OutputFormat, IsLikelyAiErrorResponseResult, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile } from '../types.ts';
+import type { OutputLength, OutputFormat, IsLikelyAiErrorResponseResult, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult } from '../types.ts';
 import { countWords } from './textAnalysisService'; // Assuming countWords is exported
 
 // --- Constants for Content Reduction Checks ---
@@ -18,11 +18,14 @@ const DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD = 0.50;
 const SIGNIFICANT_REDUCTION_WITH_ERROR_PHRASE_THRESHOLD = 0.80; // new is <80% of old
 
 // Initial Synthesis Check (Iteration 1 specific)
-const INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES = 2.0; 
-const CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT = 1.5; 
-const TEXT_DOMINANT_THRESHOLD_PERCENT = 0.80; 
-const MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 = 500 * 1024; 
-const ABSOLUTE_MAX_CHARS_ITER1_PRODUCT = 1200000; 
+const INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES = 2.0;
+const INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES_OUTLINE_DRIVEN = 50.0; // New factor for outline-driven
+const CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT = 1.5;
+const CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT_OUTLINE_DRIVEN = 25.0; // New factor for outline-driven
+
+const TEXT_DOMINANT_THRESHOLD_PERCENT = 0.80;
+const MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 = 500 * 1024;
+const ABSOLUTE_MAX_CHARS_ITER1_PRODUCT = 1200000;
 
 // Catastrophic Collapse Check
 const MIN_CHARS_FOR_CATASTROPHIC_COLLAPSE = 20;
@@ -115,8 +118,9 @@ export function isLikelyAiErrorResponse(
   newProduct: string,
   previousProduct: string,
   currentLogEntryForValidation: IterationLogEntry,
-  lengthInstruction?: OutputLength, // From PlanStage
-  formatInstruction?: OutputFormat  // From PlanStage
+  initialOutlineForIter1?: OutlineGenerationResult, // New parameter
+  lengthInstruction?: OutputLength,
+  formatInstruction?: OutputFormat
 ): IsLikelyAiErrorResponseResult {
   const newCleanedForErrorPhrases = newProduct.trim().toLowerCase();
   const newLengthChars = newProduct.trim().length;
@@ -124,8 +128,8 @@ export function isLikelyAiErrorResponse(
   const newWordCount = countWords(newProduct);
   const prevWordCount = countWords(previousProduct);
 
-  const isGlobalModeContext = !lengthInstruction && !formatInstruction; // True if not in a specific plan stage with these instructions
-  const isInstructedToShortenOrCondense = lengthInstruction === 'shorter' || 
+  const isGlobalModeContext = !lengthInstruction && !formatInstruction;
+  const isInstructedToShortenOrCondense = lengthInstruction === 'shorter' ||
                                       (formatInstruction && ['key_points', 'outline'].includes(formatInstruction));
 
 
@@ -153,7 +157,7 @@ export function isLikelyAiErrorResponse(
       return { isError: true, reason: `CRITICAL: AI response appears to contain parts of the input prompt instructions (marker: "${marker}").`, checkDetails: { type: 'prompt_leakage', value: { marker, snippet } as PromptLeakageDetailValue }};
     }
   }
-  
+
   // 3. Catastrophic Collapse
   if (prevLengthChars >= PREVIOUS_MIN_CHARS_FOR_CATASTROPHIC_CHECK &&
       newLengthChars < MIN_CHARS_FOR_CATASTROPHIC_COLLAPSE &&
@@ -177,29 +181,66 @@ export function isLikelyAiErrorResponse(
   if (foundErrorPhrase && prevLengthChars > MIN_CHARS_FOR_REDUCTION_CHECK && newLengthChars < prevLengthChars * SIGNIFICANT_REDUCTION_WITH_ERROR_PHRASE_THRESHOLD && !isInstructedToShortenOrCondense) {
     return { isError: true, reason: `CRITICAL: AI response contains an error/stall phrase ("${foundErrorPhrase}") AND resulted in significant content reduction (>20%) without instruction.`, checkDetails: { type: 'error_phrase_with_significant_reduction', value: { phrase: foundErrorPhrase, previousLengthChars: prevLengthChars, newLengthChars: newLengthChars, percentageCharChange: parseFloat(((newLengthChars / prevLengthChars - 1) * 100).toFixed(2))} as any }};
   }
-  
+
   // 6. Initial Synthesis Check for Iteration 1 (Large Output vs Input)
-  if (currentLogEntryForValidation.iteration === 1 && currentLogEntryForValidation.fileProcessingInfo && currentLogEntryForValidation.fileProcessingInfo.numberOfFilesActuallySent > 0 && currentLogEntryForValidation.fileProcessingInfo.totalFilesSizeBytesSent > 0) {
+  if (currentLogEntryForValidation.iteration === 1 &&
+      currentLogEntryForValidation.fileProcessingInfo &&
+      currentLogEntryForValidation.fileProcessingInfo.numberOfFilesActuallySent > 0 &&
+      currentLogEntryForValidation.fileProcessingInfo.totalFilesSizeBytesSent > 0) {
+
     const { totalFilesSizeBytesSent } = currentLogEntryForValidation.fileProcessingInfo;
-    const loadedFilesForIter1 = currentLogEntryForValidation.fileProcessingInfo.loadedFilesForIterationContext || []; 
-    let synthesisFailed = false; let synthesisReason = "";
+    const loadedFilesForIter1 = currentLogEntryForValidation.fileProcessingInfo.loadedFilesForIterationContext || [];
+    let synthesisFailed = false;
+    let synthesisReason = "";
+    const isOutlineDriven = !!initialOutlineForIter1;
+
     const textFiles = loadedFilesForIter1.filter(f => f.mimeType.startsWith('text/'));
-    if (textFiles.length / loadedFilesForIter1.length >= TEXT_DOMINANT_THRESHOLD_PERCENT || textFiles.reduce((sum, f) => sum + f.size, 0) / totalFilesSizeBytesSent >= TEXT_DOMINANT_THRESHOLD_PERCENT ) {
+    const isTextDominant = textFiles.length / loadedFilesForIter1.length >= TEXT_DOMINANT_THRESHOLD_PERCENT ||
+                           textFiles.reduce((sum, f) => sum + f.size, 0) / totalFilesSizeBytesSent >= TEXT_DOMINANT_THRESHOLD_PERCENT;
+
+    let currentTextDominantFactor = isOutlineDriven ? CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT_OUTLINE_DRIVEN : CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT;
+    let currentByteExpansionFactor = isOutlineDriven ? INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES_OUTLINE_DRIVEN : INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES;
+
+    if (isTextDominant) {
       const totalEstimatedInputChars = textFiles.reduce((sum, f) => sum + estimateCharsFromBase64Text(f.base64Data), 0);
-      if (totalEstimatedInputChars > 0 && newLengthChars > totalEstimatedInputChars * CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT) {
-        synthesisFailed = true; synthesisReason = `Initial synthesis from text-dominant files likely failed. Output product size (${newLengthChars} chars) is much larger (>${CHAR_EXPANSION_FACTOR_ITER1_TEXT_DOMINANT}x) than estimated input character count (${totalEstimatedInputChars} chars).`;
+      if (totalEstimatedInputChars > 0 && newLengthChars > totalEstimatedInputChars * currentTextDominantFactor) {
+        synthesisFailed = true;
+        synthesisReason = `Initial synthesis from text-dominant files ${isOutlineDriven ? "(outline-driven)" : ""} resulted in output (${newLengthChars} chars) much larger (>${currentTextDominantFactor}x) than input characters (${totalEstimatedInputChars} chars).`;
       }
     }
+
     if (!synthesisFailed && totalFilesSizeBytesSent < MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 && newLengthChars > ABSOLUTE_MAX_CHARS_ITER1_PRODUCT) {
-      synthesisFailed = true; synthesisReason = `Initial synthesis from files (<${MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 / 1024}KB) likely failed. Output product size (${newLengthChars} chars) exceeds absolute limit of ${ABSOLUTE_MAX_CHARS_ITER1_PRODUCT} chars.`;
+      synthesisFailed = true;
+      synthesisReason = `Initial synthesis from files (<${MAX_INPUT_BYTES_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 / 1024}KB) ${isOutlineDriven ? "(outline-driven)" : ""} likely failed. Output product size (${newLengthChars} chars) exceeds absolute limit of ${ABSOLUTE_MAX_CHARS_ITER1_PRODUCT} chars.`;
     }
-    if (!synthesisFailed && newLengthChars > totalFilesSizeBytesSent * INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES) {
-        synthesisFailed = true; synthesisReason = `Initial synthesis from multiple files likely failed. Output product size (${newLengthChars} chars) is excessively larger (>${INITIAL_SYNTHESIS_OUTPUT_SIZE_FACTOR_VS_INPUT_BYTES}x) than total input file size (${totalFilesSizeBytesSent} bytes).`;
+
+    if (!synthesisFailed && newLengthChars > totalFilesSizeBytesSent * currentByteExpansionFactor) {
+        synthesisFailed = true;
+        synthesisReason = `Initial synthesis ${isOutlineDriven ? "(outline-driven)" : ""} resulted in output (${newLengthChars} chars) much larger (>${currentByteExpansionFactor}x) than total input file size (${totalFilesSizeBytesSent} bytes).`;
     }
+
     if (synthesisFailed) {
-      return { isError: true, reason: `CRITICAL: ${synthesisReason} This suggests a data dump rather than synthesis.`, checkDetails: { type: 'initial_synthesis_failed_large_output', value: { inputBytes: totalFilesSizeBytesSent, outputChars: newLengthChars } as any }};
+      if (isOutlineDriven) {
+        // For outline-driven synthesis, large expansion might be acceptable.
+        return {
+          isError: false, // Not a critical error, but a note.
+          reason: `${synthesisReason} This may be acceptable for outline-driven synthesis. Manual review advised.`,
+          checkDetails: {
+            type: 'initial_synthesis_tolerated_large_output_outline_driven',
+            value: { inputBytes: totalFilesSizeBytesSent, outputChars: newLengthChars, isOutlineDriven: true, factorUsed: isTextDominant ? currentTextDominantFactor : currentByteExpansionFactor } as any
+          }
+        };
+      } else {
+        // For non-outline-driven, this is likely a critical error.
+        return {
+          isError: true,
+          reason: `CRITICAL: ${synthesisReason} This suggests a data dump rather than synthesis.`,
+          checkDetails: { type: 'initial_synthesis_failed_large_output', value: { inputBytes: totalFilesSizeBytesSent, outputChars: newLengthChars, isOutlineDriven: false } as any }
+        };
+      }
     }
   }
+
 
   // 7. Reduction Checks (Extreme and Drastic)
   if (prevLengthChars >= MIN_CHARS_FOR_REDUCTION_CHECK && prevWordCount >= MIN_WORDS_FOR_REDUCTION_CHECK) {
@@ -253,9 +294,9 @@ export function isLikelyAiErrorResponse(
       }
     }
   }
-  
+
   // --- Lower Priority Checks ---
-  
+
   // 8. Empty JSON response
   if (newLengthChars === 0 && formatInstruction === 'json') {
     return { isError: true, reason: "AI returned an empty response when JSON format was expected.", checkDetails: { type: 'empty_json' }};
@@ -304,5 +345,13 @@ export const parseAndCleanJsonOutput = (rawJsonString: string): string => {
 declare module '../types.ts' {
   interface FileProcessingInfo {
     loadedFilesForIterationContext?: LoadedFile[];
+  }
+  interface AiResponseValidationInfoDetailsValue { // To extend the union type for value
+      isOutlineDriven?: boolean;
+      factorUsed?: number;
+  }
+  interface AiResponseValidationInfoDetails { // To extend the union type for type
+    type: // ... existing types
+      | 'initial_synthesis_tolerated_large_output_outline_driven'; // Add new type
   }
 }

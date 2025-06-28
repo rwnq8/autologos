@@ -19,7 +19,7 @@ const API_KEY: string | undefined = (() => {
         return undefined;
       }
     } else {
-      console.warn("Could not access process.env. This is expected in some environments (like browsers). Gemini API calls will be disabled if a key is not found.");
+      console.warn("Could not access process.env. This is expected in some environments (like browsers). Gemini API calls will be disabled if a key is not found by other means.");
       return undefined;
     }
   } catch (e) {
@@ -135,12 +135,12 @@ export const getStrategicAdviceFromLLM = async (
     inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX',
     lastUsedModel: SelectableModelName | undefined,
     lastUsedConfig: ModelConfig | null | undefined,
-    stagnationInfo: StagnationInfo, 
+    stagnationInfo: StagnationInfo,
     lastValidationInfo: AiResponseValidationInfo | undefined,
     currentGoal: string,
     recentIterationSummaries: string[],
     currentProductLengthChars?: number,
-    currentRefinementFocusHint?: string 
+    currentRefinementFocusHint?: string
 ): Promise<StrategistAdvice | null> => {
     if (!ai || !apiKeyAvailable) {
         console.warn("Strategist LLM call skipped: API key or client not available.");
@@ -186,7 +186,7 @@ export const getStrategicAdviceFromLLM = async (
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
-            const response = await ai.models.generateContent({
+            const response: GenerateContentResponse = await ai.models.generateContent({
                 model: 'gemini-2.5-flash-preview-04-17', 
                 contents: [{ role: "user", parts: [{text: strategistUserPrompt}] }],
                 config: {
