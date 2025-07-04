@@ -52,7 +52,7 @@ const DevLogControls: React.FC<CommonControlProps> = ({
       status: currentStatus,
       tags: currentTags.split(',').map(tag => tag.trim()).filter(tag => tag),
       resolution: currentResolution.trim() || undefined,
-      relatedIteration: currentRelatedIteration ? parseInt(currentRelatedIteration, 10) : undefined,
+      relatedIteration: currentRelatedIteration.trim() || undefined,
     };
 
     if (editingEntry) {
@@ -71,7 +71,7 @@ const DevLogControls: React.FC<CommonControlProps> = ({
     setCurrentStatus(entry.status);
     setCurrentTags((entry.tags || []).join(', '));
     setCurrentResolution(entry.resolution || '');
-    setCurrentRelatedIteration(entry.relatedIteration?.toString() || '');
+    setCurrentRelatedIteration(entry.relatedIteration || '');
     setShowAddForm(true);
     setIsSectionExpanded(true); // Ensure section is expanded when editing
   }, []);
@@ -177,8 +177,8 @@ const DevLogControls: React.FC<CommonControlProps> = ({
                     <input type="text" id="devlog-tags" value={currentTags} onChange={(e) => setCurrentTags(e.target.value)} className={commonInputClasses + " text-sm py-1.5"} placeholder="e.g., UI, API, Bug" disabled={isProcessing}/>
                 </div>
                 <div>
-                    <label htmlFor="devlog-related-iter" className="block text-xs font-medium text-slate-700 dark:text-slate-200 mb-0.5">Related Iteration #</label>
-                    <input type="number" id="devlog-related-iter" value={currentRelatedIteration} onChange={(e) => setCurrentRelatedIteration(e.target.value)} className={commonInputClasses + " text-sm py-1.5"} placeholder="Optional" min="0" step="1" disabled={isProcessing}/>
+                    <label htmlFor="devlog-related-iter" className="block text-xs font-medium text-slate-700 dark:text-slate-200 mb-0.5">Related Version</label>
+                    <input type="text" id="devlog-related-iter" value={currentRelatedIteration} onChange={(e) => setCurrentRelatedIteration(e.target.value)} className={commonInputClasses + " text-sm py-1.5"} placeholder="e.g., v1.2" disabled={isProcessing}/>
                 </div>
               </div>
               <div className="flex justify-end space-x-2 mt-2">
@@ -240,7 +240,7 @@ const DevLogControls: React.FC<CommonControlProps> = ({
                         <span className="text-slate-500 dark:text-slate-400 text-xxs align-middle">
                            {entry.type.toString().charAt(0).toUpperCase() + entry.type.toString().slice(1)} | Created: {new Date(entry.timestamp).toLocaleDateString()}
                            {entry.lastModified !== entry.timestamp ? ` (Modified: ${new Date(entry.lastModified).toLocaleDateString()})`: ''}
-                           {entry.relatedIteration !== undefined ? ` | Iter: ${entry.relatedIteration}` : ''}
+                           {entry.relatedIteration !== undefined ? ` | Version: ${entry.relatedIteration}` : ''}
                         </span>
                     </div>
                   </div>

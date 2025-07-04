@@ -1,7 +1,10 @@
-import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult } from '../types.ts';
+
+
+import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult, Version } from '../types.ts';
+import { formatVersion } from './versionUtils.ts';
 
 export const CONVERGED_PREFIX = "CONVERGED:";
-export const MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT = 250000; // Max chars of current product to include in prompt
+export const MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT = 250000;
 
 export const getOutlineGenerationPromptComponents = (
   fileManifest: string
@@ -34,8 +37,8 @@ REMINDER: Provide ONLY the "Outline:" section and the "Redundancies:" section as
 
 
 export const getUserPromptComponents = (
-  currentIterationOverall: number,
-  maxIterationsOverall: number,
+  currentVersion: Version,
+  maxMajorVersions: number,
   activePlanStage: PlanStage | null,
   outputParagraphShowHeadingsGlobal: boolean,
   outputParagraphMaxHeadingDepthGlobal: number,
@@ -47,246 +50,79 @@ export const getUserPromptComponents = (
   initialOutlineForIter1?: OutlineGenerationResult,
   loadedFilesForContext?: LoadedFile[],
   activeMetaInstruction?: string,
-  // Segmented synthesis params
   isSegmentedSynthesisMode: boolean = false,
   currentSegmentOutlineText?: string,
   fullOutlineForContext?: string,
-  // Targeted refinement params
   isTargetedRefinementMode: boolean = false,
   targetedSelectionText?: string,
   instructionsForTargetedSelection?: string,
-  isRadicalRefinementKickstart: boolean = false // Added for kickstart mode
+  isRadicalRefinementKickstart: boolean = false,
+  devLogContextString?: string,
+  ensembleSubProducts?: string[] | null
 ): { systemInstruction: string, coreUserInstructions: string } => {
   let systemInstructionParts: string[] = [];
+  const { major: majorVersion } = currentVersion;
 
-  if (isRadicalRefinementKickstart) {
+  if (devLogContextString && !devLogContextString.includes("No specific, highly relevant DevLog entries found") && !devLogContextString.includes("DevLog Contextualizer Inactive") && !devLogContextString.includes("No DevLog entries to analyze")) {
     systemInstructionParts.push(
-`You are an AI assistant tasked with a RADICAL REFINEMENT KICKSTART. The previous iterative process has severely stagnated, resulting in minimal meaningful changes or persistent "wordsmithing." Your current task is to break this deadlock.
-CRITICAL OBJECTIVE FOR THIS KICKSTART ITERATION:
-1.  Re-evaluate the "Current State of Product" (provided for context of what FAILED or STALLED) against the original input goals (implicit in the "File Manifest" and "Initial Outline," if available).
-2.  Generate a NEW version of the product (or a key problematic section if guided by the meta-instruction) that is SUBSTANTIALLY and CONCEPTUALLY different.
-3.  Focus on adding NET NEW information, significantly improving DEPTH, offering a FRESH PERSPECTIVE, or radically RESTRUCTURING the content.
-4.  Refer to the full original file data (if files were provided initially) and the initial outline (if one was generated) to ensure core objectives and themes are addressed with sufficient detail and accuracy.
-5.  AVOID superficial changes, minor rephrasing of the same ideas, or simple reordering of sentences. Such "wordsmithing" is explicitly forbidden for this iteration.
-6.  Your output MUST be the complete, new textual product. Do NOT include conversational filler, apologies, or self-references.
-The goal is a qualitative leap in content, not an incremental tweak. Be bold and aim for significant improvement.`
+      `CRITICAL AWARENESS FROM DEVELOPMENT LOG:\nThe following entries from the project's development log have been identified as highly relevant to your current task. Take them into account during your refinement process to avoid past issues, adhere to decisions, or understand key context.\n---\n${devLogContextString}\n---`
     );
-  } else if (isTargetedRefinementMode) {
-    systemInstructionParts.push(
-`You are an AI assistant specialized in targeted text refinement. You will be given a full document ('Current State of Product'), a specific 'Text Selection to Refine' from that document, and 'User Instructions for Refining Selection'.
-Your CRITICAL TASK:
-1. Carefully analyze the 'User Instructions for Refining Selection'.
-2. Rewrite or modify ONLY the 'Text Selection to Refine' according to these instructions.
-3. Seamlessly integrate your refined version of the selection back into the full document context. The parts of the document outside the 'Text Selection to Refine' MUST remain identical, unless minor adjustments are absolutely essential for coherence with the changed selection.
-4. Output the ENTIRE, new document with only the specified selection modified.
-Preserve the original tone and style of the document unless the user instructions for the selection specify otherwise.
-Your output MUST be the complete, new textual product. Do NOT include conversational filler, apologies, or self-references.`
-    );
-  } else if (isSegmentedSynthesisMode && currentIterationOverall === 0) {
-    // ... (existing segmented synthesis system instruction)
-    systemInstructionParts.push(
-`You are an AI assistant specialized in synthesizing ONE PART of a larger document. You will be given:
-1.  The specific outline segment you need to generate content for.
-2.  The full original outline of the entire document (for context).
-3.  Access to ALL original source files.
+  }
 
-Your CRITICAL TASK for THIS SEGMENT:
--   Focus exclusively on the current outline segment provided in the user instructions.
--   Thoroughly scan ALL provided original source files to locate EVERY relevant passage, paragraph, specific detail, data point, and argument that pertains to THIS outline segment.
--   Integrate this information with MAXIMUM DETAIL AND COMPREHENSIVENESS into a well-written narrative for the current segment.
--   If multiple files cover this segment, merge their details comprehensively, prioritizing the most complete or recent versions while ensuring no unique substantive information is lost.
--   De-duplicate information effectively *within this segment*.
--   The conciseness of the outline segment text itself does NOT mean your synthesized content for that segment should be brief. The outline is a structural guide; the detail comes from the files.
--   Your output MUST be ONLY the synthesized text for the current outline segment. Do NOT include the segment heading itself unless it's naturally part of the flow. Do NOT output the entire document.
--   Value added in this task is defined by: 1. Comprehensive inclusion of all relevant detailed information from source files for this segment. 2. Coherent organization of this detailed information. 3. Effective de-duplication of overlapping detailed content for this segment.
--   Information loss by over-summarizing rich file content for this segment is a failure. Your generated text for this segment should be as detailed as the source files allow.
--   Do NOT include conversational filler, apologies, or self-references.
-`);
-  } else {
-    // ... (existing general system instructions)
+  if (ensembleSubProducts && ensembleSubProducts.length > 0 && majorVersion <= 2) {
     systemInstructionParts.push(
-      `You are an AI assistant specialized in iterative content refinement. Your goal is to progressively improve a given "Current State of Product" based on the user's instructions and provided file context. Adhere strictly to the iteration number and refinement goals.`
+      `CRITICAL CONTEXT - ENSEMBLE VARIATIONS: You are refining a product that was synthesized via an ensemble method. Several variations of sub-products were generated and are provided below in the prompt for context. Your task in these early refinement versions is to explicitly synthesize a new version by selecting and combining the best elements, phrasings, and structures from EACH of the provided variations. Your goal is to create a new, superior version that represents the best of all of them, not just improve one.`
+    );
+  }
+  
+   systemInstructionParts.push(
+      `You are an AI assistant specialized in iterative content refinement. Your goal is to progressively improve a given "Current State of Product" based on the user's instructions and provided file context. Adhere strictly to the version number and refinement goals.`
     );
     systemInstructionParts.push(
-      `CRITICAL CONTEXT OF ORIGINAL FILES: The complete data of all original input files was provided to you in the very first API call of this entire multi-iteration process (or for the outline generation stage if applicable). Your primary knowledge base for all subsequent refinements is this full original file data. The 'File Manifest' is only a summary; refer to the complete file data provided initially for all tasks. Synthesize information from ALL provided files. Cross-reference details across files if relevant. Your product should reflect the combined knowledge and themes within these files.`
+      `CRITICAL CONTEXT OF ORIGINAL FILES: The complete data of all original input files was provided to you in the very first API call of this entire multi-version process (or for the outline generation stage if applicable). Your primary knowledge base for all subsequent refinements is this full original file data. The 'File Manifest' is only a summary; refer to the complete file data provided initially for all tasks. Synthesize information from ALL provided files. Cross-reference details across files if relevant. Your product should reflect the combined knowledge and themes within these files.`
     );
-    if (loadedFilesForContext && loadedFilesForContext.length > 0) {
-      systemInstructionParts.push(
-        `When multiple files are provided, pay close attention to file names (e.g., 'report_v1.txt', 'report_v2.txt', 'chapter1_draft.md', 'chapter1_final.md') and content (e.g., identical or very similar headings and paragraphs across files). If you detect duplicative content, versioned drafts, or highly overlapping information, your task is to intelligently synthesize these into a single, coherent, and de-duplicated product. Prune redundant sections. Consolidate information logically. If clear versioning is present, prioritize the most recent or complete version as the base, integrating unique information from other versions. If files represent different facets of a single topic, weave them together smoothly. Avoid simple concatenation. The goal is a singular, polished document.`
-      );
-    }
-    systemInstructionParts.push(`GENERAL RULES:
-- Operational Principle (Law of Large Numbers Analogy): Autologos' process for generating synthetic knowledge can be understood by analogy to identifying common threads or statistical likelihoods from an immense corpus. It starts with this vast, diffuse dataset (its training) and generates novel textual configurations based on learned patterns, rather than picking through individual "papers" in that training data to extract and cite specific ideas.
-- Inherent Limitation in Citing Training Data: Autologos, as an LLM-based system, CANNOT and WILL NOT attempt to provide academic-style citations for specific authors or documents from its general pre-training data. Its knowledge from this training is emergent and statistical; it does not "remember" or "retrieve" individual source texts from that training in a citable way. Requests for Autologos to cite sources for its synthetic knowledge (i.e., knowledge not derived from a document explicitly INPUT ted by the user in the current session) will be declined as per its Core Directives (Principle 12, Zero Hallucination), as this would likely lead to fabricated or inaccurate citations.
-- No Fabricated Quotations: Autologos WILL NOT generate text enclosed in quotation marks unless it is directly and verifiably quoting from a document explicitly provided by the user in the current session or from its own Core Directives. All direct quotations from user-provided material will be clearly attributed to that specific INPUT ted source by the user in final outputs. Autologos will not "make up" quotes or attribute synthetic text to non-existent sources.
-- Output Structure: Produce ONLY the new, modified textual product. Do NOT include conversational filler, apologies, or self-references like "Here's the updated product:". Ensure responses are complete and not abruptly cut off. If outputting lists or multi-part responses, ensure all parts are present and the response concludes naturally.
-- Convergence: If you determine that the product cannot be meaningfully improved further according to the current iteration's goals, OR if your generated product is identical to the 'Current State of Product' you received, prefix your ENTIRE response with "${CONVERGED_PREFIX}". Do this sparingly and only when truly converged. This means the topic is **thoroughly explored, conceptually well-developed, and further iterations would genuinely add no significant conceptual value (i.e., only minor stylistic tweaks on an already mature document) or would likely degrade quality.** Premature convergence on underdeveloped ideas is undesirable. However, if the document is mature and multiple recent iterations have yielded only negligible changes where the 'cost' of further iteration outweighs the benefit, you SHOULD declare convergence. Unless the product is identical or the goal is unachievable, attempt refinement. A 'meaningful improvement' involves addressing specific aspects like clarity, coherence, depth, or structure as per the iteration's goal. If the task requires significant content generation or transformation, ensure this is substantially completed before considering convergence. Do not converge if simply unsure how to proceed; instead, attempt an alternative refinement strategy if the current one seems to stall.
-- File Usage: Base all refinements on the full content of the originally provided input files. The 'File Manifest' in the prompt is a reminder of these files.
-- Error Handling: If you cannot fulfill a request due to ambiguity or impossibility, explain briefly and then output "${CONVERGED_PREFIX}" followed by the original unchanged product. Do not attempt to guess if instructions are critically unclear.
-- Content Integrity: Preserve core information and aim for comprehensive coverage of the source material's intent, especially during initial synthesis. Aggressively identify and consolidate duplicative content from multiple files into a single, synthesized representation. **Unless specific instructions for summarization (e.g., 'shorter' length, 'key_points' format) or significant restructuring are provided for the current iteration, avoid unrequested deletions of unique information or excessive summarization that leads to loss of detail from the source material. Your primary goal is to REFINE, STRUCTURE, and ENRICH the existing information, not to arbitrarily shorten it unless explicitly instructed.** While merging and pruning redundant information is critical, if in doubt about whether content is merely redundant vs. a nuanced variation or supporting detail, err on the side of preserving it, particularly in earlier iterations. Subsequent iterations or specific plan stages can focus on more aggressive condensation if the product becomes too verbose or if explicitly instructed.
-- CRITICAL - AVOID WORDSMITHING: If a meta-instruction to break stagnation or wordsmithing is active (especially for "Radical Refinement Kickstart"), you MUST make a *substantively different* response than the previous iteration. Do not just change a few words, reorder phrases slightly, or make trivial edits. Focus on *conceptual changes*, adding *net new information*, significantly restructuring, or offering a *genuinely different perspective* as guided by the meta-instruction. Minor stylistic changes are insufficient in this context. If only wordsmithing is possible on the current content, consider declaring convergence if the content is mature.`
+    
+   systemInstructionParts.push(`GENERAL RULES:
+- Output Structure: Produce ONLY the new, modified textual product. Do NOT include conversational filler, apologies, or self-references like "Here's the updated product:".
+- Convergence: If you determine that the product cannot be meaningfully improved further according to the current iteration's goals, OR if your generated product is identical to the 'Current State of Product' you received, prefix your ENTIRE response with "${CONVERGED_PREFIX}". Do this sparingly and only when truly converged.
+- CRITICAL - AVOID WORDSMITHING: If a meta-instruction to break stagnation or wordsmithing is active, you MUST make a *substantively different* response than the previous version. Do not just change a few words or reorder phrases slightly. Focus on *conceptual changes*, adding *net new information*, or significantly restructuring.`
     );
-
-    if (currentIterationOverall === 1 && initialOutlineForIter1 && !isSegmentedSynthesisMode && !isTargetedRefinementMode) {
-      // ... (existing Iteration 1 from Outline system instruction)
+  
+  if (isInitialProductEmptyAndFilesLoaded && majorVersion === 1) {
       systemInstructionParts.push(
-`CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files using Pre-Generated Outline - Single Pass):
-The 'Current State of Product' (provided below the main instructions) is an AI-generated outline and a list of identified redundancies. You also have access to the FULL ORIGINAL FILE DATA from the input files (provided in this API call). Your task for this FIRST iteration is to synthesize a COMPLETE and **SUBSTANTIVE** DOCUMENT by meticulously populating the outline with detailed content.
-**Core Objective: Transform the Outline into a COMPREHENSIVE Document by POPULATING IT with DETAILED CONTENT from the ORIGINAL FILES.**
-Operational Procedure for EACH Outline Item:
-1.  **Understand the Outline Item's Scope:** Read the current outline item.
-2.  **Scan ALL Original Files:** Actively search through ALL provided original files to find ALL passages, paragraphs, and sections that correspond to this specific outline item.
-3.  **Extract Relevant Detailed Text:** Identify and extract the most detailed and informative text segments from the files related to the outline item. **Do not summarize these segments at this extraction stage.**
-4.  **Synthesize and Integrate (Without Loss of Detail):** Combine the extracted detailed text segments. If there's overlapping information or different versions of the same point, synthesize them into a coherent narrative for that outline section. **The goal is to PRESERVE and COMBINE existing detail, not to replace it with a shorter summary.** If multiple versions exist, prioritize the most complete or recent version as the base, integrating unique, substantive details from other versions.
-5.  **Ensure Substantiveness:** The content generated for each outline section should reflect the **maximum level of detail available in the source files for that topic**. If an outline point is brief, but the files contain extensive relevant text, your output for that point MUST be detailed and incorporate that extensive text.
-6.  **Address Redundancies:** Use the "Identified Redundancies" list to guide your synthesis, ensuring that duplicative information is merged rather than repeated.
-**CRITICAL DIRECTIVES:**
--   **The Outline is for STRUCTURE, NOT a Target for Brevity:** Do NOT treat the outline's conciseness as an instruction to produce brief content. Your output must be as detailed as the source material allows for each point. The expectation is that the synthesized document will be SUBSTANTIALLY LONGER than the outline itself.
--   **VALUE ADD IS PRESERVING AND ORGANIZING EXISTING DETAIL:** You are adding value by structuring and coherently presenting the *existing richness* found in the files. Discarding detailed written content in favor of brief summaries, or generating new, less detailed content where rich source material exists, is a failure of this task.
--   **Output a SINGLE, Coherent Document:** This synthesized, detailed document is your ONLY output.
-Failure to incorporate the available detail from source files, resulting in an output that is merely a slightly expanded outline, will be considered a failure of the primary task.`
-      );
-    } else if (isInitialProductEmptyAndFilesLoaded && currentIterationOverall === 1 && !isSegmentedSynthesisMode && !isTargetedRefinementMode) {
-      // ... (existing Iteration 1 from Files (no outline) system instruction)
-      systemInstructionParts.push(
-`CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files - Single Pass): The 'Current State of Product' is empty, and multiple files have been provided (summarized in File Manifest). Your IMMEDIATE and PRIMARY task for this first iteration is NOT to simply list or concatenate content. You MUST:
-1. Analyze ALL provided original file data (provided in this API call).
+`CRITICAL INITIAL SYNTHESIS (Version 1 from Files): The 'Current State of Product' is empty, and one or more files have been provided. Your IMMEDIATE and PRIMARY task for this first version is NOT to simply list or concatenate content. You MUST:
+1. Analyze ALL provided original file data.
 2. Identify common themes, chapters, sections, and any versioning patterns.
-3. AGGRESSIVELY de-duplicate and consolidate information, BUT prioritize capturing the full breadth and depth of unique content from the source files. **Do not over-summarize or lose important details at this stage.**
+3. AGGRESSIVELY de-duplicate and consolidate information, BUT prioritize capturing the full breadth and depth of unique content from the source files.
 4. Produce a SINGLE, COHERENT, WELL-STRUCTURED initial document that synthetically represents the core, essential information from ALL files.
-Your output for this iteration MUST be a de-duplicated synthesis. DO NOT output raw concatenated content or a simple list of all information from the files. Severe redundancy in your output will be considered a failure to meet the primary task.
-The primary metric of success for this specific iteration is the quality of synthesis and de-duplication, aiming for comprehensive initial coverage that PRESERVES DETAIL. This synthesized document will be the 'Current State of Product' for Iteration 2. It should be a high-quality, consolidated first draft, likely quite substantial in length if the source files are detailed.`
+Your output for this version MUST be a de-duplicated synthesis. This synthesized document will be the 'Current State of Product' for Version 2.`
       );
     }
-  }
-
+  
+  
   let coreUserInstructions = "";
+  const versionString = formatVersion(currentVersion);
 
-  if (isRadicalRefinementKickstart) {
-    coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall}. Task: RADICAL REFINEMENT KICKSTART.\n`;
-    coreUserInstructions += `SYSTEM NOTICE: Previous iterations have stagnated with minimal meaningful change or persistent wordsmithing. This iteration requires a fundamental re-evaluation and substantial change.\n`;
-    if (activeMetaInstruction) { // This would be the forceful meta-instruction from ModelStrategyService
-        coreUserInstructions += `SYSTEM GUIDANCE (Radical Kickstart Meta-Instruction): "${activeMetaInstruction}"\n---\n`;
-    } else { // Fallback if somehow not set
-        coreUserInstructions += `SYSTEM GUIDANCE (Radical Kickstart Meta-Instruction): "Re-conceptualize and significantly rewrite the 'Current State of Product' to achieve a qualitative leap. Focus on adding substantial new information, depth, or a completely fresh perspective based on original inputs. Minor stylistic changes are forbidden."\n---\n`;
-    }
-    if (initialOutlineForIter1) {
-        coreUserInstructions += `REFERENCE ORIGINAL OUTLINE (Below) for core structure and intent if helpful for re-conceptualization:\n${initialOutlineForIter1.outline.trim()}\n`;
-        if (initialOutlineForIter1.identifiedRedundancies) {
-            coreUserInstructions += `Original Redundancies Identified: ${initialOutlineForIter1.identifiedRedundancies.trim()}\n`;
-        }
-        coreUserInstructions += `---\n`;
-    }
-    coreUserInstructions += `REMINDER: Adhere to the "RADICAL REFINEMENT KICKSTART" system instructions. Your output must be the new, substantially changed product.`;
-
-  } else if (isTargetedRefinementMode) {
-    // ... (existing targeted refinement core instructions)
-    coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall}. Task: Targeted Section Refinement.\n`;
-    if (retryContext) {
-        coreUserInstructions += `SYSTEM NOTICE: Your previous attempt for this iteration had an issue: "${retryContext.previousErrorReason}". Please try again, carefully re-evaluating the 'Current State of Product' and adhering to the original instructions for this iteration (including the targeted refinement task below):\n${retryContext.originalCoreInstructions}\n---\n`;
-    }
-    coreUserInstructions += `---TARGETED REFINEMENT TASK---\n`;
-    coreUserInstructions += `Text Selection to Refine:\n"${targetedSelectionText || "(Error: Targeted selection text not provided)"}"\n\n`;
-    coreUserInstructions += `User Instructions for Refining Selection:\n"${instructionsForTargetedSelection || "(Error: Instructions for selection not provided)"}"\n`;
-    coreUserInstructions += `---END TARGETED REFINEMENT TASK---\n`;
-    coreUserInstructions += `Reminder: Return the ENTIRE document with ONLY the above selection modified and seamlessly integrated. Refer to System Instructions for critical details on this task.`;
-
-  } else if (isSegmentedSynthesisMode && currentIterationOverall === 0) {
-    // ... (existing segmented synthesis core instructions)
-    coreUserInstructions += `This is a SEGMENTED SYNTHESIS task.
-    You are to generate detailed content ONLY for the following outline segment:
-    ---CURRENT OUTLINE SEGMENT TO SYNTHESIZE---
-    ${currentSegmentOutlineText || "(Error: Current segment outline text not provided)"}
-    -------------------------------------------
-    For context, here is the FULL ORIGINAL OUTLINE of the entire document:
-    ---FULL ORIGINAL DOCUMENT OUTLINE---
-    ${fullOutlineForContext || "(Error: Full original outline not provided)"}
-    ------------------------------------
-    INSTRUCTIONS FOR THIS SEGMENT:
-    1.  Referencing the full original file data (provided to you in this API call via file inputs), extract and integrate detailed textual content from these files to comprehensively flesh out ONLY the "CURRENT OUTLINE SEGMENT TO SYNTHESIZE" specified above.
-    2.  Ensure your output reflects the richness and depth of the original files for this segment, not just the brevity of its outline text. The outline is for organization; the content detail comes from the files.
-    3.  Output: Provide ONLY the new, synthesized textual content for THIS SEGMENT. Do not include headings unless they are part of the natural flow of the content for this segment.`;
-  } else if (isGlobalMode) {
-    // ... (existing global mode core instructions, with meta-instruction handling)
-    systemInstructionParts.push(
-      `GLOBAL MODE DYNAMIC PARAMS: Parameters will dynamically adjust from creative/exploratory to focused/deterministic. The primary sweep towards deterministic values (e.g., Temperature near 0.0) aims to complete around iteration 20 (out of a total ${maxIterationsOverall} iterations for this run). Adapt your refinement strategy accordingly. If refinement appears to stall, the system might subtly adjust parameters or its analysis approach to encourage breaking out of local optima; your continued diverse and substantial refinement attempts, potentially exploring different facets of improvement (like structure, clarity, depth, or even alternative phrasings for key sections), are valuable.`
-    );
-    if (retryContext) {
-        coreUserInstructions += `SYSTEM NOTICE: Your previous attempt for this iteration had an issue: "${retryContext.previousErrorReason}". Please try again, carefully re-evaluating the 'Current State of Product' and adhering to the original instructions for this iteration:\n${retryContext.originalCoreInstructions}\n---\n`;
-    } else if (stagnationNudgeStrategy === 'meta_instruct' && activeMetaInstruction) {
-        coreUserInstructions += `SYSTEM GUIDANCE (Meta-Instruction): "${activeMetaInstruction}"\n---\n`;
-    } else if (stagnationNudgeStrategy === 'meta_instruct' && !activeMetaInstruction) {
-        coreUserInstructions += `SYSTEM GUIDANCE (Meta-Instruction): "Refinement seems to be stalling. Please attempt a significantly different approach. Consider focusing on one of these: radically restructuring a section, rephrasing key arguments for clarity, substantially expanding a underdeveloped point, or critically re-evaluating the overall coherence."\n---\n`;
-    } else if (activeMetaInstruction) { // Also handle meta instructions not from stagnation
-        coreUserInstructions += `SYSTEM GUIDANCE (Meta-Instruction): "${activeMetaInstruction}"\n---\n`;
-    }
-
-
-    if (isInitialProductEmptyAndFilesLoaded && currentIterationOverall === 1 && !initialOutlineForIter1 && !isSegmentedSynthesisMode) {
-      coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.\nTask: Initial Document Synthesis from Files.\nBased on the full content of all provided files (sent in this API call), your SOLE objective is to create a single, comprehensive, coherent, and de-duplicated initial document. Follow the 'CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files - Single Pass)' system instruction. This synthesized document will be the 'Current State of Product' for Iteration 2.\nOutput: Provide ONLY this new, synthesized document.`;
-    } else if (currentIterationOverall === 1 && initialOutlineForIter1 && !isSegmentedSynthesisMode) {
-        coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.\nTask: Initial Document Synthesis from Outline.\nThe 'Current State of Product' (below) contains an AI-generated outline and a list of identified redundancies.\nYour task is to:\n1. Use this outline and redundancy list as a strong guide for STRUCTURE and to RESOLVE REDUNDANCIES.\n2. Referencing the full original file data (provided to you in this API call), **extract and integrate detailed textual content from these files to comprehensively flesh out EACH section of the outline.**\n3. **Ensure your output reflects the richness and depth of the original files, not just the brevity of the outline. The outline is for organization; the content detail comes from the files.**\n4. Produce a single, well-structured, and detailed document.\nThis synthesized document will be the 'Current State of Product' for Iteration 2.\nOutput: Provide ONLY this new, synthesized document.`;
-    }
-     else if (!isSegmentedSynthesisMode) {
-      const CONVERGENCE_PHASE_START_PERCENT = 0.7;
-      const convergencePhaseStartIteration = Math.floor(maxIterationsOverall * CONVERGENCE_PHASE_START_PERCENT);
-
-      coreUserInstructions += `This is Iteration ${currentIterationOverall} of ${maxIterationsOverall} in Global Autonomous Mode.\n`;
-
-      if (currentIterationOverall < convergencePhaseStartIteration && currentIterationOverall > 1) {
-        coreUserInstructions += `Your primary goal is to **creatively and substantially evolve** the 'Current State of Product'.
-Focus on identifying and implementing the most impactful improvements possible. This may include:
--   **Conceptual Development & Expansion:** If the product is underdeveloped in key areas, significantly expand on core ideas. Add substantial details, concrete examples, and explore related arguments or nuances. Prioritize increasing depth and breadth of content. Be bold in introducing new relevant concepts if supported by source material.
--   **Structural Re-evaluation & Improvement:** Improve overall organization and logical flow. Do not be afraid to restructure significantly if it enhances clarity or presents a stronger narrative. Ensure smooth transitions and a well-reasoned progression of ideas.
--   **Addressing Redundancy & Enhancing Clarity:** While expanding or restructuring, identify and resolve significant redundancies if they were not handled in initial synthesis or if new ones arise. Refine prose for clarity, impact, and engagement.
-Preserve the richness of detail from the original source material unless condensation is clearly beneficial for overall quality and depth. Avoid uninstructed summarization that loses detail.
-Output: Provide ONLY the new, modified textual product.`;
-      } else {
-        coreUserInstructions += `1. Analyze & Refine: Review the 'Current State of Product'. Autonomously identify areas for significant improvement.
-2. Substantial Change & Refinement: Implement meaningful and discernible changes. The primary goal is to enhance clarity, coherence, structure, and depth, or to finalize the document for convergence.
-    -   **If the 'Current State of Product' appears to have significant *verifiable* redundancies not addressed previously, or structural issues hindering clarity:** Focus on resolving these. Condensation should target *specific, identifiable repetitions or demonstrably superfluous content* rather than general summarization of detailed information.
-    -   **If the 'Current State of Product' is structurally sound but could be improved:** Focus on enhancing logical flow, strengthening arguments, improving prose, or adding further nuance or examples *if genuinely supported by the source material's depth and not yet fully explored*.
-    -   **If the product seems underdeveloped in specific areas (and not addressed by meta-instructions for expansion):** Consider if this indicates a natural conclusion or if a final focused expansion is needed.
-    -   **Avoid aggressive uninstructed length reduction, especially if the document is not yet mature:** Preserve the richness of detail from the source material. However, if the product is mature and refinement implies condensation for clarity/impact, this is acceptable.
-   Output: Provide ONLY the new, modified textual product.`;
-      }
-     
-      if (loadedFilesForContext && loadedFilesForContext.length > 1) {
-          coreUserInstructions += `\n   Reminder: If multiple files were originally provided, ensure your refinement consolidates information and removes redundancy, reflecting a synthesized understanding. Prioritize information from more recent or complete versions if versioning is apparent.\n`;
-      }
-    }
-
-  } else { // Plan Mode
-    systemInstructionParts.push(
-      `ITERATIVE PLAN MODE: You are executing a specific stage of a predefined iterative plan. Adhere strictly to the goals of the current stage.`
-    );
-    if (activePlanStage) {
-      coreUserInstructions = `Executing Iterative Plan Stage (Overall Iteration ${currentIterationOverall}).
-Stage Goal Summary:
-- Target Format: ${activePlanStage.format}
-- Target Length Relative to Current: ${activePlanStage.length}
-- Target Complexity Change: ${activePlanStage.complexity}
-- Iterations for this Stage: ${currentIterationOverall - (currentIterationOverall - activePlanStage.stageIterations)} of ${activePlanStage.stageIterations}
-Adhere to Stage Goals: Transform the 'Current State of Product' to meet these specific targets.
-`;
-      if (activePlanStage.format === 'paragraph') {
-        const showHeadings = activePlanStage.outputParagraphShowHeadings ?? outputParagraphShowHeadingsGlobal;
-        const maxDepth = activePlanStage.outputParagraphMaxHeadingDepth ?? outputParagraphMaxHeadingDepthGlobal;
-        const numbered = activePlanStage.outputParagraphNumberedHeadings ?? outputParagraphNumberedHeadingsGlobal;
-        coreUserInstructions += `Formatting Details (if 'paragraph' format): Show Headings: ${showHeadings}, Max Depth: ${maxDepth}, Numbered: ${numbered}.\n`;
-      }
-      if (activePlanStage.format === 'json') {
-        coreUserInstructions += `JSON Output (if 'json' format): Ensure your output is a single, valid JSON object or array. Do not include any explanatory text outside the JSON structure itself. If the task implies a specific schema, adhere to it. If not, derive a sensible schema.\n`;
-      }
-      if (activePlanStage.customInstruction) {
-        coreUserInstructions += `Specific Instructions for Stage: ${activePlanStage.customInstruction}\n`;
-      }
-      coreUserInstructions += `Content Consistency: Unless the stage goals (length, complexity, format) explicitly require removal or significant summarization, maintain the core information and intent of the 'Current State of Product'.
-Output: Provide ONLY the new, modified textual product based on these stage goals.`;
-    } else {
-      coreUserInstructions = "Error: Plan mode active, but no current plan stage found. Please output the current product unchanged.";
-    }
+  if (isGlobalMode) {
+      coreUserInstructions = `This is Version ${versionString} of v${maxMajorVersions} in Global Autonomous Mode.\n`;
+  } else if (activePlanStage) {
+      coreUserInstructions = `Executing Iterative Plan Stage (Overall Version ${versionString}).\n`;
+      //... plan details
+  } else {
+       coreUserInstructions = `This is Version ${versionString} of v${maxMajorVersions}.\n`;
   }
+
+  if (activeMetaInstruction) {
+    coreUserInstructions += `SYSTEM GUIDANCE (Meta-Instruction): "${activeMetaInstruction}"\n---\n`;
+  }
+  
+  if (isInitialProductEmptyAndFilesLoaded && majorVersion === 1) {
+     coreUserInstructions += `Task: Initial Document Synthesis from Files.\nBased on the full content of all provided files, your SOLE objective is to create a single, comprehensive, coherent, and de-duplicated initial document.`;
+  } else {
+      coreUserInstructions += `Your task is to refine the "Current State of Product". Analyze it and implement the most impactful improvements to produce the next version.`;
+  }
+
+
   return { systemInstruction: systemInstructionParts.join('\n\n'), coreUserInstructions };
 };
 
@@ -294,11 +130,12 @@ export const buildTextualPromptPart = (
     currentProduct: string | null,
     loadedFiles: LoadedFile[],
     coreUserInstructions: string,
-    currentIterationOverall: number,
+    currentVersion: Version,
     initialOutlineForIter1: OutlineGenerationResult | undefined,
-    fileManifestForPrompt: string, // Changed from optional boolean flags to a string
+    fileManifestForPrompt: string,
     isSegmentedSynthesisMode: boolean = false,
-    isTargetedRefinementMode: boolean = false
+    isTargetedRefinementMode: boolean = false,
+    ensembleSubProducts?: string[] | null
 ): string => {
     let productForPrompt = currentProduct || "";
 
@@ -308,7 +145,6 @@ export const buildTextualPromptPart = (
     
     let fileManifestContentForPrompt = "";
     if (loadedFiles.length > 0) {
-        // Use the passed-in manifest summary instead of embedding full content
         fileManifestContentForPrompt = `---FILE MANIFEST (Original Input Summary)---\n${fileManifestForPrompt.trim()}\n---------------------------\n`;
     }
 
@@ -318,50 +154,34 @@ export const buildTextualPromptPart = (
         promptParts.push(fileManifestContentForPrompt);
     }
 
-
-    let productContextTitle: string;
-
-    if (isSegmentedSynthesisMode && currentIterationOverall === 0) {
-        productContextTitle = `---CURRENT STATE OF PRODUCT (Iteration 1 - Segmented Synthesis Note)---`;
-        productForPrompt = "(You are generating a segment from scratch based on original files, guided by an outline segment and full outline provided in instructions above. The 'Current State of Product' for this API call is effectively empty for the segment being generated, or it refers to the full outline provided for context.)";
-    } else if (isTargetedRefinementMode) {
-        productContextTitle = `---CURRENT STATE OF PRODUCT (Iteration ${currentIterationOverall}) (AI NOTE: You will refine a specific selection from this product based on instructions below)---`;
-    } else if (currentIterationOverall === 1 && initialOutlineForIter1 && !isSegmentedSynthesisMode) {
-        productContextTitle = `---CURRENT STATE OF PRODUCT (Iteration ${currentIterationOverall}) (AI NOTE: You are using the below AI-generated outline and redundancy list to guide your synthesis of the full document from the ORIGINAL files. The 'Current State of Product' effectively starts empty, to be built by you.)---`;
-    } else if (currentIterationOverall === 1 && !initialOutlineForIter1 && (!currentProduct || currentProduct.trim() === "") && !isSegmentedSynthesisMode) {
-         productContextTitle = `---CURRENT STATE OF PRODUCT (Iteration ${currentIterationOverall}) (Effectively empty, to be generated from original files)---`;
-    } else {
-         productContextTitle = `---CURRENT STATE OF PRODUCT (Iteration ${currentIterationOverall})---`;
-    }
+    const prevVersion = { ...currentVersion, major: currentVersion.major - 1, minor: 0 };
+    const productContextTitle = `---CURRENT STATE OF PRODUCT (${formatVersion(prevVersion)})---`;
    
     promptParts.push(productContextTitle);
-
-    if (initialOutlineForIter1 && currentIterationOverall === 1 && !isSegmentedSynthesisMode && !isTargetedRefinementMode) {
-        promptParts.push(`---INTERNAL ANALYSIS OUTLINE (Generated by AI based on original files)---\n${initialOutlineForIter1.outline.trim()}`);
-        if (initialOutlineForIter1.identifiedRedundancies.trim()) {
-            promptParts.push(`---IDENTIFIED REDUNDANCIES/VERSIONING (from AI analysis of original files)---\n${initialOutlineForIter1.identifiedRedundancies.trim()}`);
-        }
-    } else if (productForPrompt.trim()) {
+    
+    if (productForPrompt.trim()) {
          promptParts.push(productForPrompt.trim());
-    } else if (!isSegmentedSynthesisMode) {
-        promptParts.push("(empty or not applicable for this iteration)");
+    } else {
+        promptParts.push("(empty or not applicable for this version)");
     }
-
-
+    
     promptParts.push("------------------------------------------");
+    
+    if (ensembleSubProducts && ensembleSubProducts.length > 0 && currentVersion.major <= 2) {
+        promptParts.push("---ENSEMBLE SUB-PRODUCT VARIATIONS FOR CONTEXT---");
+        ensembleSubProducts.forEach((subProduct, index) => {
+            const truncatedSubProduct = subProduct.length > 20000 ? subProduct.substring(0, 10000) + "\n...[TRUNCATED]...\n" + subProduct.substring(subProduct.length - 10000) : subProduct;
+            promptParts.push(`\n--- VARIATION ${index + 1} ---\n`);
+            promptParts.push(truncatedSubProduct.trim());
+        });
+        promptParts.push("------------------------------------------");
+    }
+    
     promptParts.push(coreUserInstructions);
     promptParts.push("------------------------------------------");
    
-    if (isSegmentedSynthesisMode && currentIterationOverall === 0) {
-        promptParts.push("REMINDER: Your response should be ONLY the synthesized text for the CURRENT outline segment provided in the user instructions. Do NOT include headings unless part of the natural flow. Adhere to all system instructions regarding detail and file usage.");
-        promptParts.push(`NEW MODIFIED TEXT FOR THIS SEGMENT:`);
-    } else if (isTargetedRefinementMode) {
-        promptParts.push("REMINDER: Your response should be ONLY the new, complete textual product with the specified selection modified and integrated. Adhere to all system instructions. If converged on the selection, prefix with \"" + CONVERGED_PREFIX + "\".");
-        promptParts.push(`NEW MODIFIED PRODUCT (Iteration ${currentIterationOverall + 1}):`);
-    } else {
-        promptParts.push("REMINDER: Your response should be ONLY the new, modified textual product. Do NOT include conversational filler, apologies, or self-references. If converged, prefix your ENTIRE response with \"" + CONVERGED_PREFIX + "\".");
-        promptParts.push(`NEW MODIFIED PRODUCT (Iteration ${currentIterationOverall + 1}):`);
-    }
+    promptParts.push("REMINDER: Your response should be ONLY the new, modified textual product. Do NOT include conversational filler, apologies, or self-references. If converged, prefix your ENTIRE response with \"" + CONVERGED_PREFIX + "\".");
+    promptParts.push(`NEW MODIFIED PRODUCT (${formatVersion(currentVersion)}):`);
 
     return promptParts.join('\n');
 };

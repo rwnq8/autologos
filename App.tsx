@@ -1,7 +1,5 @@
-
-
 import React, { useEffect, useCallback, useRef, useState, useMemo } from 'react';
-import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType, DevLogEntry } from './types.ts';
+import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType, DevLogEntry, Version } from './types.ts';
 import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID } from './types.ts';
 import * as GeminaiService from './services/geminiService.ts';
 import { generateFileName, INITIAL_PROJECT_NAME_STATE } from './services/utils.ts';
@@ -17,13 +15,17 @@ import { useAutoSave } from './hooks/useAutoSave.ts';
 import { reconstructProduct } from './services/diffService.ts';
 import { inferProjectNameFromInput } from './services/projectUtils.ts';
 import { useDebounce } from './hooks/useDebounce.ts';
+import { getRelevantDevLogContext } from './services/devLogContextualizerService.ts';
 
 import { ApplicationProvider, useApplicationContext, type ApplicationContextType } from './contexts/ApplicationContext.tsx';
-import type { AddLogEntryType as ContextAddLogEntryType, ProcessContextType } from './contexts/ProcessContext.tsx'; // Renamed to avoid conflict
+import type { ProcessContextType } from './contexts/ProcessContext.tsx';
 import { ProcessProvider, useProcessContext } from './contexts/ProcessContext.tsx';
 import { ModelConfigProvider, type ModelConfigContextType } from './contexts/ModelConfigContext.tsx';
 import { PlanProvider, type PlanContextType } from './contexts/PlanContext.tsx';
 import ErrorBoundary from './components/shared/ErrorBoundary.tsx';
+import { formatVersion } from './services/versionUtils.ts';
+
+
 
 const commonControlProps: CommonControlProps = {
     commonInputClasses: "w-full p-3 bg-slate-50/80 dark:bg-white/5 border border-slate-300 dark:border-white/10 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 placeholder-slate-500 dark:placeholder-slate-400 text-slate-700 dark:text-slate-100",
@@ -38,17 +40,19 @@ const AppLayout: React.FC = () => {
     const appCtx = useApplicationContext();
     const processCtx = useProcessContext();
     const autoSaveHook = appCtx.autoSaveHook; 
+    
+    const [isControlsOpen, setIsControlsOpen] = useState(false);
+    const [activeControlTab, setActiveControlTab] = useState<'run' | 'plan' | 'devlog'>('run');
 
-    const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
-    const modelDropdownRef = useRef<HTMLDivElement>(null);
+    const toggleControlsPanel = (tab: 'run' | 'plan' | 'devlog') => {
+        setActiveControlTab(tab);
+        setIsControlsOpen(true);
+    };
+    
+    const closeControlsPanel = () => {
+        setIsControlsOpen(false);
+    };
 
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) setIsModelDropdownOpen(false);
-        };
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, []);
 
     const closeTargetedRefinementModal = () => {
         processCtx.updateProcessState({
@@ -93,7 +97,7 @@ const AppLayout: React.FC = () => {
         }
 
         return (
-            <span className={`ml-3 px-2 py-1 text-xxs rounded-sm ${colorClass} text-white animate-pulse`}>
+            <span className={`ml-3 px-2 py-1 text-xs rounded-full ${colorClass} text-white animate-pulse`}>
                 {text}
             </span>
         );
@@ -101,47 +105,31 @@ const AppLayout: React.FC = () => {
 
     return (
         <div className="min-h-screen bg-slate-200 dark:bg-slate-900 text-slate-800 dark:text-slate-200 transition-colors duration-300 flex flex-col">
-            <header className="bg-slate-800 dark:bg-black/50 text-white p-4 shadow-md flex justify-between items-center">
-                <h1 className="text-2xl font-semibold text-primary-300">Autologos Iterative Engine</h1>
-                <div className="flex items-center text-xs text-slate-400">
-                    <span className="mr-2">Model Pref:</span>
-                    <div className="relative" ref={modelDropdownRef}>
-                        <button
-                            onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-                            className="flex items-center px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
-                            aria-haspopup="true"
-                            aria-expanded={isModelDropdownOpen}
-                            disabled={processCtx.isProcessing || appCtx.isApiRateLimited}
-                        >
-                            {SELECTABLE_MODELS.find(m => m.name === appCtx.selectedModelName)?.displayName || appCtx.selectedModelName || 'Select Model'}
-                            <span className="ml-1.5 text-xs">{isModelDropdownOpen ? '▲' : '▼'}</span>
-                        </button>
-                        {isModelDropdownOpen && (
-                            <div className="absolute right-0 mt-1.5 w-80 bg-slate-700 rounded-md shadow-lg z-20 border border-slate-600 max-h-96 overflow-y-auto">
-                                {SELECTABLE_MODELS.map((model) => (
-                                    <button
-                                        key={model.name}
-                                        onClick={() => { appCtx.onSelectedModelChange(model.name); setIsModelDropdownOpen(false); }}
-                                        className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-600 ${appCtx.selectedModelName === model.name ? 'text-primary-300 font-semibold' : 'text-slate-300'}`}
-                                    >
-                                        {model.displayName} {appCtx.selectedModelName === model.name ? ' (Current Pref.)' : ''}
-                                        <span className="block text-xxs text-slate-400">{model.description}</span>
-                                    </button>
-                                ))}
-                            </div>
-                        )}
+            <header className="bg-slate-800 dark:bg-black/50 text-white p-3 shadow-md flex justify-between items-center sticky top-0 z-20 gap-4">
+                <h1 className="text-xl font-semibold text-primary-300 whitespace-nowrap">Autologos Engine</h1>
+                
+                <div className="flex items-center gap-2 sm:gap-4 flex-grow justify-center">
+                    <button onClick={() => toggleControlsPanel('run')} className="px-3 py-1.5 text-sm rounded-md text-slate-300 hover:bg-slate-700 hover:text-white" title="Configure Run & Model">Configure</button>
+                    <button onClick={() => toggleControlsPanel('plan')} className="px-3 py-1.5 text-sm rounded-md text-slate-300 hover:bg-slate-700 hover:text-white" title="Open Iterative Plan Editor">Plan</button>
+                    <button onClick={() => toggleControlsPanel('devlog')} className="px-3 py-1.5 text-sm rounded-md text-slate-300 hover:bg-slate-700 hover:text-white" title="Open Development Log & Roadmap">Dev Log</button>
+                </div>
+
+                <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+                    <div className="flex items-center text-xs text-slate-400">
+                        {getAutoSaveStatusDisplay()}
                     </div>
-                    {getAutoSaveStatusDisplay()}
                 </div>
             </header>
+            
+            <Controls 
+                commonControlProps={commonControlProps} 
+                isOpen={isControlsOpen} 
+                onClose={closeControlsPanel}
+                initialTab={activeControlTab}
+            />
 
-            <main className="flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4 overflow-hidden">
-                <aside className="lg:col-span-1 xl:col-span-1 bg-slate-100 dark:bg-black/20 rounded-lg shadow-inner overflow-y-auto">
-                    <Controls commonControlProps={commonControlProps} />
-                </aside>
-                <section className="md:col-span-1 lg:col-span-2 xl:col-span-3 bg-slate-100 dark:bg-black/20 rounded-lg shadow-inner overflow-y-auto">
-                    <DisplayArea />
-                </section>
+            <main className="flex-1 overflow-y-auto">
+                <DisplayArea />
             </main>
 
             <TargetedRefinementModal
@@ -230,6 +218,20 @@ const AppContent: React.FC = () => {
         setStaticAiModelDetails(GeminaiService.getAiModelDetails(processState.selectedModelName));
     }, [processState.selectedModelName]);
 
+    useEffect(() => {
+        if ('serviceWorker' in navigator) {
+          window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/service-worker.js')
+              .then(registration => {
+                console.log('Service Worker registered successfully with scope: ', registration.scope);
+              })
+              .catch(error => {
+                console.error('Service Worker registration failed: ', error);
+              });
+          });
+        }
+      }, []);
+
     // --- MEMOIZED CALLBACKS for Contexts ---
     const onFilesSelectedForImport = useCallback(async (files: FileList | null) => {
         if (!files || files.length === 0) return;
@@ -257,7 +259,7 @@ const AppContent: React.FC = () => {
                     let isLogFile = false;
                     try {
                         const logData: IterationLogEntry[] = JSON.parse(e.target?.result as string);
-                        if (Array.isArray(logData) && logData.length > 0 && typeof logData[0].iteration === 'number') {
+                        if (Array.isArray(logData) && logData.length > 0 && typeof logData[0].majorVersion === 'number') { // Check for new versioning
                             projectIOHook.handleImportIterationLogData(logData, file.name);
                             isLogFile = true;
                         }
@@ -280,7 +282,6 @@ const AppContent: React.FC = () => {
             const filePromises = Array.from(fileList).map(f => new Promise<LoadedFile | null>((resolve) => {
                 const isTextFileByExtension = textFileExtensions.some(ext => f.name.toLowerCase().endsWith(ext));
     
-                // Forcibly treat known text extensions and unknown/binary types as 'text/plain'
                 if (isTextFileByExtension || f.type.startsWith('text/') || !f.type || f.type === 'application/octet-stream') {
                     const reader = new FileReader();
                     reader.onload = (e) => resolve({ name: f.name, mimeType: 'text/plain', content: e.target?.result as string, size: f.size });
@@ -311,28 +312,37 @@ const AppContent: React.FC = () => {
     
     const handleResetApp = useCallback(async () => {
         if (window.confirm("Are you sure you want to reset everything? All current progress will be lost.")) {
-            await handleReset(modelParamsHook.getUserSetBaseConfig(), planTemplatesHook.savedPlanTemplates);
+            const baseModelConfigForReset: ModelConfig = {
+                temperature: initialModelParamsForReset.temperature,
+                topP: initialModelParamsForReset.topP,
+                topK: initialModelParamsForReset.topK,
+            };
+            await handleReset(baseModelConfigForReset, planTemplatesHook.savedPlanTemplates);
             modelParamsHook.resetModelParametersToDefaults();
         }
-    }, [handleReset, modelParamsHook, planTemplatesHook.savedPlanTemplates]);
+    }, [handleReset, modelParamsHook, initialModelParamsForReset, planTemplatesHook.savedPlanTemplates]);
 
-    const handleRewind = useCallback((iterationNumber: number) => {
+    const handleRewind = useCallback((version: Version) => {
         if (processState.isProcessing) return;
-        const targetHistory = processState.iterationHistory.filter(e => e.iteration <= iterationNumber);
+        const targetHistory = processState.iterationHistory.filter(e => {
+          const entryVersion = { major: e.majorVersion, minor: e.minorVersion, patch: e.patchVersion };
+          return JSON.stringify(entryVersion) <= JSON.stringify(version); // Simplistic but effective for this structure
+        });
+
         if (targetHistory.length > 0) {
-            const { product, error } = reconstructProduct(iterationNumber, targetHistory, processState.initialPrompt);
+            const { product, error } = reconstructProduct(version, targetHistory, processState.initialPrompt);
             if (error) {
                 updateProcessState({ statusMessage: `Error rewinding: ${error}` });
             } else {
-                updateProcessState({ currentProduct: product, currentIteration: iterationNumber, iterationHistory: targetHistory, finalProduct: null, statusMessage: `Rewound to iteration ${iterationNumber}.`, currentProductBeforeHalt: null, currentIterationBeforeHalt: undefined });
+                updateProcessState({ currentProduct: product, currentMajorVersion: version.major, currentMinorVersion: version.minor, iterationHistory: targetHistory, finalProduct: null, statusMessage: `Rewound to ${formatVersion(version)}.`, currentProductBeforeHalt: null, currentVersionBeforeHalt: undefined });
             }
         }
     }, [processState.isProcessing, processState.iterationHistory, processState.initialPrompt, updateProcessState]);
     
-    const handleExportIterationMarkdown = useCallback((iterationNumber: number) => {
-        const { product, error } = reconstructProduct(iterationNumber, processState.iterationHistory, processState.initialPrompt);
+    const handleExportIterationMarkdown = useCallback((version: Version) => {
+        const { product, error } = reconstructProduct(version, processState.iterationHistory, processState.initialPrompt);
         if (error) { updateProcessState({ statusMessage: `Error exporting markdown: ${error}` }); return; }
-        const fileName = generateFileName(processState.projectName, "product", "md", iterationNumber);
+        const fileName = generateFileName(processState.projectName, `product_${formatVersion(version)}`, "md");
         const blob = new Blob([product], { type: 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -345,8 +355,8 @@ const AppContent: React.FC = () => {
         updateProcessState({ selectedModelName: modelName });
     }, [updateProcessState]);
 
-    const reconstructProductCallback = useCallback((iter: number, hist: IterationLogEntry[], prompt: string) => {
-        return reconstructProduct(iter, hist, prompt);
+    const reconstructProductCallback = useCallback((targetVersion: Version, hist: IterationLogEntry[], prompt: string) => {
+        return reconstructProduct(targetVersion, hist, prompt);
     }, []);
 
     const openTargetedRefinementModal = useCallback((selectedText: string) => {
@@ -361,27 +371,32 @@ const AppContent: React.FC = () => {
     }, [updateProcessState, processState.isEditingCurrentProduct, processState.currentProduct]);
 
     const saveManualEdits = useCallback(async () => {
+        const { currentMajorVersion, currentMinorVersion, currentProduct, editedProductBuffer } = processState;
+        const newVersion: Version = { major: currentMajorVersion, minor: currentMinorVersion + 1 };
+        
         const manualEditEntry: AddLogEntryParams = {
-            iteration: processState.currentIteration + 1,
+            majorVersion: newVersion.major,
+            minorVersion: newVersion.minor,
             entryType: 'manual_edit',
-            currentFullProduct: processState.editedProductBuffer,
-            previousFullProduct: processState.currentProduct,
+            currentFullProduct: editedProductBuffer,
+            previousFullProduct: currentProduct,
             status: 'Manual Edit Applied',
             fileProcessingInfo: { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0 }
         };
         addLogEntry(manualEditEntry);
         updateProcessState({
-            currentProduct: processState.editedProductBuffer,
-            currentIteration: processState.currentIteration + 1,
+            currentProduct: editedProductBuffer,
+            currentMajorVersion: newVersion.major,
+            currentMinorVersion: newVersion.minor,
             isEditingCurrentProduct: false,
             editedProductBuffer: null,
-            statusMessage: `Manual edit applied as Iteration ${processState.currentIteration + 1}.`
+            statusMessage: `Manual edit applied as ${formatVersion(newVersion)}.`
         });
         await autoSaveHook.performAutoSave();
-    }, [addLogEntry, updateProcessState, processState.currentIteration, processState.currentProduct, processState.editedProductBuffer, autoSaveHook]);
+    }, [addLogEntry, updateProcessState, processState, autoSaveHook]);
 
     const onMaxIterationsChange = useCallback((val: number) => {
-        updateProcessState({ maxIterations: val });
+        updateProcessState({ maxMajorVersions: val });
     }, [updateProcessState]);
 
     const onIsPlanActiveChange = useCallback((isActive: boolean) => {
@@ -432,77 +447,53 @@ const AppContent: React.FC = () => {
       onFilesSelectedForImport,
       autoSaveHook,
     ]);
-    
+
     const processContextValue: ProcessContextType = useMemo(() => ({
-      ...processState,
-      updateProcessState,
-      handleLoadedFilesChange,
-      addLogEntry,
-      handleResetApp,
-      handleStartProcess,
-      handleHaltProcess,
-      handleBootstrapSynthesis,
-      handleRewind,
-      handleExportIterationMarkdown,
-      reconstructProductCallback,
-      handleInitialPromptChange,
-      openTargetedRefinementModal,
-      toggleEditMode,
-      saveManualEdits,
-      addDevLogEntry,
-      updateDevLogEntry,
-      deleteDevLogEntry,
+        ...processState,
+        updateProcessState,
+        handleLoadedFilesChange,
+        addLogEntry,
+        handleReset: handleResetApp,
+        handleStartProcess,
+        handleHaltProcess,
+        handleBootstrapSynthesis,
+        handleRewind,
+        handleExportIterationMarkdown,
+        reconstructProductCallback,
+        handleInitialPromptChange,
+        openTargetedRefinementModal,
+        toggleEditMode,
+        saveManualEdits,
+        addDevLogEntry,
+        updateDevLogEntry,
+        deleteDevLogEntry,
     }), [
-      processState,
-      updateProcessState,
-      handleLoadedFilesChange,
-      addLogEntry,
-      handleResetApp,
-      handleStartProcess,
-      handleHaltProcess,
-      handleBootstrapSynthesis,
-      handleRewind,
-      handleExportIterationMarkdown,
-      reconstructProductCallback,
-      handleInitialPromptChange,
-      openTargetedRefinementModal,
-      toggleEditMode,
-      saveManualEdits,
-      addDevLogEntry,
-      updateDevLogEntry,
-      deleteDevLogEntry,
+        processState, updateProcessState, handleLoadedFilesChange, addLogEntry, handleResetApp,
+        handleStartProcess, handleHaltProcess, handleBootstrapSynthesis, handleRewind, handleExportIterationMarkdown,
+        reconstructProductCallback, handleInitialPromptChange, openTargetedRefinementModal, toggleEditMode,
+        saveManualEdits, addDevLogEntry, updateDevLogEntry, deleteDevLogEntry,
     ]);
-    
+
     const modelConfigContextValue: ModelConfigContextType = useMemo(() => ({
-      temperature: modelParamsHook.temperature,
-      topP: modelParamsHook.topP,
-      topK: modelParamsHook.topK,
-      maxIterations: processState.maxIterations,
-      settingsSuggestionSource: modelParamsHook.settingsSuggestionSource,
-      userManuallyAdjustedSettings: modelParamsHook.userManuallyAdjustedSettings,
-      modelConfigRationales: modelParamsHook.modelConfigRationales,
-      modelParameterAdvice: modelParamsHook.modelParameterAdvice,
-      modelConfigWarnings: modelParamsHook.modelConfigWarnings,
-      handleTemperatureChange: modelParamsHook.handleTemperatureChange,
-      handleTopPChange: modelParamsHook.handleTopPChange,
-      handleTopKChange: modelParamsHook.handleTopKChange,
-      onMaxIterationsChange,
-      setUserManuallyAdjustedSettings: modelParamsHook.setUserManuallyAdjustedSettings,
+        temperature: modelParamsHook.temperature,
+        topP: modelParamsHook.topP,
+        topK: modelParamsHook.topK,
+        maxIterations: processState.maxMajorVersions,
+        settingsSuggestionSource: modelParamsHook.settingsSuggestionSource,
+        userManuallyAdjustedSettings: modelParamsHook.userManuallyAdjustedSettings,
+        modelConfigRationales: modelParamsHook.modelConfigRationales,
+        modelParameterAdvice: modelParamsHook.modelParameterAdvice,
+        modelConfigWarnings: modelParamsHook.modelConfigWarnings,
+        handleTemperatureChange: modelParamsHook.handleTemperatureChange,
+        handleTopPChange: modelParamsHook.handleTopPChange,
+        handleTopKChange: modelParamsHook.handleTopKChange,
+        onMaxIterationsChange,
+        setUserManuallyAdjustedSettings: modelParamsHook.setUserManuallyAdjustedSettings,
+        getUserSetBaseConfig: modelParamsHook.getUserSetBaseConfig,
     }), [
-      modelParamsHook.temperature,
-      modelParamsHook.topP,
-      modelParamsHook.topK,
-      processState.maxIterations,
-      modelParamsHook.settingsSuggestionSource,
-      modelParamsHook.userManuallyAdjustedSettings,
-      modelParamsHook.modelConfigRationales,
-      modelParamsHook.modelParameterAdvice,
-      modelParamsHook.modelConfigWarnings,
-      modelParamsHook.handleTemperatureChange,
-      modelParamsHook.handleTopPChange,
-      modelParamsHook.handleTopKChange,
-      onMaxIterationsChange,
-      modelParamsHook.setUserManuallyAdjustedSettings,
+        modelParamsHook,
+        processState.maxMajorVersions,
+        onMaxIterationsChange,
     ]);
 
     const planContextValue: PlanContextType = useMemo(() => ({
@@ -512,13 +503,13 @@ const AppContent: React.FC = () => {
         currentStageIteration: processState.currentStageIteration,
         savedPlanTemplates: planTemplatesHook.savedPlanTemplates,
         planTemplateStatus: planTemplatesHook.planTemplateStatusMessage,
-        updateProcessState,
         onIsPlanActiveChange,
         onPlanStagesChange,
         handleSavePlanAsTemplate: planTemplatesHook.handleSavePlanAsTemplate,
         handleDeletePlanTemplate: planTemplatesHook.handleDeletePlanTemplate,
         clearPlanTemplateStatus: planTemplatesHook.clearPlanTemplateStatusMessage,
         onLoadPlanTemplate,
+        updateProcessState,
     }), [
         processState.isPlanActive,
         processState.planStages,
@@ -526,13 +517,13 @@ const AppContent: React.FC = () => {
         processState.currentStageIteration,
         planTemplatesHook.savedPlanTemplates,
         planTemplatesHook.planTemplateStatusMessage,
-        updateProcessState,
         onIsPlanActiveChange,
         onPlanStagesChange,
         planTemplatesHook.handleSavePlanAsTemplate,
         planTemplatesHook.handleDeletePlanTemplate,
         planTemplatesHook.clearPlanTemplateStatusMessage,
-        onLoadPlanTemplate
+        onLoadPlanTemplate,
+        updateProcessState,
     ]);
 
     return (
@@ -548,10 +539,13 @@ const AppContent: React.FC = () => {
     );
 };
 
-const App: React.FC = () => (
+
+const App: React.FC = () => {
+  return (
     <ErrorBoundary>
-        <AppContent />
+      <AppContent />
     </ErrorBoundary>
-);
+  );
+};
 
 export default App;

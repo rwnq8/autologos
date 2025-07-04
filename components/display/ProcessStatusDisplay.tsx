@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import React, { useState, useContext } from 'react';
 import { useProcessContext } from '../../contexts/ProcessContext';
 import { useApplicationContext } from '../../contexts/ApplicationContext';
@@ -36,8 +30,8 @@ const ProcessStatusDisplay: React.FC = () => {
   let statusMessageForDisplay = processCtx.statusMessage;
 
   if (processCtx.isProcessing) {
-    const iter1LogEntry = processCtx.iterationHistory.find(e => e.iteration === 1 && e.isSegmentedSynthesis);
-    if (iter1LogEntry && processCtx.currentIteration === 0) { // Special case: currentIter is 0 during segmented Iter 1 processing
+    const iter1LogEntry = processCtx.iterationHistory.find(e => e.majorVersion === 1 && e.isSegmentedSynthesis);
+    if (iter1LogEntry && processCtx.currentMajorVersion === 0) { // Special case: currentIter is 0 during segmented Iter 1 processing
         const segmentMatch = processCtx.statusMessage.match(/Segmented Iteration 1 \((\d+)\/(\d+)\): Synthesizing "(.*?)"\.\.\./);
         if (segmentMatch) {
             const currentSegmentNum = parseInt(segmentMatch[1], 10);
@@ -61,20 +55,20 @@ const ProcessStatusDisplay: React.FC = () => {
       progressText = `Stage ${planCtx.currentPlanStageIndex + 1}/${planCtx.planStages.length} (Iter. ${processCtx.currentStageIteration +1 }/${currentStage.stageIterations}) | Overall ${Math.round(progressPercentValue)}%`;
     } else {
       // For Global Mode, show iteration being processed / total
-      const iterationBeingProcessedGlobal = processCtx.currentIteration + 1;
+      const iterationBeingProcessedGlobal = processCtx.currentMajorVersion + 1;
       progressPercentValue = modelConfigCtx.maxIterations > 0 ? (iterationBeingProcessedGlobal / modelConfigCtx.maxIterations) * 100 : 0;
       progressText = `Global Iter. ${Math.max(1, iterationBeingProcessedGlobal)} / ${modelConfigCtx.maxIterations}`;
     }
   } else {
      // Not processing: Show last completed iteration for Global Mode if applicable
     if (!planCtx.isPlanActive) {
-        progressPercentValue = modelConfigCtx.maxIterations > 0 ? (processCtx.currentIteration / modelConfigCtx.maxIterations) * 100 : 0;
-        progressText = `Global Iter. ${processCtx.currentIteration} / ${modelConfigCtx.maxIterations} (Completed)`;
+        progressPercentValue = modelConfigCtx.maxIterations > 0 ? (processCtx.currentMajorVersion / modelConfigCtx.maxIterations) * 100 : 0;
+        progressText = `Global Iter. ${processCtx.currentMajorVersion} / ${modelConfigCtx.maxIterations} (Completed)`;
     } else if (planCtx.isPlanActive && planCtx.planStages.length > 0 && planCtx.currentPlanStageIndex != null) {
         // For completed plan
         const totalPlanIterations = planCtx.planStages.reduce((sum, stage) => sum + stage.stageIterations, 0);
-        progressPercentValue = totalPlanIterations > 0 ? ( (processCtx.currentIteration) / totalPlanIterations) * 100 : 0; // Assuming currentIteration reflects total completed plan iters
-        progressText = `Plan Completed (${processCtx.currentIteration} iters) | Overall ${Math.round(progressPercentValue)}%`;
+        progressPercentValue = totalPlanIterations > 0 ? ( (processCtx.currentMajorVersion) / totalPlanIterations) * 100 : 0; // Assuming currentIteration reflects total completed plan iters
+        progressText = `Plan Completed (${processCtx.currentMajorVersion} iters) | Overall ${Math.round(progressPercentValue)}%`;
     }
   }
   const clampedProgressPercent = Math.min(100, Math.max(0, progressPercentValue));
@@ -180,9 +174,9 @@ const ProcessStatusDisplay: React.FC = () => {
           break;
       }
     }
-    const iterationBeingProcessed = processCtx.currentIteration + 1;
+    const iterationBeingProcessed = processCtx.currentMajorVersion + 1;
     let modeText = "";
-    if (processCtx.currentIteration === 0 && processCtx.statusMessage.startsWith("Segmented Iteration 1")) {
+    if (processCtx.currentMajorVersion === 0 && processCtx.statusMessage.startsWith("Segmented Iteration 1")) {
         modeText = "Segmented Iteration 1.";
     } else if (planCtx.isPlanActive && planCtx.currentPlanStageIndex !== null && planCtx.planStages[planCtx.currentPlanStageIndex]) {
         const currentStageInfo = planCtx.planStages[planCtx.currentPlanStageIndex];
@@ -199,7 +193,7 @@ const ProcessStatusDisplay: React.FC = () => {
       const initialStrategyArgs: Pick<ProcessState, 'inputComplexity' | 'initialPrompt' | 'loadedFiles' | 'selectedModelName' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness'> = {
         inputComplexity: processCtx.inputComplexity, initialPrompt: processCtx.initialPrompt, loadedFiles: processCtx.loadedFiles, selectedModelName: appCtx.selectedModelName, strategistInfluenceLevel: processCtx.strategistInfluenceLevel, stagnationNudgeAggressiveness: processCtx.stagnationNudgeAggressiveness
       };
-      const initialStrategy = ModelStrategyService.determineInitialStrategy(initialStrategyArgs, modelConfigCtx);
+      const initialStrategy = ModelStrategyService.determineInitialStrategy(initialStrategyArgs, modelConfigCtx.getUserSetBaseConfig());
       dynamicInsightText = `Input Complexity: ${processCtx.inputComplexity || 'N/A'}. Initial Strategy: ${initialStrategy.rationale}`;
   }
 

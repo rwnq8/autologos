@@ -16,13 +16,16 @@ import type {
   SelectableModelName,
   StagnationInfo, 
   PlanTemplate,
-  IterationEntryType, // Added
-  DevLogEntry // Added
+  IterationEntryType,
+  DevLogEntry,
+  Version
 } from '../types';
 
 export type AddLogEntryType = (logData: {
-  iteration: number;
-  entryType?: IterationEntryType; // Added
+  majorVersion: number;
+  minorVersion: number;
+  patchVersion?: number;
+  entryType?: IterationEntryType;
   currentFullProduct: string | null;
   status: string;
   previousFullProduct?: string | null;
@@ -47,10 +50,10 @@ export type AddLogEntryType = (logData: {
   processedProductHead?: string;
   processedProductTail?: string;
   processedProductLengthChars?: number;
-  isSegmentedSynthesis?: boolean; // Added for backward compatibility with useIterativeLogic for now
-  isTargetedRefinement?: boolean; // Added for backward compatibility
-  targetedSelection?: string; // Added for backward compatibility
-  targetedRefinementInstructions?: string; // Added for backward compatibility
+  isSegmentedSynthesis?: boolean;
+  isTargetedRefinement?: boolean;
+  targetedSelection?: string;
+  targetedRefinementInstructions?: string;
   bootstrapRun?: number;
 }) => void;
 
@@ -62,19 +65,18 @@ export interface ProcessContextType extends Omit<ProcessState,
 > {
   updateProcessState: (updates: Partial<ProcessState>) => void; 
   handleLoadedFilesChange: (files: LoadedFile[], action?: 'add' | 'remove' | 'clear') => void;
-  addLogEntry: AddLogEntryType;
-  handleResetApp: () => Promise<void>; 
+  handleReset: (baseConfig: ModelConfig, templates: PlanTemplate[]) => Promise<void>; 
   handleStartProcess: (options?: { 
     isTargetedRefinement?: boolean; 
     targetedSelection?: string; 
     targetedInstructions?: string; 
-    userRawPromptForContextualizer?: string; // Added for DevLog context
+    userRawPromptForContextualizer?: string;
   }) => Promise<void>;
   handleHaltProcess: () => void;
   handleBootstrapSynthesis: () => Promise<void>;
-  handleRewind: (iterationNumber: number) => void;
-  handleExportIterationMarkdown: (iterationNumber: number) => void;
-  reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[], basePrompt: string) => ReconstructedProductResult;
+  handleRewind: (version: Version) => void;
+  handleExportIterationMarkdown: (version: Version) => void;
+  reconstructProductCallback: (targetVersion: Version, history: IterationLogEntry[], basePrompt: string) => ReconstructedProductResult;
   handleInitialPromptChange: (newPromptText: string) => void;
   openTargetedRefinementModal: (selectedText: string) => void;
   toggleEditMode: (forceOff?: boolean) => void; 
@@ -83,8 +85,9 @@ export interface ProcessContextType extends Omit<ProcessState,
   initialPrompt: string;
   currentProduct: string | null;
   iterationHistory: IterationLogEntry[];
-  currentIteration: number;
-  maxIterations: number; 
+  currentMajorVersion: number;
+  currentMinorVersion: number;
+  maxMajorVersions: number;
   isProcessing: boolean;
   finalProduct: string | null;
   statusMessage: string;
@@ -93,8 +96,8 @@ export interface ProcessContextType extends Omit<ProcessState,
   configAtFinalization: ModelConfig | null;
   projectObjective: string | null;
   lastAutoSavedAt?: number | null;
-  currentProductBeforeHalt?: string | null;
-  currentIterationBeforeHalt?: number;
+  currentProductBeforeHalt: string | null;
+  currentVersionBeforeHalt?: Version;
   outputParagraphShowHeadings: boolean;
   outputParagraphMaxHeadingDepth: number;
   outputParagraphNumberedHeadings: boolean;
@@ -115,8 +118,8 @@ export interface ProcessContextType extends Omit<ProcessState,
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
   isEditingCurrentProduct?: boolean; 
   editedProductBuffer?: string | null; 
-  devLog?: DevLogEntry[]; // Added
-  // DevLog management functions
+  devLog: DevLogEntry[];
+  addLogEntry: (params: any) => void;
   addDevLogEntry: (newEntryData: Omit<DevLogEntry, 'id' | 'timestamp' | 'lastModified'>) => void;
   updateDevLogEntry: (updatedEntry: DevLogEntry) => void;
   deleteDevLogEntry: (entryId: string) => void;

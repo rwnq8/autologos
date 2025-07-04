@@ -1,11 +1,14 @@
+// hooks/useProcessState.ts
+
 import { useState, useCallback } from 'react';
-import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, ParameterAdvice, PlanTemplate, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry } from '../types.ts'; // Added DevLogEntry
+import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate } from '../types.ts';
 import * as geminiService from '../services/geminiService';
 import * as storageService from '../services/storageService';
 import { INITIAL_PROJECT_NAME_STATE } from '../services/utils';
 import { getProductSummary } from '../services/iterationUtils';
 import { CONVERGED_PREFIX } from '../services/promptBuilderService';
 import * as Diff from 'diff';
+import { compareVersions } from '../services/versionUtils';
 
 
 export const createInitialProcessState = (
@@ -15,8 +18,9 @@ export const createInitialProcessState = (
   initialPrompt: "",
   currentProduct: null,
   iterationHistory: [],
-  currentIteration: 0,
-  maxIterations: 40, // Production default
+  currentMajorVersion: 0,
+  currentMinorVersion: 0,
+  maxMajorVersions: 40,
   isProcessing: false,
   finalProduct: null,
   statusMessage: "Load input file(s) or type prompt, then configure model settings to begin.",
@@ -30,7 +34,7 @@ export const createInitialProcessState = (
   projectObjective: null,
   lastAutoSavedAt: null,
   currentProductBeforeHalt: null,
-  currentIterationBeforeHalt: undefined,
+  currentVersionBeforeHalt: undefined,
   promptChangedByFileLoad: false,
   outputParagraphShowHeadings: false,
   outputParagraphMaxHeadingDepth: 3,
@@ -73,6 +77,7 @@ export const createInitialProcessState = (
   bootstrapSamples: 2,
   bootstrapSampleSizePercent: 60,
   bootstrapSubIterations: 2,
+  ensembleSubProducts: null,
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
@@ -85,47 +90,9 @@ const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile
   return 'COMPLEX';
 };
 
-export type AddLogEntryParams = {
-  iteration: number;
-  entryType?: IterationEntryType;
-  currentFullProduct: string | null;
-  status: string;
-  previousFullProduct?: string | null;
-  promptSystemInstructionSent?: string;
-  promptCoreUserInstructionsSent?: string;
-  promptFullUserPromptSent?: string;
-  apiStreamDetails?: ApiStreamCallDetail[];
-  modelConfigUsed?: ModelConfig;
-  readabilityScoreFlesch?: number;
-  lexicalDensity?: number;
-  avgSentenceLength?: number;
-  typeTokenRatio?: number;
-  fileProcessingInfo: FileProcessingInfo;
-  aiValidationInfo?: AiResponseValidationInfo;
-  directAiResponseHead?: string;
-  directAiResponseTail?: string;
-  directAiResponseLengthChars?: number;
-  processedProductHead?: string;
-  processedProductTail?: string;
-  processedProductLengthChars?: number;
-  attemptCount?: number;
-  strategyRationale?: string;
-  currentModelForIteration?: SelectableModelName;
-  activeMetaInstruction?: string;
-  isSegmentedSynthesis?: boolean;
-  isTargetedRefinement?: boolean;
-  targetedSelection?: string;
-  targetedRefinementInstructions?: string;
-  isCriticalFailure?: boolean; 
-  groundingMetadata?: any;
-  netLineChange?: number; 
-  charDelta?: number; 
-  // New fields for per-iteration stagnation metrics
-  similarityWithPreviousLogged?: number;
-  isStagnantIterationLogged?: boolean;
-  isEffectivelyIdenticalLogged?: boolean;
-  isLowValueIterationLogged?: boolean;
-  bootstrapRun?: number;
+export type AddLogEntryParams = Omit<IterationLogEntry, 'productSummary' | 'timestamp' | 'productDiff' | 'linesAdded' | 'linesRemoved' | 'charDelta'> & {
+    currentFullProduct: string | null;
+    previousFullProduct?: string | null;
 };
 
 
@@ -167,7 +134,7 @@ export const useProcessState = () => {
             statusMessageUpdate = `File "${fileToRemoveName}" removed.`;
             aiInsightUpdate = `${updatedLoadedFiles.length} file(s) remain loaded.`;
         }
-      } else { // 'add' action
+      } else { 
         const existingFileNames = new Set(prev.loadedFiles.map(f => f.name));
         const filesToAdd = newlySelectedFiles.filter(nf => !existingFileNames.has(nf.name));
         updatedLoadedFiles = [...prev.loadedFiles, ...filesToAdd];
@@ -212,7 +179,8 @@ export const useProcessState = () => {
         updates.currentProduct = null;
         updates.iterationHistory = [];
         updates.finalProduct = null;
-        updates.currentIteration = 0;
+        updates.currentMajorVersion = 0;
+        updates.currentMinorVersion = 0;
         updates.projectName = INITIAL_PROJECT_NAME_STATE; 
         updates.stagnationInfo = { 
             isStagnant: false, 
@@ -226,15 +194,15 @@ export const useProcessState = () => {
             consecutiveWordsmithingIterations: 0, 
         };
         updates.currentProductBeforeHalt = null;
-        updates.currentIterationBeforeHalt = undefined;
+        updates.currentVersionBeforeHalt = undefined;
         updates.configAtFinalization = null;
         updates.isPlanActive = false;
         updates.planStages = [];
         updates.currentPlanStageIndex = null;
-        updates.currentStageIteration = 0;
         updates.isEditingCurrentProduct = false; 
         updates.editedProductBuffer = null;
         updates.devLog = []; 
+        updates.ensembleSubProducts = null;
       }
       return { ...prev, ...updates };
     });
@@ -255,7 +223,8 @@ export const useProcessState = () => {
               currentProduct: null,
               iterationHistory: [],
               finalProduct: null,
-              currentIteration: 0,
+              currentMajorVersion: 0,
+              currentMinorVersion: 0,
               stagnationInfo: { 
                 isStagnant: false, 
                 consecutiveStagnantIterations: 0, 
@@ -268,15 +237,15 @@ export const useProcessState = () => {
                 consecutiveWordsmithingIterations: 0, 
               },
               currentProductBeforeHalt: null,
-              currentIterationBeforeHalt: undefined,
+              currentVersionBeforeHalt: undefined,
               configAtFinalization: null,
               isPlanActive: false,
               planStages: [],
               currentPlanStageIndex: null,
-              currentStageIteration: 0,
               isEditingCurrentProduct: false, 
               editedProductBuffer: null,
               devLog: [], 
+              ensembleSubProducts: null,
           };
       });
   }, []);
@@ -286,7 +255,6 @@ export const useProcessState = () => {
     let productDiff: string | undefined = undefined;
     let linesAdded = 0;
     let linesRemoved = 0;
-    const entryType = logData.entryType || 'ai_iteration'; 
 
     const normalizeNewlines = (str: string | null | undefined): string => {
         if (!str) return "";
@@ -304,11 +272,14 @@ export const useProcessState = () => {
             : (logData.previousFullProduct ?? "")
     );
     
-    const diffBase = (entryType === 'initial_state' && logData.iteration === 0) ? "" : previousPForDiff;
+    const diffBase = (logData.entryType === 'initial_state' && logData.majorVersion === 0) ? "" : previousPForDiff;
 
     if (currentPForDiff !== diffBase) { 
+        const prevVersionString = `v${logData.majorVersion - 1}.${logData.minorVersion}`;
+        const currentVersionString = `v${logData.majorVersion}.${logData.minorVersion}${logData.patchVersion !== undefined ? '.' + logData.patchVersion : ''}`;
+
         productDiff = Diff.createTwoFilesPatch(
-            `iteration_content_prev.txt`, `iteration_content_curr.txt`,
+            prevVersionString, currentVersionString,
             diffBase, currentPForDiff,
             undefined, undefined, { context: 3 }
         );
@@ -317,57 +288,21 @@ export const useProcessState = () => {
             if (part.added) linesAdded += part.count || 0;
             if (part.removed) linesRemoved += part.count || 0;
         });
-    } else {
-        productDiff = undefined; linesAdded = 0; linesRemoved = 0;
     }
 
     const newEntry: IterationLogEntry = {
-      iteration: logData.iteration, entryType: entryType,
-      productSummary: getProductSummary(logData.currentFullProduct), status: logData.status,
-      timestamp: Date.now(), productDiff: productDiff,
-      linesAdded: linesAdded > 0 ? linesAdded : (logData.iteration === 0 && entryType === 'initial_state' && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
+      ...logData,
+      productSummary: getProductSummary(logData.currentFullProduct), 
+      timestamp: Date.now(), 
+      productDiff: productDiff,
+      linesAdded: linesAdded > 0 ? linesAdded : (logData.majorVersion === 0 && logData.entryType === 'initial_state' && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
       linesRemoved: linesRemoved > 0 ? linesRemoved : undefined,
-      netLineChange: logData.netLineChange, charDelta: logData.charDelta,     
-      readabilityScoreFlesch: logData.readabilityScoreFlesch, lexicalDensity: logData.lexicalDensity, 
-      avgSentenceLength: logData.avgSentenceLength, typeTokenRatio: logData.typeTokenRatio, 
-      fileProcessingInfo: logData.fileProcessingInfo, promptSystemInstructionSent: logData.promptSystemInstructionSent,
-      promptCoreUserInstructionsSent: logData.promptCoreUserInstructionsSent, promptFullUserPromptSent: logData.promptFullUserPromptSent,
-      apiStreamDetails: logData.apiStreamDetails, modelConfigUsed: logData.modelConfigUsed,
-      aiValidationInfo: logData.aiValidationInfo, directAiResponseHead: logData.directAiResponseHead,
-      directAiResponseTail: logData.directAiResponseTail, directAiResponseLengthChars: logData.directAiResponseLengthChars,
-      processedProductHead: logData.processedProductHead, processedProductTail: logData.processedProductTail,
-      processedProductLengthChars: logData.processedProductLengthChars, attemptCount: logData.attemptCount,
-      strategyRationale: logData.strategyRationale, currentModelForIteration: logData.currentModelForIteration,
-      activeMetaInstruction: logData.activeMetaInstruction,
-      groundingMetadata: logData.groundingMetadata,
-      isSegmentedSynthesis: entryType === 'segmented_synthesis_milestone', isTargetedRefinement: entryType === 'targeted_refinement',
-      targetedSelection: logData.targetedSelection, targetedRefinementInstructions: logData.targetedRefinementInstructions,
-      isCriticalFailure: logData.isCriticalFailure, 
-      similarityWithPreviousLogged: logData.similarityWithPreviousLogged, isStagnantIterationLogged: logData.isStagnantIterationLogged,
-      isEffectivelyIdenticalLogged: logData.isEffectivelyIdenticalLogged, isLowValueIterationLogged: logData.isLowValueIterationLogged,
-      bootstrapRun: logData.bootstrapRun,
+      charDelta: currentPForDiff.length - previousPForDiff.length,
     };
 
     setState(prev => {
-        const existingEntryIndex = prev.iterationHistory.findIndex(entry => 
-            entry.iteration === newEntry.iteration && entry.entryType === newEntry.entryType &&
-            (newEntry.attemptCount ? entry.attemptCount === newEntry.attemptCount : true) 
-        );
-        let updatedHistory;
-        if (existingEntryIndex !== -1) {
-            updatedHistory = [...prev.iterationHistory];
-            updatedHistory[existingEntryIndex] = newEntry;
-        } else {
-            updatedHistory = [...prev.iterationHistory, newEntry];
-        }
-        updatedHistory.sort((a, b) => {
-            if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-            const typeOrder: Record<IterationEntryType, number> = { 'initial_state': 0, 'bootstrap_sub_iteration': 1, 'bootstrap_synthesis_milestone': 2, 'segmented_synthesis_milestone': 3, 'ai_iteration': 4, 'targeted_refinement': 5, 'manual_edit': 6 };
-            const aTypeOrder = typeOrder[a.entryType || 'ai_iteration'];
-            const bTypeOrder = typeOrder[b.entryType || 'ai_iteration'];
-            if (aTypeOrder !== bTypeOrder) return aTypeOrder - bTypeOrder;
-            return (a.attemptCount || 0) - (b.attemptCount || 0); 
-        });
+        const updatedHistory = [...prev.iterationHistory, newEntry];
+        updatedHistory.sort(compareVersions);
         return { ...prev, iterationHistory: updatedHistory };
     });
   }, []);
@@ -398,6 +333,7 @@ export const useProcessState = () => {
         },
         isTargetedRefinementModalOpen: false, currentTextSelectionForRefinement: null, instructionsForSelectionRefinement: "",
         isEditingCurrentProduct: false, editedProductBuffer: null, devLog: [], 
+        ensembleSubProducts: null,
     };
     setState(resetState);
   }, [state.projectId]);
@@ -424,9 +360,3 @@ export const useProcessState = () => {
     addDevLogEntry, updateDevLogEntry, deleteDevLogEntry,
   };
 };
-
-declare module '../types.ts' {
-  interface FileProcessingInfo {
-    loadedFilesForIterationContext?: LoadedFile[];
-  }
-}

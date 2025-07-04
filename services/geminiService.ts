@@ -1,7 +1,5 @@
-
-
 import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
-import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, LoadedFile, PlanStage, SuggestedParamsResponse, RetryContext, OutlineGenerationResult, NudgeStrategy, SelectableModelName } from "../types.ts";
+import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, LoadedFile, PlanStage, SuggestedParamsResponse, RetryContext, OutlineGenerationResult, NudgeStrategy, SelectableModelName, Version } from "../types.ts";
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents, CONVERGED_PREFIX } from './promptBuilderService.ts';
 import { SELECTABLE_MODELS } from '../types.ts';
 import { urlBrowseTool } from './toolDefinitions.ts';
@@ -103,7 +101,7 @@ export const generateInitialOutline = async (fileManifest: string, loadedFiles: 
     }));
     requestParts.push({ text: coreUserInstructions });
 
-    const { modelName, maxIterations, ...apiConfig } = modelConfig;
+    const { ...apiConfig } = modelConfig;
 
     const result: GenerateContentResponse = await ai.models.generateContent({
         model: modelToUse,
@@ -161,7 +159,7 @@ export const iterateProduct = async ({
     activePlanStage, outputParagraphShowHeadings, outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings,
     modelConfigToUse, isGlobalMode, isSearchGroundingEnabled, isUrlBrowsingEnabled, modelToUse, onStreamChunk, isHaltSignalled,
     retryContext, stagnationNudgeStrategy, initialOutlineForIter1, activeMetaInstruction,
-    devLogContextString, isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
+    ensembleSubProducts, devLogContextString, isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
     isRadicalRefinementKickstart
 }: {
     currentProduct: string; currentIterationOverall: number; maxIterationsOverall: number; fileManifest: string;
@@ -171,6 +169,7 @@ export const iterateProduct = async ({
     onStreamChunk: (chunkText: string) => void; isHaltSignalled: () => boolean;
     retryContext?: RetryContext; stagnationNudgeStrategy?: NudgeStrategy;
     initialOutlineForIter1?: OutlineGenerationResult; activeMetaInstruction?: string;
+    ensembleSubProducts?: string[] | null;
     devLogContextString?: string;
     isTargetedRefinementMode?: boolean; targetedSelectionText?: string; targetedRefinementInstructions?: string;
     isRadicalRefinementKickstart?: boolean;
@@ -179,29 +178,33 @@ export const iterateProduct = async ({
     
     const isInitialProductEmptyAndFilesLoaded = (currentProduct === null || currentProduct.trim() === "") && loadedFiles.length > 0;
     const isSegmentedSynthesisMode = false;
+    const currentVersion: Version = { major: currentIterationOverall, minor: 0 }; // Assume minor is 0 for this context
 
     try {
         const { systemInstruction, coreUserInstructions } = getUserPromptComponents(
-            currentIterationOverall, maxIterationsOverall, activePlanStage, outputParagraphShowHeadings,
+            currentVersion, maxIterationsOverall, activePlanStage, outputParagraphShowHeadings,
             outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings, isGlobalMode,
             isInitialProductEmptyAndFilesLoaded,
             retryContext, stagnationNudgeStrategy, initialOutlineForIter1, loadedFiles, activeMetaInstruction,
             isSegmentedSynthesisMode, undefined, undefined,
             isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
-            isRadicalRefinementKickstart
+            isRadicalRefinementKickstart,
+            devLogContextString,
+            ensembleSubProducts
         );
 
-        const { modelName, maxIterations, ...apiConfig } = modelConfigToUse;
+        const { ...apiConfig } = modelConfigToUse;
         
         const fullUserPromptText = buildTextualPromptPart(
             currentProduct,
             loadedFiles,
             coreUserInstructions,
-            currentIterationOverall,
+            currentVersion,
             initialOutlineForIter1,
             fileManifest, // Pass the summary manifest string here
             isSegmentedSynthesisMode,
-            isTargetedRefinementMode
+            isTargetedRefinementMode,
+            ensembleSubProducts
         );
 
         const initialUserParts: Part[] = [];
@@ -321,19 +324,38 @@ export const iterateProduct = async ({
                   functionCall: { name: call.name, args: call.args },
                 };
 
-                if(call.name === 'url_browse') {
+                if (call.name === 'url_browse') {
                     const browseUrl = call.args.url;
-                    const simulatedContent = `Simulated browsing of [${browseUrl}]: Content was analyzed. The key themes appear to be X, Y, and Z. This information will be used to improve the response.`;
-                    
+                    let browseContent = '';
+                    let browseSuccess = false;
+                
+                    try {
+                        const proxyResponse = await fetch(`/browse-proxy/${encodeURIComponent(String(browseUrl))}`);
+                        browseContent = await proxyResponse.text();
+                        if (proxyResponse.ok) {
+                            browseSuccess = true;
+                            // Truncate for safety to prevent huge context windows
+                            if (browseContent.length > 50000) {
+                              browseContent = browseContent.substring(0, 50000) + "\n\n[Content truncated by system]";
+                            }
+                        } else {
+                             browseSuccess = false;
+                             // The body of the error response from the SW is the error message
+                        }
+                    } catch (e: any) {
+                        browseSuccess = false;
+                        browseContent = `Failed to fetch URL via proxy. Error: ${e.message}`;
+                    }
+                
                     conversationHistory.push({
-                      role: 'tool',
-                      parts: [{ functionResponse: { name: 'url_browse', response: { content: simulatedContent, success: true }}}]
+                        role: 'tool',
+                        parts: [{ functionResponse: { name: 'url_browse', response: { content: browseContent, success: browseSuccess }}}]
                     });
-
-                    toolDetail.functionResponse = { name: 'url_browse', response: { success: true, detail: simulatedContent } };
+                
+                    toolDetail.functionResponse = { name: 'url_browse', response: { success: browseSuccess, detail: `Fetched ${browseContent.length} chars. Success: ${browseSuccess}` } };
                 }
                 apiStreamDetails.push(toolDetail);
-                continue;
+                continue; // Continue the while loop to get the next response from the model
             } else {
                 const lastMessage = conversationHistory[conversationHistory.length - 1];
                 if (lastMessage?.role === 'model') {
@@ -365,11 +387,13 @@ export const iterateProduct = async ({
             }
         }
         
-        const trimmedProduct = accumulatedText.trim();
-        const isConverged = trimmedProduct.startsWith(CONVERGED_PREFIX);
-        const finalProduct = isConverged
-          ? trimmedProduct.substring(CONVERGED_PREFIX.length).trim()
-          : accumulatedText;
+        let trimmedProduct = accumulatedText.trim();
+        // Clean the CONVERGED prefix from the final product before returning
+        if (trimmedProduct.startsWith(CONVERGED_PREFIX)) {
+            trimmedProduct = trimmedProduct.substring(CONVERGED_PREFIX.length).trim();
+        }
+        const isConverged = accumulatedText.trim().startsWith(CONVERGED_PREFIX);
+        const finalProduct = trimmedProduct;
         const status = isConverged ? 'CONVERGED' : 'COMPLETED';
 
         const lastDetailWithMetadata = [...apiStreamDetails].reverse().find(d => d.groundingMetadata);

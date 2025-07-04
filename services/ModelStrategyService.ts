@@ -1,4 +1,3 @@
-
 import type { ProcessState, ModelConfig, SelectableModelName, IterationLogEntry, PlanStage, StagnationInfo, ModelStrategy, LoadedFile, AiResponseValidationInfo, StrategistLLMContext } from '../types.ts';
 import { CREATIVE_DEFAULTS, GENERAL_BALANCED_DEFAULTS, DEFAULT_MODEL_NAME } from './geminiService.ts';
 import { CONVERGED_PREFIX } from './promptBuilderService.ts';
@@ -66,7 +65,7 @@ export const determineInitialStrategy = (
 };
 
 export const reevaluateStrategy = async (
-    processState: Pick<ProcessState, 'currentProduct' | 'currentIteration' | 'maxIterations' | 'inputComplexity' | 'stagnationInfo' | 'iterationHistory' | 'currentModelForIteration' | 'currentAppliedModelConfig' | 'isPlanActive' | 'planStages'| 'currentPlanStageIndex' | 'selectedModelName' | 'stagnationNudgeEnabled' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness' | 'initialPrompt' | 'loadedFiles' | 'activeMetaInstructionForNextIter'> & {
+    processState: Pick<ProcessState, 'currentProduct' | 'currentMajorVersion' | 'maxMajorVersions' | 'inputComplexity' | 'stagnationInfo' | 'iterationHistory' | 'currentModelForIteration' | 'currentAppliedModelConfig' | 'isPlanActive' | 'planStages'| 'currentPlanStageIndex' | 'selectedModelName' | 'stagnationNudgeEnabled' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness' | 'initialPrompt' | 'loadedFiles' | 'activeMetaInstructionForNextIter'> & {
         lastNValidationSummariesString?: string,
         productDevelopmentState: StrategistLLMContext['productDevelopmentState'],
         stagnationSeverity: StrategistLLMContext['stagnationSeverity'],
@@ -76,7 +75,7 @@ export const reevaluateStrategy = async (
     baseUserConfig: ModelConfig
 ): Promise<ModelStrategy> => {
     const { 
-        currentIteration, maxIterations, isPlanActive, stagnationInfo,
+        currentMajorVersion, maxMajorVersions, isPlanActive, stagnationInfo,
         stagnationNudgeEnabled, stagnationNudgeAggressiveness,
         currentModelForIteration, selectedModelName,
         isRadicalRefinementKickstartAttempt
@@ -100,13 +99,13 @@ export const reevaluateStrategy = async (
             rationales.push("Radical Kickstart: Switching to Gemini 2.5 Pro with high creativity. Applying forceful meta-instruction.");
         } else {
             // Heuristic sweep
-            const interpolationFactor = Math.min(1.0, (currentIteration + 1) / DETERMINISTIC_TARGET_ITERATION);
+            const interpolationFactor = Math.min(1.0, (currentMajorVersion + 1) / DETERMINISTIC_TARGET_ITERATION);
             nextConfig = {
                 temperature: baseUserConfig.temperature - interpolationFactor * (baseUserConfig.temperature - FOCUSED_END_DEFAULTS.temperature),
                 topP: baseUserConfig.topP - interpolationFactor * (baseUserConfig.topP - FOCUSED_END_DEFAULTS.topP),
                 topK: Math.max(1, Math.round(baseUserConfig.topK - interpolationFactor * (baseUserConfig.topK - FOCUSED_END_DEFAULTS.topK)))
             };
-            rationales.push(`Heuristic Sweep: Iter ${currentIteration + 1}/${maxIterations}. Swept towards deterministic params.`);
+            rationales.push(`Heuristic Sweep: Iter ${currentMajorVersion + 1}/${maxMajorVersions}. Swept towards deterministic params.`);
 
             // Stagnation Nudge Logic
             if (stagnationNudgeEnabled) {

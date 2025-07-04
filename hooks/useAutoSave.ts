@@ -1,5 +1,7 @@
+// hooks/useAutoSave.ts
+
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName } from '../types.ts';
+import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName, Version } from '../types.ts';
 import * as storageService from '../services/storageService.ts';
 import { DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
@@ -14,7 +16,7 @@ type ModelParams = {
     userManuallyAdjustedSettings: boolean;
 };
 
-const LEAN_HISTORY_COUNT = 5; // Keep full diffs for the last 5 items
+const LEAN_HISTORY_COUNT = 5;
 
 export const useAutoSave = (
   processState: ProcessState,
@@ -52,27 +54,24 @@ export const useAutoSave = (
       }
     };
     checkForAutoSavedState();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run only once on mount
+  }, [updateProcessState]);
 
   const performAutoSave = useCallback(async () => {
     setAutoSaveStatus('saving');
     const { processState: currentState, modelParams: currentModelParams } = latestDataRef.current;
 
-    // Create a "lean" history for auto-saving to improve performance
     const leanHistory = currentState.iterationHistory.map((entry, index, arr) => {
         if (index < arr.length - LEAN_HISTORY_COUNT) {
-            // For older entries, omit the large diff string
             const { productDiff, ...leanEntry } = entry;
             return { ...leanEntry, productDiff: "(omitted for auto-save performance)" };
         }
-        return entry; // Keep recent entries as is
+        return entry;
     });
 
     const dataToSave: AutologosIterativeEngineData = {
         initialPrompt: currentState.initialPrompt,
-        iterationHistory: leanHistory, // Use the lean history for saving
-        maxIterations: currentState.maxIterations,
+        iterationHistory: leanHistory,
+        maxMajorVersions: currentState.maxMajorVersions,
         temperature: currentModelParams.temperature,
         topP: currentModelParams.topP,
         topK: currentModelParams.topK,
@@ -81,7 +80,7 @@ export const useAutoSave = (
         selectedModelName: currentState.selectedModelName,
         finalProduct: currentState.finalProduct,
         currentProductBeforeHalt: currentState.currentProductBeforeHalt,
-        currentIterationBeforeHalt: currentState.currentIterationBeforeHalt,
+        currentVersionBeforeHalt: currentState.currentVersionBeforeHalt,
         promptSourceName: currentState.promptSourceName,
         configAtFinalization: currentState.configAtFinalization,
         loadedFiles: currentState.loadedFiles,
@@ -95,6 +94,7 @@ export const useAutoSave = (
         savedPlanTemplates: currentState.savedPlanTemplates,
         currentDiffViewType: currentState.currentDiffViewType,
         projectName: currentState.projectName,
+        projectObjective: currentState.projectObjective,
         projectId: currentState.projectId,
         isApiRateLimited: currentState.isApiRateLimited,
         rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
@@ -108,6 +108,7 @@ export const useAutoSave = (
         bootstrapSamples: currentState.bootstrapSamples,
         bootstrapSampleSizePercent: currentState.bootstrapSampleSizePercent,
         bootstrapSubIterations: currentState.bootstrapSubIterations,
+        ensembleSubProducts: currentState.ensembleSubProducts,
     };
 
     try {
@@ -141,30 +142,28 @@ export const useAutoSave = (
         if (loadedFilesFromData.length > 0) {
             correctedInitialPrompt = `Input consists of ${loadedFilesFromData.length} file(s): ${loadedFilesFromData.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
         }
-
-        const lastIter = engineData.iterationHistory.length > 0 ? engineData.iterationHistory[engineData.iterationHistory.length - 1].iteration : 0;
         
-        const { product: productAtLastIter } = reconstructProduct(lastIter, engineData.iterationHistory, correctedInitialPrompt);
+        const lastEntry = engineData.iterationHistory && engineData.iterationHistory.length > 0 ? engineData.iterationHistory[engineData.iterationHistory.length - 1] : null;
+        const lastVersion: Version = lastEntry ? { major: lastEntry.majorVersion, minor: lastEntry.minorVersion, patch: lastEntry.patchVersion } : { major: 0, minor: 0 };
+
+        const { product: productAtLastIter } = reconstructProduct(lastVersion, engineData.iterationHistory, correctedInitialPrompt);
 
         const restoredProcessState: ProcessState = {
           ...initialProcessStateValues,
           ...engineData,
           initialPrompt: correctedInitialPrompt, 
           loadedFiles: loadedFilesFromData,     
-
           apiKeyStatus: initialProcessStateValues.apiKeyStatus, 
           isProcessing: false, 
           statusMessage: "Session restored from auto-save.",
-
           currentProduct: engineData.currentProductBeforeHalt || productAtLastIter,
-          currentIteration: engineData.currentIterationBeforeHalt ?? lastIter,
-
+          currentMajorVersion: engineData.currentVersionBeforeHalt?.major ?? lastVersion.major,
+          currentMinorVersion: engineData.currentVersionBeforeHalt?.minor ?? lastVersion.minor,
+          currentStageIteration: 0, // Reset this, it's transient
           selectedModelName: engineData.selectedModelName || initialProcessStateValues.selectedModelName,
-          
           planStages: engineData.planStages || [],
           savedPlanTemplates: engineData.savedPlanTemplates || [], 
           iterationHistory: engineData.iterationHistory || [],
-
           outputParagraphShowHeadings: engineData.outputParagraphShowHeadings ?? initialProcessStateValues.outputParagraphShowHeadings,
           outputParagraphMaxHeadingDepth: engineData.outputParagraphMaxHeadingDepth ?? initialProcessStateValues.outputParagraphMaxHeadingDepth,
           outputParagraphNumberedHeadings: engineData.outputParagraphNumberedHeadings ?? initialProcessStateValues.outputParagraphNumberedHeadings,
@@ -180,6 +179,7 @@ export const useAutoSave = (
           bootstrapSamples: engineData.bootstrapSamples ?? initialProcessStateValues.bootstrapSamples,
           bootstrapSampleSizePercent: engineData.bootstrapSampleSizePercent ?? initialProcessStateValues.bootstrapSampleSizePercent,
           bootstrapSubIterations: engineData.bootstrapSubIterations ?? initialProcessStateValues.bootstrapSubIterations,
+          ensembleSubProducts: engineData.ensembleSubProducts || null,
         };
         updateProcessState(restoredProcessState);
 

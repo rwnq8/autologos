@@ -1,7 +1,6 @@
 import React, { useState, useContext } from 'react'; 
 import type { LoadedFile, CommonControlProps } from '../../types.ts';
 import { useProcessContext } from '../../contexts/ProcessContext.tsx';
-import { XCircleIcon } from '../shared/Icons.tsx'; 
 
 const InputDataControls: React.FC<CommonControlProps> = ({
   commonInputClasses, 
@@ -77,10 +76,10 @@ const InputDataControls: React.FC<CommonControlProps> = ({
               <button
                 onClick={() => handleRemoveFile(file)}
                 disabled={processCtx.isProcessing}
-                className="ml-2 p-0.5 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 rounded-full focus:outline-none focus:ring-1 focus:ring-red-500 disabled:opacity-50"
+                className="ml-2 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50 font-mono text-xs"
                 aria-label={`Remove file ${file.name}`}
               >
-                <XCircleIcon className="w-4 h-4" />
+                [remove]
               </button>
             </div>
           ))}

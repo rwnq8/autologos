@@ -1,100 +1,85 @@
-
 import * as Diff from 'diff';
-import type { IterationLogEntry, ReconstructedProductResult } from '../types.ts';
+import type { IterationLogEntry, ReconstructedProductResult, Version } from '../types.ts';
+import { compareVersions, formatVersion } from './versionUtils.ts';
 
 const normalizeNewlines = (str: string): string => {
   if (typeof str !== 'string') return "";
-  // Replace CRLF with LF, then replace standalone CR with LF
   return str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 };
 
-const cleanDiffMarkerLiterals = (text: string): string => {
-  let cleanedText = text;
-  const markers = [
-    "\n\\ No newline at end of file",
-    "\\ No newline at end of file"
-  ];
-  for (const marker of markers) {
-    if (cleanedText.endsWith(marker)) {
-      cleanedText = cleanedText.substring(0, cleanedText.length - marker.length);
-    }
-  }
-  return cleanedText;
-};
-
 export const reconstructProduct = (
-  targetIteration: number,
+  targetVersion: Version,
   history: IterationLogEntry[],
   baseFileManifestInput: string
 ): ReconstructedProductResult => {
-  if (targetIteration < 0) {
-    return { product: "", error: `Invalid targetIteration: ${targetIteration}. Cannot reconstruct.` };
+  if (targetVersion.major < 0) {
+    return { product: "", error: `Invalid targetVersion: ${JSON.stringify(targetVersion)}. Cannot reconstruct.` };
   }
 
   let currentText = "";
-  let lastReconstructedIteration = -1;
+  let lastReconstructedVersion: Version = { major: -1, minor: -1, patch: -1 };
 
-  // Step 1: Establish the correct base product.
-  // The true "base" is the result of Iteration 0 if it exists and represents a synthesis.
-  const iterZeroEntry = history.find(e => e.iteration === 0 && (
+  const iterZeroEntry = history.find(e => e.majorVersion === 0 && (
     e.entryType === 'initial_state' || 
-    e.entryType === 'segmented_synthesis_milestone' ||
-    e.entryType === 'bootstrap_synthesis_milestone'
+    e.entryType === 'ensemble_integration'
   ));
 
   if (iterZeroEntry && iterZeroEntry.productDiff) {
     try {
       const patchedResult = Diff.applyPatch("", iterZeroEntry.productDiff);
       if (typeof patchedResult === 'string') {
-        currentText = normalizeNewlines(patchedResult); // FIX: Only normalize, do not clean here.
-        lastReconstructedIteration = 0;
+        currentText = normalizeNewlines(patchedResult);
+        lastReconstructedVersion = { major: 0, minor: 0, patch: iterZeroEntry.patchVersion };
       } else {
-        return { product: "", error: `Failed to apply base patch from Iteration 0.` };
+        return { product: "", error: `Failed to apply base patch from Version v0.0.` };
       }
     } catch (e: any) {
-      return { product: "", error: `Error parsing base patch from Iteration 0: ${e.message}` };
+      return { product: "", error: `Error parsing base patch from Version v0.0: ${e.message}` };
     }
   } else {
-    // If no Iteration 0 or it has no diff, the base is the initial prompt text.
     currentText = normalizeNewlines(baseFileManifestInput);
-    // lastReconstructedIteration remains -1, so we start applying from iter 1.
   }
 
-  // If the target is the base we just established, we're done.
-  if (targetIteration === lastReconstructedIteration) {
+  if (targetVersion.major === 0) {
     return { product: currentText };
   }
 
-  // Step 2: Sequentially apply diffs from the next iteration up to the target.
-  const relevantHistory = history
-    .filter(entry => entry.iteration > lastReconstructedIteration && entry.iteration <= targetIteration && entry.productDiff)
-    .sort((a, b) => a.iteration - b.iteration);
+  const sortedHistory = [...history].sort(compareVersions);
+
+  const relevantHistory = sortedHistory.filter(entry => {
+    // Filter out everything before our starting point
+    if (compareVersions(entry, lastReconstructedVersion) <= 0) return false;
+    // Filter out everything after our target
+    if (compareVersions(entry, targetVersion) > 0) return false;
+    return !!entry.productDiff;
+  });
 
   for (const logEntry of relevantHistory) {
     try {
       const patchObjects = Diff.parsePatch(logEntry.productDiff!);
-      if (patchObjects.length !== 1) {
-        const errorMsg = `Patch for Iteration ${logEntry.iteration} parsed into ${patchObjects.length} objects. Reconstruction cannot proceed.`;
-        console.error(`reconstructProduct: ${errorMsg}`);
-        return { product: currentText, error: errorMsg };
+      if (patchObjects.length === 0 && logEntry.productDiff?.trim()) {
+          console.warn(`reconstructProduct: Patch for Version ${formatVersion(logEntry)} was non-empty but parsed to zero hunks. Treating as no-op.`);
+          continue;
+      }
+      if (patchObjects.length > 1) {
+        console.warn(`reconstructProduct: Patch for Version ${formatVersion(logEntry)} parsed into ${patchObjects.length} objects. Applying only the first.`);
       }
 
-      const patchedResult = Diff.applyPatch(currentText, patchObjects[0]);
+      const patchedResult = Diff.applyPatch(currentText, logEntry.productDiff!);
 
       if (typeof patchedResult === 'string') {
-        currentText = normalizeNewlines(patchedResult); // FIX: Only normalize newlines. Do not clean diff markers inside the loop.
+        currentText = normalizeNewlines(patchedResult);
       } else {
-        const errorMsg = `Failed to apply parsed patch for Iteration ${logEntry.iteration}. Reconstruction stopped. The diff may not match the reconstructed text from the previous iteration.`;
+        const errorMsg = `Failed to apply parsed patch for Version ${formatVersion(logEntry)}. Reconstruction stopped.`;
         console.error(`reconstructProduct: ${errorMsg}`);
         return { product: currentText, error: errorMsg };
       }
     } catch (e: any) {
-      const errorMsg = `Error parsing or applying patch for Iteration ${logEntry.iteration}: ${e.message}. Reconstruction stopped.`;
+      const errorMsg = `Error parsing or applying patch for Version ${formatVersion(logEntry)}: ${e.message}. Reconstruction stopped.`;
       console.error(`reconstructProduct: ${errorMsg}`);
       return { product: currentText, error: errorMsg };
     }
   }
 
-  // The final text after all patches should not be cleaned either, to maintain consistency.
   return { product: currentText };
 };

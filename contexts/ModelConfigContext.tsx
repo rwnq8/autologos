@@ -1,7 +1,7 @@
-
+// contexts/ModelConfigContext.tsx
 
 import React, { createContext, useContext } from 'react';
-import type { SettingsSuggestionSource, ParameterAdvice, ProcessState } from '../types';
+import type { SettingsSuggestionSource, ParameterAdvice, ProcessState, ModelConfig } from '../types';
 
 export interface ModelConfigContextType {
   temperature: number;
@@ -18,6 +18,7 @@ export interface ModelConfigContextType {
   handleTopKChange: (value: number) => void;
   onMaxIterationsChange: (value: number) => void;
   setUserManuallyAdjustedSettings: (value: boolean) => void;
+  getUserSetBaseConfig: () => ModelConfig;
 }
 
 const ModelConfigContext = createContext<ModelConfigContextType | undefined>(undefined);

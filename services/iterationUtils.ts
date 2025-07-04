@@ -1,6 +1,6 @@
 // services/iterationUtils.ts
 
-import type { OutputLength, OutputFormat, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, AiResponseValidationInfoDetailsValue_InitialSynthesis, FileProcessingInfo, IsLikelyAiErrorResponseResult } from '../types.ts';
+import type { OutputLength, OutputFormat, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, FileProcessingInfo, IsLikelyAiErrorResponseResult } from '../types.ts';
 import { countWords } from './textAnalysisService.ts'; // Assuming countWords is exported
 
 // --- Constants for Content Reduction Checks ---
@@ -76,16 +76,16 @@ const PROMPT_LEAKAGE_MARKERS = [
   "---CURRENT STATE OF PRODUCT (",
   "------------------------------------------",
   "REMINDER: Your response should be ONLY the new, modified textual product.",
-  "NEW MODIFIED PRODUCT (Iteration ",
+  "NEW MODIFIED PRODUCT (Version ",
   "---PREVIOUSLY_GENERATED_PARTIAL_RESPONSE_THIS_ITERATION---",
   "---CONTINUATION_REQUEST---",
   "CRITICAL CONTEXT OF ORIGINAL FILES:",
   "GLOBAL MODE DYNAMIC PARAMS:",
   "ITERATIVE PLAN MODE:",
   "GENERAL RULES:",
-  "CRITICAL INITIAL SYNTHESIS (Iteration 1 from Files):",
-  "Executing Iterative Plan Stage (Overall Iteration",
-  "This is Iteration ",
+  "CRITICAL INITIAL SYNTHESIS (Version 1 from Files):",
+  "Executing Iterative Plan Stage (Overall Version",
+  "This is Version ",
   "Task: Initial Document Synthesis.",
   "Analyze & Refine:",
   "Substantial Change:",

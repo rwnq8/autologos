@@ -1,16 +1,12 @@
-
-
 import React, { useState, useMemo } from 'react';
-import type { IterationLogEntry } from '../../types.ts'; 
+import type { IterationLogEntry, Version } from '../../types.ts'; 
 import { LogEntryItem } from './LogEntryItem.tsx';
 import { useProcessContext } from '../../contexts/ProcessContext.tsx';
-import { useApplicationContext } from '../../contexts/ApplicationContext.tsx';
 import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter.ts';
-import ChevronDownIcon from '../shared/ChevronDownIcon.tsx';
-import ChevronUpIcon from '../shared/ChevronUpIcon.tsx';
+import { formatVersion } from '../../services/versionUtils.ts';
 
-export interface IterationLogProps {
-  onSaveLog: () => void; 
+interface IterationLogProps {
+  onSaveLog: () => void;
 }
 
 const RECENT_COUNT = 5;
@@ -20,13 +16,12 @@ const IterationLog: React.FC<IterationLogProps> = ({
   onSaveLog,
 }) => {
   const processCtx = useProcessContext();
-  const appCtx = useApplicationContext();
-  const [expandedLogItem, setExpandedLogItem] = useState<number | null>(null);
+  const [expandedLogItemKey, setExpandedLogItemKey] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<{ [key: string]: boolean }>({});
   const [globalCopyStatus, setGlobalCopyStatus] = useState<string>(''); 
 
-  const toggleLogItem = (iteration: number) => {
-    setExpandedLogItem(expandedLogItem === iteration ? null : iteration);
+  const toggleLogItem = (versionKey: string) => {
+    setExpandedLogItemKey(expandedLogItemKey === versionKey ? null : versionKey);
   };
   
   const toggleGroup = (groupKey: string) => {
@@ -40,7 +35,7 @@ const IterationLog: React.FC<IterationLogProps> = ({
       const allDiagStrings = processCtx.iterationHistory.map(entry =>
         formatLogEntryDiagnostics(entry, processCtx.iterationHistory, processCtx.initialPrompt)
       );
-      const fullDiagnosticText = allDiagStrings.join('\n\n==== END OF ITERATION DIAGNOSTICS ====\n\n');
+      const fullDiagnosticText = allDiagStrings.join('\n\n==== END OF VERSION DIAGNOSTICS ====\n\n');
       await navigator.clipboard.writeText(fullDiagnosticText);
       setGlobalCopyStatus('All Copied!');
     } catch (err) {
@@ -73,29 +68,20 @@ const IterationLog: React.FC<IterationLogProps> = ({
   return (
     <div className="bg-white/50 dark:bg-black/20 p-6 rounded-lg border border-slate-300/70 dark:border-white/10">
       <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
-        <h2 className="text-xl font-semibold text-primary-600 dark:text-primary-300">Iteration Log</h2>
+        <h2 className="text-xl font-semibold text-primary-600 dark:text-primary-300">Version Log</h2>
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={handleCopyAllDiagnostics}
             disabled={processCtx.iterationHistory.length === 0 || processCtx.isProcessing}
             className={commonButtonClasses}
-            aria-label="Copy all iteration diagnostics to clipboard"
+            aria-label="Copy all version diagnostics to clipboard"
           >
             {globalCopyStatus || "Copy All Diagnostics"}
           </button>
           <button
-            onClick={appCtx.handleExportIterationDiffs}
-            disabled={processCtx.iterationHistory.length === 0 || processCtx.isProcessing}
-            className={commonButtonClasses}
-            aria-label="Download iteration diffs"
-            title="Export a text file containing the diff for each iteration."
-          >
-            Export Iteration Diffs (.txt)
-          </button>
-          <button
             onClick={onSaveLog}
             className={commonButtonClasses}
-            aria-label="Download full iteration log"
+            aria-label="Download full version log"
             disabled={processCtx.iterationHistory.length === 0}
           >
             Download Full Log (.json)
@@ -103,24 +89,27 @@ const IterationLog: React.FC<IterationLogProps> = ({
         </div>
       </div>
       <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
-        {recentEntries.map((log) => (
-          <LogEntryItem
-            key={log.iteration + (log.attemptCount || 0) * 0.1} 
-            logEntry={log}
-            isExpanded={expandedLogItem === log.iteration}
-            onToggleExpand={toggleLogItem}
-            reconstructProductCallback={(iter, hist) => processCtx.reconstructProductCallback(iter, hist, processCtx.initialPrompt)}
-            iterationHistory={processCtx.iterationHistory} 
-            onRewind={processCtx.handleRewind}
-            onExportIterationMarkdown={processCtx.handleExportIterationMarkdown}
-            isProcessing={processCtx.isProcessing}
-          />
-        ))}
+        {recentEntries.map((log) => {
+          const versionKey = `${log.majorVersion}.${log.minorVersion}${log.patchVersion !== undefined ? '.' + log.patchVersion : ''}`;
+          return (
+            <LogEntryItem
+              key={versionKey} 
+              logEntry={log}
+              isExpanded={expandedLogItemKey === versionKey}
+              onToggleExpand={toggleLogItem}
+              reconstructProductCallback={(version, hist) => processCtx.reconstructProductCallback(version, hist, processCtx.initialPrompt)}
+              iterationHistory={processCtx.iterationHistory} 
+              onRewind={processCtx.handleRewind}
+              onExportIterationMarkdown={processCtx.handleExportIterationMarkdown}
+              isProcessing={processCtx.isProcessing}
+            />
+          );
+        })}
 
         {groupedOlderEntries.map((group, index) => {
-          const firstIterInGroup = group[0].iteration;
-          const lastIterInGroup = group[group.length - 1].iteration;
-          const groupKey = `${firstIterInGroup}-${lastIterInGroup}`;
+          const firstInGroup = group[0];
+          const lastInGroup = group[group.length - 1];
+          const groupKey = `${formatVersion(lastInGroup)}-${formatVersion(firstInGroup)}`;
           const isGroupExpanded = expandedGroups[groupKey];
           
           return (
@@ -130,24 +119,27 @@ const IterationLog: React.FC<IterationLogProps> = ({
                 className="w-full flex justify-between items-center p-3 text-left focus:outline-none focus:ring-2 focus:ring-primary-500 rounded-md"
                 aria-expanded={isGroupExpanded}
               >
-                <span className="font-medium text-slate-700 dark:text-slate-300">Iterations {lastIterInGroup} - {firstIterInGroup}</span>
-                {isGroupExpanded ? <ChevronUpIcon className="w-5 h-5 text-slate-500" /> : <ChevronDownIcon className="w-5 h-5 text-slate-500" />}
+                <span className="font-medium text-slate-700 dark:text-slate-300">Versions {formatVersion(lastInGroup)} to {formatVersion(firstInGroup)}</span>
+                <span className="text-slate-500">{isGroupExpanded ? '[−]' : '[+]'}</span>
               </button>
               {isGroupExpanded && (
                 <div className="p-2 space-y-3 border-t border-slate-200 dark:border-white/10">
-                  {group.map((log) => (
-                    <LogEntryItem
-                      key={log.iteration + (log.attemptCount || 0) * 0.1} 
-                      logEntry={log}
-                      isExpanded={expandedLogItem === log.iteration}
-                      onToggleExpand={toggleLogItem}
-                      reconstructProductCallback={(iter, hist) => processCtx.reconstructProductCallback(iter, hist, processCtx.initialPrompt)}
-                      iterationHistory={processCtx.iterationHistory} 
-                      onRewind={processCtx.handleRewind}
-                      onExportIterationMarkdown={processCtx.handleExportIterationMarkdown}
-                      isProcessing={processCtx.isProcessing}
-                    />
-                  ))}
+                  {group.map((log) => {
+                    const versionKey = `${log.majorVersion}.${log.minorVersion}${log.patchVersion !== undefined ? '.' + log.patchVersion : ''}`;
+                    return (
+                      <LogEntryItem
+                        key={versionKey} 
+                        logEntry={log}
+                        isExpanded={expandedLogItemKey === versionKey}
+                        onToggleExpand={toggleLogItem}
+                        reconstructProductCallback={(version, hist) => processCtx.reconstructProductCallback(version, hist, processCtx.initialPrompt)}
+                        iterationHistory={processCtx.iterationHistory} 
+                        onRewind={processCtx.handleRewind}
+                        onExportIterationMarkdown={processCtx.handleExportIterationMarkdown}
+                        isProcessing={processCtx.isProcessing}
+                      />
+                    );
+                  })}
                 </div>
               )}
             </div>

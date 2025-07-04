@@ -1,6 +1,4 @@
 
-
-
 import React, { useContext } from 'react';
 import type { IterationLogEntry, PlanStage } from '../types.ts'; // Removed unused ReconstructedProductResult and DiffViewType
 import { generateFileName } from '../services/utils.ts';
@@ -23,7 +21,7 @@ const DisplayArea: React.FC = () => {
     const initialPromptSummary = (processCtx.initialPrompt.length > 150 ? processCtx.initialPrompt.substring(0, 147) + "..." : processCtx.initialPrompt).replace(/\n+/g, ' ').trim();
     let contentWarning = (!processCtx.finalProduct.trim() || processCtx.finalProduct.trim().length < 10) ? `\nWARNING_NOTE: The main product content below appears to be empty or very short...\n` : "";
     
-    let overallIterationCountForYAML = processCtx.currentIteration;
+    let overallIterationCountForYAML = processCtx.currentMajorVersion;
     
     let yamlFrontmatter = `---
 export_type: FINAL_PRODUCT
@@ -62,7 +60,7 @@ project_name: "${(appCtx.projectName || "Untitled Project").replace(/"/g, '\\\\"
     }
     yamlFrontmatter += `initial_prompt_summary: "${initialPromptSummary.replace(/"/g, '\\\\"')}"
 final_iteration_count: ${overallIterationCountForYAML}
-max_iterations_setting: ${processCtx.maxIterations}
+max_iterations_setting: ${processCtx.maxMajorVersions}
 prompt_input_type: ${processCtx.loadedFiles && processCtx.loadedFiles.length > 0 ? 'files' : 'direct_text'}
 `;
     if (processCtx.loadedFiles && processCtx.loadedFiles.length > 0) {
