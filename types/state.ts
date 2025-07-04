@@ -18,6 +18,7 @@ export interface StagnationInfo {
     nudgeStrategyApplied: NudgeStrategy;
     consecutiveLowValueIterations: number;
     consecutiveWordsmithingIterations: number;
+    consecutiveCoherenceDegradation: number;
 }
 
 export interface StrategistLLMContext {
@@ -55,6 +56,7 @@ export interface AutologosIterativeEngineData {
   projectName: string | null;
   projectObjective: string | null;
   projectId: string | null;
+  projectCodename: string | null;
   isApiRateLimited: boolean;
   rateLimitCooldownActiveSeconds: number;
   stagnationNudgeEnabled: boolean;

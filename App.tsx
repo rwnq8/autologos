@@ -4,6 +4,10 @@
 
 
 
+
+
+
+
 import React, { useRef, useState, useCallback } from 'react';
 import { toYamlStringLiteral, generateFileName } from './services/utils.ts';
 import Controls from './components/Controls.tsx';
@@ -58,7 +62,11 @@ const AppLayout: React.FC = () => {
         
         // If configAtFinalization is missing (e.g. saving an initial ensemble product), perform a simple save.
         if (!engine.app.staticAiModelDetails || !engine.process.configAtFinalization) {
-          const fileName = generateFileName(engine.process.projectName, "product", "md");
+          const fileName = generateFileName("product", "md", {
+            projectCodename: engine.process.projectCodename,
+            projectName: engine.process.projectName, 
+            contentForSlug: productToSave
+          });
           const blob = new Blob([productToSave], { type: 'text/markdown;charset=utf-8' });
           const url = URL.createObjectURL(blob);
           const link = document.createElement('a');
@@ -79,6 +87,7 @@ const AppLayout: React.FC = () => {
 export_type: FINAL_PRODUCT
 generation_timestamp: ${generationTimestamp}
 project_name: ${toYamlStringLiteral(engine.app.projectName || "Untitled Project")}
+project_codename: ${toYamlStringLiteral(engine.process.projectCodename || "none")}
 `;
         if (engine.process.isPlanActive && engine.process.planStages.length > 0) {
             yamlFrontmatter += `autologos_process_plan_active: true\n`;
@@ -130,7 +139,12 @@ prompt_input_type: ${engine.process.loadedFiles && engine.process.loadedFiles.le
 ${contentWarning}
 `;
         const markdownContent = yamlFrontmatter + productToSave;
-        const fileName = generateFileName(engine.app.projectName, "product", "md");
+        const fileName = generateFileName("product", "md", {
+          projectCodename: engine.process.projectCodename,
+          projectName: engine.app.projectName,
+          contentForSlug: productToSave,
+          iterationNum: overallIterationCountForYAML,
+        });
         const blob = new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');

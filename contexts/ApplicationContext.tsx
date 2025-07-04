@@ -1,6 +1,9 @@
 
 
 
+
+
+
 import React, { createContext, useContext, useCallback, useState, useEffect, useMemo } from 'react';
 import type { ProcessState, ModelConfig, SettingsSuggestionSource, StaticAiModelDetails, SelectableModelName, AutologosProjectFile, PlanTemplate, IterationLogEntry, Version, PlanStage, LoadedFile } from '../types/index.ts';
 import { SELECTABLE_MODELS } from '../types/index.ts';
@@ -175,14 +178,38 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         };
         reader.readAsText(file);
     } else {
-        const loadedFiles: LoadedFile[] = await Promise.all(Array.from(files).map(async (file) => ({
-            name: file.name,
-            mimeType: file.type || 'application/octet-stream',
-            size: file.size,
-            content: await file.text()
-        })));
-        processActions.handleLoadedFilesChange(loadedFiles, 'add');
-        setPromptChangedByFileLoad(true);
+        const loadPromises = Array.from(files).map(async (file) => {
+            try {
+                const content = await file.text();
+                return {
+                    name: file.name,
+                    mimeType: file.type || 'application/octet-stream',
+                    size: file.size,
+                    content,
+                    status: 'success'
+                };
+            } catch (error) {
+                console.error(`Failed to read file "${file.name}":`, error);
+                return { name: file.name, status: 'error' };
+            }
+        });
+
+        const results = await Promise.all(loadPromises);
+        
+        const loadedFiles = results.filter(r => r.status === 'success') as LoadedFile[];
+        const failedFiles = results.filter(r => r.status === 'error').map(r => r.name);
+
+        if (loadedFiles.length > 0) {
+            processActions.handleLoadedFilesChange(loadedFiles, 'add');
+            setPromptChangedByFileLoad(true);
+        }
+
+        if (failedFiles.length > 0) {
+            // This message is important and should overwrite any success message from handleLoadedFilesChange
+            processActions.updateProcessState({ 
+                statusMessage: `Warning: Could not read ${failedFiles.length} file(s): ${failedFiles.join(', ')}. They might be binary files.`
+            });
+        }
     }
   };
 
@@ -243,7 +270,12 @@ iteration_status: ${toYamlStringLiteral(logEntry.status)}
     yamlFrontmatter += `---\n\n`;
 
     const markdownContent = yamlFrontmatter + product;
-    const fileName = generateFileName(processState.projectName, `iter_snapshot_${formatVersion(version).replace(/\./g, '_')}`, "md");
+    const fileName = generateFileName("snapshot", "md", {
+      projectCodename: processState.projectCodename,
+      projectName: processState.projectName,
+      contentForSlug: product,
+      iterationNum: version.major,
+    });
     const blob = new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

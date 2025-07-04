@@ -34,7 +34,7 @@ const isMeaningfulName = (name: string, minLength = 3, maxWords = 7): boolean =>
     return significantWords.length > 0;
 };
 
-const extractTitleOrThemeFromContent = (content: string, numKeywordsForFallback = 3, minWordLengthForFallback = 4): string | null => {
+export const extractTitleOrThemeFromContent = (content: string, numKeywordsForFallback = 3, minWordLengthForFallback = 4): string | null => {
   if (!content || !content.trim()) return null;
 
   const lines = content.split('\n');
@@ -111,34 +111,83 @@ const extractTitleOrThemeFromContent = (content: string, numKeywordsForFallback 
 };
 
 
-export const inferProjectNameFromInput = (fileManifest: string, currentLoadedFiles: LoadedFile[]): string | null => {
-    if (currentLoadedFiles.length === 1) {
-        const fileName = currentLoadedFiles[0].name;
-        // Basic cleaning: remove extension, replace underscores/hyphens with spaces, title case
-        let inferredFromName = fileName.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ").replace(/\s+/g, " ").trim();
-        // Simple title case (doesn't handle all edge cases but good enough for a suggestion)
-        inferredFromName = inferredFromName.split(' ').map(word => word.toUpperCase() === word || word.toLowerCase() === word ? word : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
-        if (isMeaningfulName(inferredFromName)) return inferredFromName.length > 70 ? inferredFromName.substring(0, 70).trim() + "..." : inferredFromName;
+export const inferProjectNameFromInput = (initialPromptText: string, currentLoadedFiles: LoadedFile[]): string | null => {
+    // Case 1: Files are loaded. Their content and names are the primary source for the project name.
+    if (currentLoadedFiles.length > 0) {
+        // If there's only one file, derive the name from its filename first, then its content.
+        if (currentLoadedFiles.length === 1) {
+            const file = currentLoadedFiles[0];
+            // Clean up the filename to make it a suitable project name.
+            let inferredFromName = file.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ").replace(/\s+/g, " ").trim();
+            // Apply title case for better readability.
+            inferredFromName = inferredFromName.split(' ').map(word => word.toUpperCase() === word || word.toLowerCase() === word ? word : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+            
+            if (isMeaningfulName(inferredFromName)) {
+                return inferredFromName.length > 70 ? inferredFromName.substring(0, 70).trim() : inferredFromName;
+            }
+            
+            // If the filename isn't meaningful, try to extract a title from the file's content.
+            const nameFromContent = extractTitleOrThemeFromContent(file.content);
+            if (nameFromContent) {
+                return nameFromContent;
+            }
+            
+            // As a fallback, use the cleaned filename even if it wasn't deemed "meaningful".
+            return inferredFromName || null;
+        }
+
+        // If multiple files are loaded, analyzing their combined content is the best approach.
+        const combinedContent = currentLoadedFiles.map(f => `--- From file: ${f.name} ---\n${f.content}`).join('\n\n');
+        const nameFromCombinedContent = extractTitleOrThemeFromContent(combinedContent);
+        if (nameFromCombinedContent) {
+            return nameFromCombinedContent;
+        }
+
+        // Fallback for multiple files: find a common prefix in their filenames.
+        const fileNames = currentLoadedFiles.map(f => f.name.replace(/\.[^/.]+$/, ""));
+        if (fileNames.length > 0) {
+            let commonPrefix = fileNames[0];
+            for (let i = 1; i < fileNames.length; i++) {
+                while (fileNames[i].indexOf(commonPrefix) !== 0) {
+                    commonPrefix = commonPrefix.substring(0, commonPrefix.length - 1);
+                    if (commonPrefix === "") break;
+                }
+            }
+            commonPrefix = commonPrefix.replace(/[_-]$/, "").trim(); // Clean trailing separators.
+            if (isMeaningfulName(commonPrefix, 4)) { // Require a slightly longer common prefix to be meaningful.
+                return commonPrefix;
+            }
+        }
+        
+        // Final fallback for multiple files: use the first filename that is meaningful on its own.
+        const firstMeaningfulFileName = currentLoadedFiles
+            .map(f => f.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ").trim())
+            .find(name => isMeaningfulName(name));
+        if (firstMeaningfulFileName) {
+            return firstMeaningfulFileName;
+        }
     }
-    // If multiple files, or single file name not meaningful, try to extract from manifest content
-    if (currentLoadedFiles.length > 0) { // Or always try manifest if available
-      const contentName = extractTitleOrThemeFromContent(fileManifest);
-      if (contentName && isMeaningfulName(contentName, 5)) return contentName; // Higher minLength for content-derived names
-      // Fallback to first file name if content analysis fails for multiple files
-      const firstFileName = currentLoadedFiles[0].name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ").trim();
-      if (isMeaningfulName(firstFileName)) return firstFileName.length > 70 ? firstFileName.substring(0, 70).trim() + "..." : firstFileName;
-    }
-    // If no files but there is initialPrompt text (e.g., typed in)
-    if (currentLoadedFiles.length === 0 && fileManifest.trim()) {
-        const lines = fileManifest.trim().split('\n');
-        const firstNonEmptyLine = lines.find(line => line.trim() !== "");
+
+    // Case 2: No files are loaded. Use the initial prompt text provided by the user.
+    if (currentLoadedFiles.length === 0 && initialPromptText.trim()) {
+        const nameFromPrompt = extractTitleOrThemeFromContent(initialPromptText, 5);
+        if (nameFromPrompt) {
+            return nameFromPrompt;
+        }
+        
+        // Fallback for prompts: use the first non-empty line.
+        const firstNonEmptyLine = initialPromptText.trim().split('\n').find(line => line.trim() !== "");
         if (firstNonEmptyLine) {
-            let inferred = cleanTextForNaming(firstNonEmptyLine).split(/\s+/).slice(0, 7).join(" "); // Take first few words
+            let inferred = cleanTextForNaming(firstNonEmptyLine).split(/\s+/).slice(0, 7).join(" "); // Take first few words.
             if (isMeaningfulName(inferred)) {
-                 if (inferred.length > 70) inferred = inferred.substring(0, 70).trim() + "...";
-                return inferred.charAt(0).toUpperCase() + inferred.slice(1); // Capitalize first letter
+                 if (inferred.length > 70) {
+                     inferred = inferred.substring(0, 70).trim() + "...";
+                 }
+                return inferred.charAt(0).toUpperCase() + inferred.slice(1); // Capitalize first letter.
             }
         }
     }
+    
+    // If no suitable name can be inferred.
     return null;
   };

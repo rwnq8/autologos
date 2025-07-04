@@ -1,8 +1,3 @@
-
-
-
-
-
 import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult, Version } from '../types/index.ts';
 import { formatVersion } from './versionUtils.ts';
 
@@ -85,10 +80,13 @@ export const getUserPromptComponents = (
       `CRITICAL CONTEXT OF ORIGINAL FILES: The complete data of all original input files was provided to you in the very first API call of this entire multi-version process (or for the outline generation stage if applicable). Your primary knowledge base for all subsequent refinements is this full original file data. The 'File Manifest' is only a summary; refer to the complete file data provided initially for all tasks. Synthesize information from ALL provided files. Cross-reference details across files if relevant. Your product should reflect the combined knowledge and themes within these files.`
     );
     
-   systemInstructionParts.push(`GENERAL RULES:
-- Output Structure: Produce ONLY the new, modified textual product. Do NOT include conversational filler, apologies, or self-references like "Here's the updated product:".
-- Convergence: If you determine that the product cannot be meaningfully improved further according to the current iteration's goals, OR if your generated product is identical to the 'Current State of Product' you received, prefix your ENTIRE response with "${CONVERGED_PREFIX}". Do this sparingly and only when truly converged.
-- CRITICAL - AVOID WORDSMITHING: If a meta-instruction to break stagnation or wordsmithing is active, you MUST make a *substantively different* response than the previous version. Do not just change a few words or reorder phrases slightly. Focus on *conceptual changes*, adding *net new information*, or significantly restructuring.`
+    systemInstructionParts.push(`GENERAL RULES:
+- **Output Structure**: Produce ONLY the new, modified textual product. Do NOT include conversational filler, apologies, or self-references like "Here's the updated product:".
+- **Convergence**: If you determine that the product cannot be meaningfully improved further according to the current iteration's goals, OR if your generated product is identical to the 'Current State of Product' you received, prefix your ENTIRE response with "${CONVERGED_PREFIX}". Do this sparingly and only when truly converged.
+- **Coherence and Substantiation**: Each version MUST become more logically coherent and well-supported. Strengthen arguments, ensure claims are substantiated (using your internal knowledge or provided context), and improve the logical flow. The goal is a final product that is a robust, defensible, and well-reasoned case.
+- **Avoid Disclaimers & Hedging**: As part of building a coherent case, you MUST NOT include weak disclaimers about the content being "conceptual," "for illustrative purposes," or "requiring further refinement/legal review." The iterative process IS that refinement.
+- **Substantial Improvement Required**: Each new version MUST represent a significant and substantive improvement over the last. Do not make trivial, stylistic-only changes (mere "wordsmithing"). This includes swapping synonyms without changing meaning. Focus on adding clarity, depth, new information, or improving the logical structure. If you cannot make a substantial improvement, you MUST declare convergence using the '${CONVERGED_PREFIX}' prefix.
+- **Heed Meta-Instructions**: When a specific meta-instruction is given (e.g., to break stagnation), you MUST prioritize it and make a conceptually different response.`
     );
   
   if (isInitialProductEmptyAndFilesLoaded && majorVersion === 1) {

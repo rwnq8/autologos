@@ -1,8 +1,3 @@
-
-
-
-
-
 import { useRef, useState, useCallback, useEffect } from 'react';
 import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType, DevLogEntry, StrategistLLMContext, Version, ModelStrategy } from '../types/index.ts';
 import * as GeminaiService from '../services/geminiService.ts';
@@ -72,6 +67,7 @@ export const useIterativeLogic = (
     isStagnantIterationLogged?: boolean,
     isEffectivelyIdenticalLogged?: boolean,
     isLowValueIterationLogged?: boolean,
+    isWordsmithingIterationLogged?: boolean,
     bootstrapRun?: number
   ) => {
     const { processState } = latestStateRef.current;
@@ -125,6 +121,7 @@ export const useIterativeLogic = (
       isStagnantIterationLogged,
       isEffectivelyIdenticalLogged,
       isLowValueIterationLogged,
+      isWordsmithingIterationLogged,
       bootstrapRun,
     });
   }, [addLogEntryFromHook, latestStateRef]);
@@ -151,6 +148,18 @@ export const useIterativeLogic = (
   const handleStartProcess = useCallback(async (options?: { isTargetedRefinement?: boolean; targetedSelection?: string; targetedInstructions?: string, userRawPromptForContextualizer?: string }) => {
     const { processState: initialProcessState, getUserSetBaseConfig: getInitialUserConfig } = latestStateRef.current;
     if (initialProcessState.isProcessing) return;
+
+    if (!initialProcessState.projectCodename) {
+      updateProcessState({
+        statusMessage: 'Generating project codename...',
+        aiProcessInsight: 'Analyzing input to create a unique codename for this run.',
+      });
+      const codename = await GeminaiService.generateProjectCodename(
+        initialProcessState.initialPrompt,
+        initialProcessState.loadedFiles
+      );
+      updateProcessState({ projectCodename: codename });
+    }
 
     isProcessingRef.current = true;
     haltSignalRef.current = false;
@@ -200,7 +209,7 @@ export const useIterativeLogic = (
     } = initialProcessState;
 
     if (isTargetedRefinementMode && !targetedSelectionText) {
-      handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration}, currentProductForIteration, "Targeted refinement started without a text selection.");
+      handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0}, currentProductForIteration, "Targeted refinement started without a text selection.");
       return;
     }
     
@@ -216,7 +225,7 @@ export const useIterativeLogic = (
 
     for (let currentIteration = 1; currentIteration <= maxMajorVersions; currentIteration++) {
       if (haltSignalRef.current) {
-        handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration}, currentProductForIteration, "Halt signal received before loop start.");
+        handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0}, currentProductForIteration, "Halt signal received before loop start.");
         break;
       }
       
@@ -236,7 +245,7 @@ export const useIterativeLogic = (
         fileProcessingInfoForLog.totalFilesSizeBytesSent = loadedFiles.reduce((sum, f) => sum + f.size, 0);
       }
       
-      const currentVersionForLoop: Version = {major: majorVersionForIteration, minor: minorVersionForIteration};
+      const currentVersionForLoop: Version = {major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0};
       
       updateProcessState({
         currentMajorVersion: majorVersionForIteration,
@@ -245,6 +254,11 @@ export const useIterativeLogic = (
       });
 
       const userSetBaseConfig = getInitialUserConfig();
+
+      if (stagnationInfo.consecutiveWordsmithingIterations >= 2) {
+        kickstart = true;
+        stagnationInfo.consecutiveWordsmithingIterations = 0;
+      }
 
       const { productDevelopmentState, stagnationSeverity, recentIterationPerformance } = calculateQualitativeStates(currentProductForIteration, stagnationInfo, inputComplexity, stagnationNudgeAggressiveness, false);
       const devLogContext = await getRelevantDevLogContext(devLog || [], userRawPromptForContextualizer || `Current task: Refine document from v${majorVersionForIteration - 1} to v${majorVersionForIteration}. Stagnation state is ${stagnationSeverity}. Product state is ${productDevelopmentState}.`);
@@ -334,7 +348,7 @@ export const useIterativeLogic = (
             finalProduct,
             previousProductForLog || "",
             {
-                majorVersion: majorVersionForIteration, minorVersion: minorVersionForIteration,
+                majorVersion: majorVersionForIteration, minorVersion: minorVersionForIteration, patchVersion: 0,
                 entryType: 'ai_iteration', productSummary: "", status: "", timestamp: 0, fileProcessingInfo: fileProcessingInfoForLog,
                 apiStreamDetails: result.apiStreamDetails,
             },
@@ -368,21 +382,49 @@ export const useIterativeLogic = (
         }
       }
       
+      const newLexicalDensity = calculateLexicalDensity(finalProduct);
+      const newTTR = calculateSimpleTTR(finalProduct);
+      const prevLogEntry = iterationHistory.length > 0 ? iterationHistory[iterationHistory.length - 1] : null;
+
+      let coherenceDegraded = false;
+      if (prevLogEntry && !isTargetedRefinementMode) {
+          const prevLexicalDensity = prevLogEntry.lexicalDensity;
+          const prevTTR = prevLogEntry.typeTokenRatio;
+          const lexicalDensityDrop = prevLexicalDensity && newLexicalDensity && newLexicalDensity < prevLexicalDensity * 0.95; // 5% drop
+          const ttrDrop = prevTTR && newTTR && newTTR < prevTTR * 0.95; // 5% drop
+          if (lexicalDensityDrop || ttrDrop) {
+              coherenceDegraded = true;
+          }
+      }
+
       const similarity = calculateJaccardSimilarity(previousProductForLog, finalProduct);
       const isStagnant = similarity > STAGNATION_SIMILARITY_THRESHOLD;
       const isEffectivelyIdentical = similarity > 0.99;
       const isLowValue = isStagnant && !isEffectivelyIdentical;
+      const isWordsmithing = similarity > 0.97 && similarity < 0.995 && !isLowValue && !isEffectivelyIdentical;
 
       let newStagnationInfo: StagnationInfo = { ...stagnationInfo };
       if (isEffectivelyIdentical) {
         newStagnationInfo.consecutiveIdenticalProductIterations++;
         newStagnationInfo.consecutiveStagnantIterations++;
+        newStagnationInfo.consecutiveWordsmithingIterations = 0;
+      } else if (isWordsmithing) {
+        newStagnationInfo.consecutiveWordsmithingIterations++;
+        newStagnationInfo.consecutiveStagnantIterations++;
+        newStagnationInfo.consecutiveIdenticalProductIterations = 0;
       } else if (isLowValue) {
         newStagnationInfo.consecutiveLowValueIterations++;
         newStagnationInfo.consecutiveStagnantIterations++;
         newStagnationInfo.consecutiveIdenticalProductIterations = 0;
+        newStagnationInfo.consecutiveWordsmithingIterations = 0;
       } else {
-        newStagnationInfo = { ...stagnationInfo, isStagnant: false, consecutiveStagnantIterations: 0, consecutiveIdenticalProductIterations: 0, consecutiveLowValueIterations: 0 };
+        newStagnationInfo = { ...stagnationInfo, isStagnant: false, consecutiveStagnantIterations: 0, consecutiveIdenticalProductIterations: 0, consecutiveLowValueIterations: 0, consecutiveWordsmithingIterations: 0, consecutiveCoherenceDegradation: 0 };
+      }
+
+      if (coherenceDegraded) {
+          newStagnationInfo.consecutiveCoherenceDegradation = (newStagnationInfo.consecutiveCoherenceDegradation || 0) + 1;
+      } else if (!isStagnant) {
+          newStagnationInfo.consecutiveCoherenceDegradation = 0;
       }
       
       logIterationData(
@@ -407,7 +449,9 @@ export const useIterativeLogic = (
         similarity,
         isStagnant,
         isEffectivelyIdentical,
-        isLowValue
+        isLowValue,
+        isWordsmithing,
+        undefined
       );
       
       currentProductForIteration = finalProduct;
@@ -450,7 +494,7 @@ export const useIterativeLogic = (
       
       majorVersionForIteration++;
     }
-  }, [updateProcessState, logIterationData, handleProcessHalt, addDevLogEntry, performAutoSave, handleRateLimitErrorEncountered]);
+  }, [updateProcessState, logIterationData, handleProcessHalt, addDevLogEntry, performAutoSave, handleRateLimitErrorEncountered, latestStateRef]);
   
   const handleHaltProcess = () => {
     haltSignalRef.current = true;
@@ -461,6 +505,18 @@ export const useIterativeLogic = (
     if (loadedFiles.length < 2) {
       updateProcessState({ statusMessage: "Need at least 2 files for ensemble synthesis." });
       return;
+    }
+
+    if (!latestStateRef.current.processState.projectCodename) {
+      updateProcessState({
+        statusMessage: 'Generating project codename...',
+        aiProcessInsight: 'Analyzing input to create a unique codename for this ensemble run.',
+      });
+      const codename = await GeminaiService.generateProjectCodename(
+        latestStateRef.current.processState.initialPrompt,
+        loadedFiles
+      );
+      updateProcessState({ projectCodename: codename });
     }
     
     isProcessingRef.current = true;
@@ -535,14 +591,14 @@ export const useIterativeLogic = (
             subProduct = result.product;
             
             logIterationData(
-                { major: 0, minor: 0, patch: i * bootstrapSubIterations + j + 1 },
+                { major: 0, minor: i, patch: j },
                 'bootstrap_sub_iteration',
                 subProduct,
                 `Sample ${i + 1}, Sub-run ${j + 1}`,
                 j > 0 ? subProducts[subProducts.length-1] : "", // Use previous state if available
                 result,
                 baseModelConfig,
-                { filesSentToApiIteration: j, numberOfFilesActuallySent: sampleFiles.length, totalFilesSizeBytesSent: sampleFiles.reduce((s,f)=>s+f.size,0), fileManifestProvidedCharacterCount: sampleManifest.length },
+                { filesSentToApiIteration: j, numberOfFilesActuallySent: sampleFiles.length, totalFilesSizeBytesSent: sampleFiles.reduce((s,f)=>s+f.size,0), fileManifestProvidedCharacterCount: sampleManifest.length, loadedFilesForIterationContext: sampleFiles },
                 undefined,
                 result.product.length,
                 result.product.length,
@@ -550,7 +606,14 @@ export const useIterativeLogic = (
                 "Ensemble Sub-process run",
                 'gemini-2.5-flash-preview-04-17',
                 undefined,
-                false, undefined, undefined, undefined, undefined, undefined, undefined,
+                !!result.errorMessage,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
                 i+1
             );
         }
@@ -583,13 +646,30 @@ export const useIterativeLogic = (
         });
 
         logIterationData(
-            { major: 0, minor: 0, patch: undefined },
+            { major: 0, minor: samplesToRun, patch: 0 },
             'ensemble_integration',
             integrationResult.product,
             `Ensemble Integration Complete`,
             "",
             integrationResult,
-            baseModelConfig
+            baseModelConfig,
+            { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: "Multiple ensemble sub-products generated.".length, loadedFilesForIterationContext: [] },
+            undefined,
+            integrationResult.product.length,
+            integrationResult.product.length,
+            1,
+            "Ensemble Integration",
+            'gemini-2.5-pro',
+            undefined,
+            !!integrationResult.errorMessage,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined
         );
         updateProcessState({
             currentProduct: integrationResult.product,

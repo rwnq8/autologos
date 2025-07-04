@@ -21,10 +21,16 @@ const handleGeminiProxy = async (request) => {
   headers.set('X-Forwarded-Host', url.hostname);
 
   try {
+    // The original request's body is a stream. To use it in a new fetch,
+    // we must pass it directly. We cannot read it first (e.g., with .blob() or .json())
+    // because that would consume the stream and break streaming.
     const response = await fetch(proxyUrl, {
       method: request.method,
       headers: headers,
-      body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.blob() : null,
+      // Pass the body stream directly if it's not a GET/HEAD request.
+      body: (request.method !== 'GET' && request.method !== 'HEAD') ? request.body : null,
+      // 'duplex: "half"' is required by some browsers to allow streaming request bodies.
+      duplex: 'half',
       mode: 'cors',
     });
     return response;

@@ -96,6 +96,7 @@ export const useAutoSave = (
         projectName: currentState.projectName,
         projectObjective: currentState.projectObjective,
         projectId: currentState.projectId,
+        projectCodename: currentState.projectCodename,
         isApiRateLimited: currentState.isApiRateLimited,
         rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
         stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,

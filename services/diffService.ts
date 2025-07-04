@@ -17,6 +17,11 @@ export const reconstructProduct = (
     return { product: "", error: `Invalid targetVersion: ${JSON.stringify(targetVersion)}. Cannot reconstruct.` };
   }
 
+  // If there's no history, the "product" is just the initial input.
+  if (!history || history.length === 0) {
+    return { product: normalizeNewlines(baseFileManifestInput) };
+  }
+
   let currentText = "";
   let lastReconstructedVersion: Version = { major: -1, minor: -1, patch: -1 };
 
@@ -27,7 +32,17 @@ export const reconstructProduct = (
 
   if (iterZeroEntry && iterZeroEntry.productDiff) {
     try {
-      const patchedResult = Diff.applyPatch("", iterZeroEntry.productDiff);
+      const patchObjects = Diff.parsePatch(iterZeroEntry.productDiff);
+
+      let patchedResult: string | false = "";
+      for (const patch of patchObjects) {
+        if (typeof patchedResult === 'string') {
+          patchedResult = Diff.applyPatch(patchedResult, patch);
+        } else {
+          break; // Stop if a patch fails
+        }
+      }
+
       if (typeof patchedResult === 'string') {
         currentText = normalizeNewlines(patchedResult);
         lastReconstructedVersion = { major: 0, minor: 0, patch: iterZeroEntry.patchVersion };
@@ -38,7 +53,10 @@ export const reconstructProduct = (
       return { product: "", error: `Error parsing base patch from Version v0.0: ${e.message}` };
     }
   } else {
-    currentText = normalizeNewlines(baseFileManifestInput);
+    // If no explicit v0 entry exists, the process starts from an empty product.
+    // The history will begin with a patch against an empty string.
+    // DO NOT initialize with baseFileManifestInput, as that would be the wrong base for the first patch.
+    currentText = "";
   }
 
   if (targetVersion.major === 0) {
@@ -63,10 +81,17 @@ export const reconstructProduct = (
           continue;
       }
       if (patchObjects.length > 1) {
-        console.warn(`reconstructProduct: Patch for Version ${formatVersion(logEntry)} parsed into ${patchObjects.length} objects. Applying only the first.`);
+        console.warn(`reconstructProduct: Patch for Version ${formatVersion(logEntry)} parsed into ${patchObjects.length} objects. Applying sequentially.`);
       }
 
-      const patchedResult = Diff.applyPatch(currentText, logEntry.productDiff!);
+      let patchedResult: string | false = currentText;
+      for (const patch of patchObjects) {
+        if (typeof patchedResult === 'string') {
+          patchedResult = Diff.applyPatch(patchedResult, patch);
+        } else {
+          break; // Stop if a patch fails
+        }
+      }
 
       if (typeof patchedResult === 'string') {
         currentText = normalizeNewlines(patchedResult);

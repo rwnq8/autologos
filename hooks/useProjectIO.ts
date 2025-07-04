@@ -1,3 +1,4 @@
+
 // hooks/useProjectIO.ts
 
 import { useCallback, useRef, useEffect } from 'react';
@@ -88,6 +89,7 @@ export const useProjectIO = (
       projectName: currentState.projectName,
       projectObjective: currentState.projectObjective,
       projectId: currentProjectId,
+      projectCodename: currentState.projectCodename,
       isApiRateLimited: currentState.isApiRateLimited,
       rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
       stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,
@@ -110,7 +112,12 @@ export const useProjectIO = (
       }
     };
 
-    const fileName = generateFileName(currentState.projectName, "project", "autologos.json");
+    const fileName = generateFileName("project", "autologos.json", {
+      projectCodename: currentState.projectCodename,
+      projectName: currentState.projectName,
+      contentForSlug: currentState.finalProduct || currentState.currentProduct,
+      iterationNum: currentState.currentMajorVersion
+    });
     const blob = new Blob([JSON.stringify(projectFile, null, 2)], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -121,7 +128,7 @@ export const useProjectIO = (
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     updateProcessState({ statusMessage: "Project exported successfully.", projectId: currentProjectId });
-  }, [updateProcessState]);
+  }, [updateProcessState, latestDataRef]);
 
   const handleImportProjectData = useCallback((projectFile: AutologosProjectFile) => {
     if (!projectFile.header || !projectFile.header.fileFormatVersion?.startsWith("AutologosProjectFile/")) {
@@ -148,7 +155,7 @@ export const useProjectIO = (
     }
 
     const lastEntry = engineData.iterationHistory && engineData.iterationHistory.length > 0 ? [...engineData.iterationHistory].sort((a,b) => compareVersions(b, a))[0] : null;
-    const lastVersion = lastEntry ? { major: lastEntry.majorVersion, minor: lastEntry.minorVersion, patch: lastEntry.patchVersion } : { major: 0, minor: 0 };
+    const lastVersion = lastEntry ? { major: lastEntry.majorVersion, minor: lastEntry.minorVersion, patch: lastEntry.patchVersion } : { major: 0, minor: 0, patch: 0 };
     
     const { product: productAtLastIter } = reconstructProduct(lastVersion, engineData.iterationHistory, correctedInitialPrompt);
 
@@ -161,6 +168,7 @@ export const useProjectIO = (
       projectObjective: projectFile.header.projectObjective || null,
       devLog: engineData.devLog || [],
       ensembleSubProducts: engineData.ensembleSubProducts || null,
+      projectCodename: engineData.projectCodename || null,
     };
 
     const fullNewState: ProcessState = {
@@ -219,7 +227,10 @@ export const useProjectIO = (
       return;
     }
     const diffs = currentState.iterationHistory.map(entry => `==== Version ${formatVersion(entry)} ====\n${entry.productDiff || 'No diff available.'}`).join('\n\n');
-    const fileName = generateFileName(currentState.projectName, "diffs", "txt");
+    const fileName = generateFileName("diffs", "txt", { 
+        projectCodename: currentState.projectCodename,
+        projectName: currentState.projectName 
+    });
     const blob = new Blob([diffs], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -229,7 +240,7 @@ export const useProjectIO = (
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  }, [updateProcessState]);
+  }, [updateProcessState, latestDataRef]);
 
   return { handleExportProject, handleImportProjectData, handleImportIterationLogData, handleExportIterationDiffs };
 };

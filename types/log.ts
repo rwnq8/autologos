@@ -1,6 +1,6 @@
 // types/log.ts
 
-import type { ApiStreamCallDetail, AiResponseValidationInfo } from './api';
+import type { ApiStreamCallDetail, AiResponseValidationInfo, OutlineGenerationResult } from './api';
 import type { ModelConfig, SelectableModelName } from './models';
 import type { FileProcessingInfo } from './project';
 
@@ -60,6 +60,7 @@ export interface IterationLogEntry {
   isStagnantIterationLogged?: boolean;
   isEffectivelyIdenticalLogged?: boolean;
   isLowValueIterationLogged?: boolean;
+  isWordsmithingIterationLogged?: boolean;
   ensembleSampleId?: number; 
   isSegmentedSynthesis?: boolean;
   isTargetedRefinement?: boolean;
@@ -67,6 +68,7 @@ export interface IterationLogEntry {
   targetedRefinementInstructions?: string;
   attemptCount?: number;
   bootstrapRun?: number;
+  outlineForIter1?: OutlineGenerationResult;
 }
 
 export type DevLogEntryType = 'issue' | 'fix' | 'feature' | 'decision' | 'note';

@@ -1,4 +1,3 @@
-
 // hooks/useProcessState.ts
 
 import { useState, useCallback } from 'react';
@@ -11,6 +10,10 @@ import { CONVERGED_PREFIX } from '../services/promptBuilderService.ts';
 import * as Diff from 'diff';
 import { compareVersions } from '../services/versionUtils.ts';
 
+const normalizeNewlines = (str: string): string => {
+  if (typeof str !== 'string') return "";
+  return str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+};
 
 export const createInitialProcessState = (
   apiKeyStatusInput: 'loaded' | 'missing',
@@ -61,7 +64,8 @@ export const createInitialProcessState = (
     nudgeStrategyApplied: 'none',
     consecutiveLowValueIterations: 0, 
     lastProductLengthForStagnation: undefined,
-    consecutiveWordsmithingIterations: 0, 
+    consecutiveWordsmithingIterations: 0,
+    consecutiveCoherenceDegradation: 0,
   },
   inputComplexity: 'SIMPLE',
   currentModelForIteration: selectedModelNameInput,
@@ -80,6 +84,7 @@ export const createInitialProcessState = (
   bootstrapSubIterations: 2,
   ensembleSubProducts: null,
   awaitingStrategyDecision: false,
+  projectCodename: null,
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
@@ -170,211 +175,125 @@ export const useProcessState = () => {
         : "";
 
       const newComplexity = calculateInputComplexity(newInitialPrompt, updatedLoadedFiles);
-
+      
       const updates: Partial<ProcessState> = {
         loadedFiles: updatedLoadedFiles,
         initialPrompt: newInitialPrompt,
-        promptSourceName: updatedLoadedFiles.length > 0 ? (updatedLoadedFiles.length === 1 ? updatedLoadedFiles[0].name : `${updatedLoadedFiles.length} files loaded`) : null,
+        promptSourceName: updatedLoadedFiles.length > 0 ? "File Input" : prev.promptSourceName,
         statusMessage: statusMessageUpdate,
         aiProcessInsight: aiInsightUpdate,
-        promptChangedByFileLoad: action === 'add' || action === 'clear' || action === 'remove',
+        promptChangedByFileLoad: true,
         inputComplexity: newComplexity,
       };
 
       if (resetProcessFields) {
         updates.currentProduct = null;
-        updates.iterationHistory = [];
         updates.finalProduct = null;
+        updates.iterationHistory = [];
         updates.currentMajorVersion = 0;
         updates.currentMinorVersion = 0;
-        updates.projectName = INITIAL_PROJECT_NAME_STATE; 
-        updates.stagnationInfo = { 
-            isStagnant: false, 
-            consecutiveStagnantIterations: 0, 
-            consecutiveIdenticalProductIterations: 0, 
-            lastMeaningfulChangeProductLength: undefined, 
-            similarityWithPrevious: undefined, 
-            nudgeStrategyApplied: 'none', 
-            consecutiveLowValueIterations: 0, 
-            lastProductLengthForStagnation: undefined,
-            consecutiveWordsmithingIterations: 0, 
-        };
-        updates.currentProductBeforeHalt = null;
-        updates.currentVersionBeforeHalt = undefined;
-        updates.configAtFinalization = null;
-        updates.isPlanActive = false;
-        updates.planStages = [];
-        updates.currentPlanStageIndex = null;
-        updates.isEditingCurrentProduct = false; 
-        updates.editedProductBuffer = null;
-        updates.devLog = []; 
-        updates.ensembleSubProducts = null;
-        updates.isTargetedRefinementModalOpen = false;
-        updates.currentTextSelectionForRefinement = null;
-        updates.instructionsForSelectionRefinement = "";
+        updates.projectCodename = null; // Also reset codename on input change
       }
+      
       return { ...prev, ...updates };
     });
   }, []);
 
   const handleInitialPromptChange = useCallback((newPromptText: string) => {
-      setState(prev => {
-          if (prev.loadedFiles.length > 0) { 
-            return prev;
-          }
-          const newComplexity = calculateInputComplexity(newPromptText, prev.loadedFiles);
-          const shouldReset = newPromptText.trim() === "" && prev.initialPrompt.trim() !== "";
-
-          const updates: Partial<ProcessState> = {
-              initialPrompt: newPromptText,
-              inputComplexity: newComplexity,
-              promptChangedByFileLoad: true, 
-              promptSourceName: newPromptText.trim() ? "direct_text" : null,
-          };
-
-          if (shouldReset || (newPromptText.trim() && prev.loadedFiles.length === 0)) {
-            updates.currentProduct = null;
-            updates.iterationHistory = [];
-            updates.finalProduct = null;
-            updates.currentMajorVersion = 0;
-            updates.currentMinorVersion = 0;
-            updates.stagnationInfo = { 
-              isStagnant: false, 
-              consecutiveStagnantIterations: 0, 
-              consecutiveIdenticalProductIterations: 0, 
-              lastMeaningfulChangeProductLength: undefined, 
-              similarityWithPrevious: undefined, 
-              nudgeStrategyApplied: 'none',
-              consecutiveLowValueIterations: 0,
-              lastProductLengthForStagnation: undefined,
-              consecutiveWordsmithingIterations: 0, 
-            };
-            updates.currentProductBeforeHalt = null;
-            updates.currentVersionBeforeHalt = undefined;
-            updates.configAtFinalization = null;
-            updates.isPlanActive = false;
-            updates.planStages = [];
-            updates.currentPlanStageIndex = null;
-            updates.isEditingCurrentProduct = false;
-            updates.editedProductBuffer = null;
-            updates.devLog = [];
-            updates.ensembleSubProducts = null;
-            updates.isTargetedRefinementModalOpen = false;
-            updates.currentTextSelectionForRefinement = null;
-            updates.instructionsForSelectionRefinement = "";
-          }
-          
-          return { ...prev, ...updates };
-      });
-  }, []);
-
-
-  const addLogEntry = useCallback((logData: AddLogEntryParams) => {
-    let productDiff: string | undefined = undefined;
-    let linesAdded = 0;
-    let linesRemoved = 0;
-
-    const normalizeNewlines = (str: string | null | undefined): string => {
-        if (!str) return "";
-        return str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    };
-
-    const currentPForDiff = normalizeNewlines(
-        (logData.currentFullProduct ?? "").startsWith(CONVERGED_PREFIX)
-            ? (logData.currentFullProduct ?? "").substring(CONVERGED_PREFIX.length)
-            : (logData.currentFullProduct ?? "")
-    );
-    const previousPForDiff = normalizeNewlines(
-        (logData.previousFullProduct ?? "").startsWith(CONVERGED_PREFIX)
-            ? (logData.previousFullProduct ?? "").substring(CONVERGED_PREFIX.length)
-            : (logData.previousFullProduct ?? "")
-    );
-    
-    const diffBase = (logData.entryType === 'initial_state' && logData.majorVersion === 0) ? "" : previousPForDiff;
-
-    if (currentPForDiff !== diffBase) { 
-        const prevVersionString = `v${logData.majorVersion - 1}.${logData.minorVersion}`;
-        const currentVersionString = `v${logData.majorVersion}.${logData.minorVersion}${logData.patchVersion !== undefined ? '.' + logData.patchVersion : ''}`;
-
-        productDiff = Diff.createTwoFilesPatch(
-            prevVersionString, currentVersionString,
-            diffBase, currentPForDiff,
-            undefined, undefined, { context: 3 }
-        );
-        const lineChanges = Diff.diffLines(diffBase, currentPForDiff, { newlineIsToken: true, ignoreWhitespace: false });
-        lineChanges.forEach(part => {
-            if (part.added) linesAdded += part.count || 0;
-            if (part.removed) linesRemoved += part.count || 0;
-        });
-    }
-
-    const newEntry: IterationLogEntry = {
-      ...logData,
-      productSummary: getProductSummary(logData.currentFullProduct), 
-      timestamp: Date.now(), 
-      productDiff: productDiff,
-      linesAdded: linesAdded > 0 ? linesAdded : (logData.majorVersion === 0 && logData.entryType === 'initial_state' && linesAdded === 0 && currentPForDiff.length > 0 ? currentPForDiff.split('\n').length : (linesAdded === 0 ? undefined : 0)),
-      linesRemoved: linesRemoved > 0 ? linesRemoved : undefined,
-      charDelta: currentPForDiff.length - previousPForDiff.length,
-    };
-
     setState(prev => {
-        const updatedHistory = [...prev.iterationHistory, newEntry];
-        updatedHistory.sort(compareVersions);
-        return { ...prev, iterationHistory: updatedHistory };
+      const newComplexity = calculateInputComplexity(newPromptText, prev.loadedFiles);
+      return {
+        ...prev,
+        initialPrompt: newPromptText,
+        promptSourceName: "Typed Prompt",
+        promptChangedByFileLoad: false, // Explicitly false as it's a manual change
+        inputComplexity: newComplexity,
+      };
     });
   }, []);
 
+  const addLogEntry = useCallback((logData: AddLogEntryParams) => {
+    setState(prev => {
+      const { currentFullProduct, previousFullProduct, ...restOfLogData } = logData;
 
-  const handleReset = useCallback(async (
-        baseModelConfig: ModelConfig,
-        currentSavedPlanTemplates: PlanTemplate[]
-    ) => {
-    const resetApiKeyStatus = geminiService.isApiKeyAvailable() ? 'loaded' : 'missing';
-    const resetSelectedModelName = geminiService.DEFAULT_MODEL_NAME;
-    const initialStateFromCreator = createInitialProcessState(resetApiKeyStatus, resetSelectedModelName);
-    const initialComplexity = calculateInputComplexity(initialStateFromCreator.initialPrompt, initialStateFromCreator.loadedFiles);
+      const normalizedNew = normalizeNewlines(currentFullProduct || "");
+      const normalizedOld = normalizeNewlines(previousFullProduct || "");
 
-    const resetState: ProcessState = {
-        ...initialStateFromCreator, 
-        apiKeyStatus: resetApiKeyStatus, selectedModelName: resetSelectedModelName, currentModelForIteration: resetSelectedModelName,
-        statusMessage: "System reset. Load input file(s) or type prompt to begin.", aiProcessInsight: "System reset. Ready for new input.",
-        savedPlanTemplates: currentSavedPlanTemplates, 
-        projectId: await storageService.hasSavedState() ? state.projectId : null, 
-        stagnationNudgeEnabled: true, isSearchGroundingEnabled: true, isUrlBrowsingEnabled: true, currentDiffViewType: 'words', inputComplexity: initialComplexity,
-        currentAppliedModelConfig: baseModelConfig, 
-        stagnationInfo: { 
-            isStagnant: false, consecutiveStagnantIterations: 0, consecutiveIdenticalProductIterations: 0, 
-            lastMeaningfulChangeProductLength: undefined, similarityWithPrevious: undefined, nudgeStrategyApplied: 'none',
-            consecutiveLowValueIterations: 0, lastProductLengthForStagnation: undefined,
-            consecutiveWordsmithingIterations: 0, 
-        },
-        isTargetedRefinementModalOpen: false, currentTextSelectionForRefinement: null, instructionsForSelectionRefinement: "",
-        isEditingCurrentProduct: false, editedProductBuffer: null, devLog: [], 
-        ensembleSubProducts: null,
-    };
-    setState(resetState);
-  }, [state.projectId]);
+      const diffPatch = Diff.createPatch(
+        `product.txt`, 
+        normalizedOld,
+        normalizedNew
+      );
+
+      let linesAdded = 0;
+      let linesRemoved = 0;
+      if (diffPatch) {
+          const diffLines = diffPatch.split('\n').slice(4); // Skip header lines
+          diffLines.forEach(line => {
+            if (line.startsWith('+')) linesAdded++;
+            if (line.startsWith('-')) linesRemoved++;
+          });
+      }
+      
+      const newEntry: IterationLogEntry = {
+        ...restOfLogData,
+        timestamp: Date.now(),
+        productSummary: getProductSummary(currentFullProduct),
+        productDiff: diffPatch,
+        linesAdded,
+        linesRemoved,
+        charDelta: (currentFullProduct?.length || 0) - (previousFullProduct?.length || 0)
+      };
+
+      const newHistory = [...prev.iterationHistory, newEntry].sort(compareVersions);
+      
+      return { ...prev, iterationHistory: newHistory };
+    });
+  }, []);
+
+  const handleReset = useCallback(async (baseConfig: ModelConfig, baseTemplates: PlanTemplate[]) => {
+    await storageService.clearState();
+    setState(createInitialProcessState('loaded', geminiService.DEFAULT_MODEL_NAME));
+    updateProcessState({ savedPlanTemplates: baseTemplates, statusMessage: "Process reset." });
+  }, [updateProcessState]);
 
   const addDevLogEntry = useCallback((newEntryData: Omit<DevLogEntry, 'id' | 'timestamp' | 'lastModified'>) => {
     const newEntry: DevLogEntry = {
       ...newEntryData,
-      id: `devlog_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-      timestamp: Date.now(), lastModified: Date.now(),
+      id: `devlog-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      timestamp: Date.now(),
+      lastModified: Date.now(),
     };
-    setState(prev => ({ ...prev, devLog: [...(prev.devLog || []), newEntry].sort((a,b) => b.timestamp - a.timestamp) }));
+    setState(prev => ({ ...prev, devLog: [...(prev.devLog || []), newEntry] }));
   }, []);
 
   const updateDevLogEntry = useCallback((updatedEntry: DevLogEntry) => {
-    setState(prev => ({ ...prev, devLog: (prev.devLog || []).map(entry => entry.id === updatedEntry.id ? { ...updatedEntry, lastModified: Date.now() } : entry ).sort((a,b) => b.timestamp - a.timestamp) }));
+    setState(prev => ({
+      ...prev,
+      devLog: (prev.devLog || []).map(entry =>
+        entry.id === updatedEntry.id
+          ? { ...updatedEntry, lastModified: Date.now() }
+          : entry
+      ),
+    }));
   }, []);
 
   const deleteDevLogEntry = useCallback((entryId: string) => {
-    setState(prev => ({ ...prev, devLog: (prev.devLog || []).filter(entry => entry.id !== entryId) }));
+    setState(prev => ({
+      ...prev,
+      devLog: (prev.devLog || []).filter(entry => entry.id !== entryId),
+    }));
   }, []);
 
   return {
-    state, updateProcessState, handleLoadedFilesChange, addLogEntry, handleReset, handleInitialPromptChange,
-    addDevLogEntry, updateDevLogEntry, deleteDevLogEntry,
+    state,
+    updateProcessState,
+    handleLoadedFilesChange,
+    handleInitialPromptChange,
+    addLogEntry,
+    handleReset,
+    addDevLogEntry,
+    updateDevLogEntry,
+    deleteDevLogEntry,
   };
 };

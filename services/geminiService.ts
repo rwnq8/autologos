@@ -1,6 +1,3 @@
-
-
-
 import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
 import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version } from "../types/index.ts";
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents, CONVERGED_PREFIX } from './promptBuilderService.ts';
@@ -76,6 +73,47 @@ const toBase64 = (str: string): string => {
       return "";
     }
 };
+
+export const generateProjectCodename = async (initialPrompt: string, loadedFiles: LoadedFile[]): Promise<string> => {
+  if (!ai) return `fallback-${Math.random().toString(36).substring(2, 8)}`;
+
+  const systemInstruction = `You are a creative naming specialist. Your task is to analyze the provided text content and generate a unique, memorable, 2-3 word project codename. The codename MUST be in lower-kebab-case (e.g., 'cosmic-whale-odyssey', 'apollo-archive-retrieval'). Do not use generic words like 'project', 'file', 'document'. Be creative and thematic based on the content. Respond with ONLY the codename and nothing else.`;
+
+  let fullContent = `--- PROMPT ---\n${initialPrompt}\n\n`;
+  if (loadedFiles.length > 0) {
+    const filesContent = loadedFiles
+      .map(file => `--- FILE: ${file.name} ---\n${file.content.substring(0, 20000)}`) // Truncate individual file contents for safety
+      .join('\n\n');
+    fullContent += filesContent;
+  }
+
+  const promptForCodename = `Analyze the following content and generate a codename as per the system instructions.`;
+  
+  try {
+    const result = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-preview-04-17', // Fast and cheap for this task
+      contents: promptForCodename + '\n\n' + fullContent,
+      config: {
+        systemInstruction: systemInstruction,
+        temperature: 0.8, // Be creative
+        topP: 0.95,
+        topK: 50,
+        thinkingConfig: { thinkingBudget: 0 } // Low latency
+      }
+    });
+    
+    const codename = result.text.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    if (codename) {
+      return codename;
+    }
+    // Fallback if AI returns empty string
+    throw new Error("AI returned an empty codename.");
+  } catch (error) {
+    console.error("Error generating project codename:", error);
+    return `fallback-${Math.random().toString(36).substring(2, 8)}`; // Fallback
+  }
+};
+
 
 export const generateInitialOutline = async (fileManifest: string, loadedFiles: LoadedFile[], modelConfig: ModelConfig, modelToUse: SelectableModelName, devLogContextString?: string): Promise<OutlineGenerationResult> => {
   if (!ai) return { outline: "", identifiedRedundancies: "", errorMessage: "Gemini API client not initialized." };
