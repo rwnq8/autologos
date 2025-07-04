@@ -1,7 +1,7 @@
 // hooks/useAutoSave.ts
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName, Version } from '../types/index.ts';
+import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName, Version, OutlineNode } from '../types/index.ts';
 import * as storageService from '../services/storageService.ts';
 import { DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
@@ -74,6 +74,10 @@ export const useAutoSave = (
         iterationHistory: leanHistory,
         documentChunks: currentState.documentChunks,
         currentFocusChunkIndex: currentState.currentFocusChunkIndex,
+        isOutlineMode: currentState.isOutlineMode,
+        outlineId: currentState.outlineId,
+        currentOutline: currentState.currentOutline,
+        finalOutline: currentState.finalOutline,
         maxMajorVersions: currentState.maxMajorVersions,
         temperature: currentModelParams.temperature,
         topP: currentModelParams.topP,
@@ -113,6 +117,7 @@ export const useAutoSave = (
         bootstrapSampleSizePercent: currentState.bootstrapSampleSizePercent,
         bootstrapSubIterations: currentState.bootstrapSubIterations,
         ensembleSubProducts: currentState.ensembleSubProducts,
+        isDocumentMapOpen: currentState.isDocumentMapOpen,
     };
 
     try {
@@ -164,6 +169,10 @@ export const useAutoSave = (
           loadedFiles: loadedFilesFromData,
           documentChunks: documentChunks,
           currentFocusChunkIndex: engineData.currentFocusChunkIndex ?? null,
+          isOutlineMode: engineData.isOutlineMode ?? false,
+          outlineId: engineData.outlineId ?? null,
+          currentOutline: engineData.currentOutline ?? null,
+          finalOutline: engineData.finalOutline ?? null,
           apiKeyStatus: initialProcessStateValues.apiKeyStatus, 
           isProcessing: false, 
           statusMessage: "Session restored from auto-save.",
@@ -191,6 +200,7 @@ export const useAutoSave = (
           bootstrapSampleSizePercent: engineData.bootstrapSampleSizePercent ?? initialProcessStateValues.bootstrapSampleSizePercent,
           bootstrapSubIterations: engineData.bootstrapSubIterations ?? initialProcessStateValues.bootstrapSubIterations,
           ensembleSubProducts: engineData.ensembleSubProducts || null,
+          isDocumentMapOpen: engineData.isDocumentMapOpen ?? true,
         };
         updateProcessState(restoredProcessState);
 

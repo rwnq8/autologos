@@ -61,12 +61,6 @@ const AppHeader: React.FC<AppHeaderProps> = ({
                 <button onClick={projectIO.handleExportProject} disabled={process.isProcessing} className={neutralButtonClasses}>Export Project</button>
                 
                 <div className="w-px h-6 bg-slate-600 mx-2"></div>
-                
-                {process.loadedFiles.length > 1 && !process.isProcessing && (
-                     <button onClick={process.handleBootstrapSynthesis} className={`${primaryActionButtonClasses} bg-teal-600 hover:bg-teal-700 text-white focus:ring-teal-500`} title="Generate a robust starting document from a random sample of loaded files">
-                       Ensemble Base
-                     </button>
-                )}
 
                 {!process.isProcessing ? (
                     <button onClick={() => process.handleStartProcess()} disabled={!process.initialPrompt?.trim() || process.awaitingStrategyDecision} className={startButtonClasses}>

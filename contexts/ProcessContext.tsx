@@ -1,3 +1,4 @@
+
 // contexts/ProcessContext.tsx
 
 
@@ -60,7 +61,7 @@ export type AddLogEntryType = (logData: {
 
 
 export interface ProcessContextType extends Omit<ProcessState,
-  'apiKeyStatus' | 'selectedModelName' | 'projectName' | 'projectId' | 
+  'apiKeyStatus' | 'selectedModelName' | 'projectId' | 'projectName' | 
   'isApiRateLimited' | 'rateLimitCooldownActiveSeconds' | 
   'promptChangedByFileLoad' 
 > {
@@ -96,14 +97,12 @@ export interface ProcessContextType extends Omit<ProcessState,
   promptSourceName: string | null;
   configAtFinalization: ModelConfig | null;
   projectObjective: string | null;
-  lastAutoSavedAt?: number | null;
   currentProductBeforeHalt: string | null;
   currentVersionBeforeHalt?: Version;
   outputParagraphShowHeadings: boolean;
   outputParagraphMaxHeadingDepth: number;
   outputParagraphNumberedHeadings: boolean;
   aiProcessInsight?: string;
-  currentAppliedModelConfig?: ModelConfig | null;
   stagnationNudgeEnabled: boolean;
   stagnationInfo: StagnationInfo;
   isPlanActive: boolean;

@@ -2,8 +2,9 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { useEngine } from '../../contexts/ApplicationContext.tsx';
 import { formatVersion } from '../../services/versionUtils.ts';
 import { reconstructFromChunks } from '../../services/chunkingService.ts';
-import type { OutlineNode } from '../../types/index.ts';
+import type { OutlineNode, DocumentChunk } from '../../types/index.ts';
 import { OutlineNodeDisplay } from './OutlineNodeDisplay.tsx';
+import { DocumentChunkDisplay } from './DocumentChunkDisplay.tsx';
 
 
 export interface ProductOutputDisplayProps {
@@ -12,9 +13,9 @@ export interface ProductOutputDisplayProps {
 
 const convertOutlineToMarkdown = (nodes: OutlineNode[], level = 0): string => {
     let markdown = "";
-    const prefix = "#".repeat(level + 1);
     nodes.forEach(node => {
-        markdown += `${prefix} ${node.content}\n\n`;
+        const prefix = "#".repeat(Math.max(1, Math.min(6, level + 1)));
+        markdown += `${prefix} ${node.wbs} ${node.content}\n\n`;
         if (node.children && node.children.length > 0) {
             markdown += convertOutlineToMarkdown(node.children, level + 1);
         }
@@ -27,47 +28,53 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
   onSaveFinalProduct,
 }) => {
   const { process: processCtx, app: appCtx } = useEngine();
-  const productDisplayRef = useRef<HTMLPreElement>(null);
+  const productDisplayRef = useRef<HTMLDivElement>(null);
   const [isCurrentProductDetailsExpanded, setIsCurrentProductDetailsExpanded] = useState(true);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
 
-  const { productToDisplay, characterCount, wordCount } = useMemo(() => {
-      if (processCtx.isOutlineMode) {
-          const outline = processCtx.currentOutline || processCtx.finalOutline;
-          const text = outline ? JSON.stringify(outline, null, 2) : "";
-          return {
-              productToDisplay: outline,
-              characterCount: text.length,
-              wordCount: text.split(/\s+/).filter(Boolean).length
-          };
-      } else {
-          const text = processCtx.isEditingCurrentProduct
-              ? (processCtx.editedProductBuffer || "")
-              : (processCtx.documentChunks && processCtx.documentChunks.length > 0)
-                  ? reconstructFromChunks(processCtx.documentChunks)
-                  : (processCtx.finalProduct || processCtx.currentProduct || "");
-          return {
-              productToDisplay: text,
-              characterCount: text.length,
-              wordCount: text.split(/\s+/).filter(Boolean).length
-          };
-      }
-  }, [processCtx.isOutlineMode, processCtx.currentOutline, processCtx.finalOutline, processCtx.isEditingCurrentProduct, processCtx.editedProductBuffer, processCtx.documentChunks, processCtx.finalProduct, processCtx.currentProduct]);
+  const {
+    displayMode,
+    characterCount,
+    wordCount,
+    textForCopy,
+    chunksForDisplay
+  } = useMemo(() => {
+    if (processCtx.isOutlineMode) {
+        const outline = processCtx.currentOutline || processCtx.finalOutline;
+        const text = outline ? JSON.stringify(outline, null, 2) : "";
+        return {
+            displayMode: 'outline' as const,
+            chunksForDisplay: null,
+            textForCopy: outline ? convertOutlineToMarkdown(outline) : "",
+            characterCount: text.length,
+            wordCount: text.split(/\s+/).filter(Boolean).length
+        };
+    } else {
+        const text = processCtx.isEditingCurrentProduct 
+            ? (processCtx.editedProductBuffer || "")
+            : reconstructFromChunks(processCtx.documentChunks);
+        
+        return {
+            displayMode: 'text' as const,
+            chunksForDisplay: processCtx.documentChunks,
+            textForCopy: text,
+            characterCount: text.length,
+            wordCount: text.split(/\s+/).filter(Boolean).length
+        };
+    }
+  }, [
+      processCtx.isOutlineMode, 
+      processCtx.currentOutline, 
+      processCtx.finalOutline, 
+      processCtx.isEditingCurrentProduct, 
+      processCtx.editedProductBuffer, 
+      processCtx.documentChunks
+  ]);
 
   const handleCopy = () => {
-    if (copyStatus !== 'idle' || !productToDisplay) return;
-
-    let textToCopy: string;
-    if (processCtx.isOutlineMode && Array.isArray(productToDisplay)) {
-        textToCopy = convertOutlineToMarkdown(productToDisplay);
-    } else if (typeof productToDisplay === 'string') {
-        textToCopy = productToDisplay;
-    } else {
-        return;
-    }
-
+    if (copyStatus !== 'idle' || !textForCopy) return;
     setCopyStatus('copying');
-    navigator.clipboard.writeText(textToCopy).then(() => {
+    navigator.clipboard.writeText(textForCopy).then(() => {
       setCopyStatus('copied');
       setTimeout(() => setCopyStatus('idle'), 2000);
     }).catch(err => {
@@ -89,10 +96,9 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
   };
   
   const handleEditClick = () => {
-    const currentProductText = reconstructFromChunks(processCtx.documentChunks) || processCtx.currentProduct || "";
     processCtx.updateProcessState({
         isEditingCurrentProduct: true,
-        editedProductBuffer: currentProductText,
+        editedProductBuffer: textForCopy,
     });
   };
   
@@ -112,9 +118,9 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
     productSectionTitleValue = `Final Product (v${processCtx.currentMajorVersion}.${processCtx.currentMinorVersion})`;
   } else if (processCtx.currentMajorVersion > 0 || processCtx.currentMinorVersion > 0) {
     productSectionTitleValue = `Current Product (v${processCtx.currentMajorVersion}.${processCtx.currentMinorVersion})`;
-  } else if (!productToDisplay && processCtx.loadedFiles.length > 0) {
+  } else if (!textForCopy && processCtx.loadedFiles.length > 0) {
       productSectionTitleValue = "Awaiting Initial Synthesis";
-  } else if (!productToDisplay) {
+  } else if (!textForCopy) {
       productSectionTitleValue = "Output (No Product Yet)";
   }
 
@@ -135,14 +141,14 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
         </div>
         <div className="flex items-center gap-2">
             {!processCtx.isEditingCurrentProduct ? (
-                 <button onClick={handleEditClick} disabled={!productToDisplay || processCtx.isProcessing || processCtx.isOutlineMode} className={commonButtonClasses}>Edit</button>
+                 <button onClick={handleEditClick} disabled={!textForCopy || processCtx.isProcessing || processCtx.isOutlineMode} className={commonButtonClasses}>Edit</button>
             ) : (
                 <>
                  <button onClick={handleCancelEditClick} className={`${commonButtonClasses} bg-slate-200 dark:bg-slate-600`}>Cancel</button>
                  <button onClick={handleSaveEditClick} className={`${commonButtonClasses} bg-green-500 text-white hover:bg-green-600`}>Save Edit</button>
                 </>
             )}
-            <button onClick={handleCopy} disabled={!productToDisplay || copyStatus !== 'idle'} className={commonButtonClasses}>
+            <button onClick={handleCopy} disabled={!textForCopy || copyStatus !== 'idle'} className={commonButtonClasses}>
                 {copyStatus === 'copied' ? 'Copied!' : 'Copy'}
             </button>
             <button onClick={onSaveFinalProduct} disabled={!(processCtx.finalProduct || processCtx.currentProduct || processCtx.finalOutline || processCtx.currentOutline)} className="px-3 py-1 text-xs font-semibold rounded-md bg-primary-600 text-white hover:bg-primary-700 disabled:bg-slate-400 disabled:cursor-not-allowed">
@@ -168,11 +174,15 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
         </div>
       )}
       
-      <div className="w-full bg-slate-100 dark:bg-slate-800/60 rounded-lg p-4 border border-slate-200 dark:border-white/10 min-h-[200px] max-h-[70vh] overflow-y-auto">
-        {processCtx.isOutlineMode ? (
-            Array.isArray(productToDisplay) && productToDisplay.length > 0 ? (
+      <div 
+        className="w-full bg-slate-100 dark:bg-slate-800/60 rounded-lg p-4 border border-slate-200 dark:border-white/10 min-h-[200px] max-h-[70vh] overflow-y-auto"
+        onMouseUp={handleTextSelection}
+        onTouchEnd={handleTextSelection}
+      >
+        {displayMode === 'outline' ? (
+            processCtx.currentOutline && processCtx.currentOutline.length > 0 ? (
                 <ul className="space-y-1">
-                    {productToDisplay.map(node => <OutlineNodeDisplay key={node.id} node={node} />)}
+                    {processCtx.currentOutline.map(node => <OutlineNodeDisplay key={node.wbs} node={node} />)}
                 </ul>
             ) : (
                 <span className="text-slate-400 dark:text-slate-500 italic">No outline generated yet...</span>
@@ -181,22 +191,24 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
             <textarea
                 value={processCtx.editedProductBuffer || ''}
                 onChange={(e) => processCtx.updateProcessState({ editedProductBuffer: e.target.value })}
-                className="w-full h-full min-h-[40vh] bg-transparent border-0 p-0 text-slate-700 dark:text-slate-200 font-sans text-base leading-relaxed focus:ring-0"
+                className="w-full h-full min-h-[60vh] bg-transparent border-0 p-0 text-slate-700 dark:text-slate-200 font-sans text-base leading-relaxed focus:ring-0"
                 aria-label="Product editing area"
             />
-        ) : (
-            <pre 
+        ) : (chunksForDisplay && chunksForDisplay.length > 0) ? (
+            <div 
                 ref={productDisplayRef} 
-                className="whitespace-pre-wrap break-words text-slate-700 dark:text-slate-200 font-sans text-base leading-relaxed"
-                onMouseUp={handleTextSelection}
-                onTouchEnd={handleTextSelection}
+                className="text-slate-700 dark:text-slate-200 font-sans text-base leading-relaxed"
                 aria-live="polite"
             >
-              {typeof productToDisplay === 'string' && productToDisplay || <span className="text-slate-400 dark:text-slate-500 italic">No product generated yet...</span>}
+              {chunksForDisplay.map(chunk => (
+                  <DocumentChunkDisplay key={chunk.id} chunk={chunk} />
+              ))}
               {processCtx.isProcessing && processCtx.streamBuffer && (
                  <span className="text-slate-500 dark:text-slate-400 animate-pulse">{processCtx.streamBuffer}</span>
               )}
-            </pre>
+            </div>
+        ) : (
+             <span className="text-slate-400 dark:text-slate-500 italic">No product generated yet...</span>
         )}
       </div>
     </div>

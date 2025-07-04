@@ -1,4 +1,6 @@
-import React, { createContext, useContext, useCallback, useState, useEffect, useMemo } from 'react';
+
+
+import React, { createContext, useContext, useCallback, useState, useEffect, useMemo, ReactNode } from 'react';
 import type { ProcessState, ModelConfig, SettingsSuggestionSource, StaticAiModelDetails, SelectableModelName, AutologosProjectFile, PlanTemplate, IterationLogEntry, Version, PlanStage, LoadedFile, DocumentChunk } from '../types/index.ts';
 import { SELECTABLE_MODELS } from '../types/index.ts';
 import type { ModelConfigContextType } from './ModelConfigContext.tsx';
@@ -9,12 +11,12 @@ import { useIterativeLogic } from '../hooks/useIterativeLogic.ts';
 import { useProjectIO } from '../hooks/useProjectIO.ts';
 import { useAutoSave } from '../hooks/useAutoSave.ts';
 import * as geminiService from '../services/geminiService.ts';
-import { getAiModelDetails, isApiKeyAvailable } from '../services/geminiService.ts';
+import { getAiModelDetails } from '../services/geminiService.ts';
 import { inferProjectNameFromInput } from '../services/projectUtils.ts';
-import { generateFileName, toYamlStringLiteral } from '../services/utils.ts';
+import { generateFileName } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
-import { formatVersion } from '../services/versionUtils.ts';
-import { splitToChunks, reconstructFromChunks } from '../services/chunkingService.ts';
+import { formatVersion, compareVersions } from '../services/versionUtils.ts';
+import { splitToChunks } from '../services/chunkingService.ts';
 
 // Define the shape of the comprehensive engine object
 interface EngineContextType {
@@ -30,7 +32,6 @@ interface EngineContextType {
   process: ReturnType<typeof useProcessState>['state'] & {
     handleStartProcess: ReturnType<typeof useIterativeLogic>['handleStartProcess'];
     handleHaltProcess: ReturnType<typeof useIterativeLogic>['handleHaltProcess'];
-    handleBootstrapSynthesis: ReturnType<typeof useIterativeLogic>['handleBootstrapSynthesis'];
     updateProcessState: ReturnType<typeof useProcessState>['updateProcessState'];
     handleLoadedFilesChange: ReturnType<typeof useProcessState>['handleLoadedFilesChange'];
     handleReset: () => Promise<void>;
@@ -149,131 +150,37 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const iterativeLogic = useIterativeLogic(processState, processActions.updateProcessState, processActions.addLogEntry, processActions.addDevLogEntry, modelParams.getUserSetBaseConfig, autoSave.performAutoSave, handleRateLimitErrorEncountered);
 
-  const onFilesSelectedForImport = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    const isProjectFile = Array.from(files).some(file => file.name.endsWith('.autologos.json'));
+  const handleReset = useCallback(async () => {
+    await autoSave.handleClearAutoSaveAndDismiss();
+    const baseTemplates = planTemplates.savedPlanTemplates;
+    await processActions.handleReset(geminiService.CREATIVE_DEFAULTS, baseTemplates);
+    modelParams.resetModelParametersToDefaults();
+  }, [autoSave, planTemplates.savedPlanTemplates, processActions, modelParams]);
 
-    if (isProjectFile) {
-        if (files.length > 1) {
-            alert("Please import project files one at a time.");
-            return;
-        }
-        const file = files[0];
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            try {
-                const projectData: AutologosProjectFile = JSON.parse(e.target?.result as string);
-                projectIO.handleImportProjectData(projectData);
-            } catch (error) {
-                console.error("Error parsing project file:", error);
-                processActions.updateProcessState({ statusMessage: "Error: Could not parse the project file." });
-            }
-        };
-        reader.readAsText(file);
-    } else {
-        const loadPromises = Array.from(files).map(async (file) => {
-            try {
-                const content = await file.text();
-                return {
-                    name: file.name,
-                    mimeType: file.type || 'application/octet-stream',
-                    size: file.size,
-                    content,
-                    status: 'success'
-                };
-            } catch (error) {
-                console.error(`Failed to read file "${file.name}":`, error);
-                return { name: file.name, status: 'error' };
-            }
-        });
-
-        const results = await Promise.all(loadPromises);
-        
-        const loadedFiles = results.filter(r => r.status === 'success') as LoadedFile[];
-        const failedFiles = results.filter(r => r.status === 'error').map(r => r.name);
-
-        if (loadedFiles.length > 0) {
-            processActions.handleLoadedFilesChange(loadedFiles, 'add');
-            setPromptChangedByFileLoad(true);
-        }
-
-        if (failedFiles.length > 0) {
-            // This message is important and should overwrite any success message from handleLoadedFilesChange
-            processActions.updateProcessState({ 
-                statusMessage: `Warning: Could not read ${failedFiles.length} file(s): ${failedFiles.join(', ')}. They might be binary files.`
-            });
-        }
-    }
-  };
-
-  const handleReset = async () => {
-    await processActions.handleReset(
-      geminiService.CREATIVE_DEFAULTS,
-      planTemplates.savedPlanTemplates
-    );
-    modelParams.resetModelParametersToDefaults(geminiService.CREATIVE_DEFAULTS);
-  };
-  
-  const handleRewind = (version: Version) => {
+  const handleRewind = useCallback((version: Version) => {
     const { product } = reconstructProduct(version, processState.iterationHistory, processState.initialPrompt);
     const newChunks = splitToChunks(product);
     processActions.updateProcessState({
         currentProduct: product,
         documentChunks: newChunks,
         currentMajorVersion: version.major,
-        currentMinorVersion: version.minor || 0,
+        currentMinorVersion: version.minor,
         finalProduct: null,
-        statusMessage: `Rewound to version ${formatVersion(version)}`,
+        isEditingCurrentProduct: false,
+        editedProductBuffer: null,
     });
-  };
+  }, [processState.iterationHistory, processState.initialPrompt, processActions]);
 
-  const handleExportIterationMarkdown = (version: Version) => {
-    const logEntry = processState.iterationHistory.find(
-      (e) =>
-        e.majorVersion === version.major &&
-        e.minorVersion === version.minor &&
-        (version.patch === undefined || e.patchVersion === version.patch)
-    );
-
-    if (!logEntry) {
-      processActions.updateProcessState({ statusMessage: `Could not find log entry for version ${formatVersion(version)}` });
-      return;
-    }
-
+  const handleExportIterationMarkdown = useCallback((version: Version) => {
     const { product } = reconstructProduct(version, processState.iterationHistory, processState.initialPrompt);
-    const generationTimestamp = new Date(logEntry.timestamp).toISOString();
     const versionString = formatVersion(version);
-    
-    let yamlFrontmatter = `---
-export_type: ITERATION_SNAPSHOT
-generation_timestamp: ${generationTimestamp}
-project_name: ${toYamlStringLiteral(processState.projectName || "Untitled Project")}
-project_codename: ${toYamlStringLiteral(processState.projectCodename || "none")}
-iteration_version: ${versionString}
-iteration_status: ${toYamlStringLiteral(logEntry.status)}
-`;
-
-    if (logEntry.modelConfigUsed) {
-      const modelDisplayName = SELECTABLE_MODELS.find(m => m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration || "N/A";
-      yamlFrontmatter += `model_configuration_used:
-  model_name: '${modelDisplayName}'
-  temperature: ${logEntry.modelConfigUsed.temperature.toFixed(2)}
-  top_p: ${logEntry.modelConfigUsed.topP.toFixed(2)}
-  top_k: ${logEntry.modelConfigUsed.topK}
-`;
-    } else {
-      yamlFrontmatter += `model_configuration_used: N/A\n`;
-    }
-    yamlFrontmatter += `---\n\n`;
-
-    const markdownContent = yamlFrontmatter + product;
-    const fileName = generateFileName("snapshot", "md", {
+    const fileName = generateFileName("product", "md", {
       projectCodename: processState.projectCodename,
       projectName: processState.projectName,
       contentForSlug: product,
       versionString: versionString,
     });
-    const blob = new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' });
+    const blob = new Blob([product], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -282,61 +189,50 @@ iteration_status: ${toYamlStringLiteral(logEntry.status)}
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  };
-  
+  }, [processState.iterationHistory, processState.initialPrompt, processState.projectCodename, processState.projectName]);
+
   const saveManualEdits = useCallback(async () => {
     const { editedProductBuffer, currentProduct, currentMajorVersion, currentMinorVersion } = processState;
-    if (editedProductBuffer === null || editedProductBuffer === currentProduct) {
-        processActions.updateProcessState({ isEditingCurrentProduct: false }); // Just cancel if no changes
-        return;
-    }
-    const newMinorVersion = currentMinorVersion + 1;
-    const newVersion = { major: currentMajorVersion, minor: newMinorVersion };
-    
+    if (editedProductBuffer === null || typeof editedProductBuffer === 'undefined') return;
+  
     processActions.addLogEntry({
-        majorVersion: newVersion.major,
-        minorVersion: newVersion.minor,
-        entryType: 'manual_edit',
-        currentFullProduct: editedProductBuffer,
-        previousFullProduct: currentProduct,
-        status: 'Manual Edit Applied',
-        versionRationale: 'User manually edited the product content.',
-        fileProcessingInfo: { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0 },
+      majorVersion: currentMajorVersion,
+      minorVersion: currentMinorVersion + 1,
+      entryType: 'manual_edit',
+      currentFullProduct: editedProductBuffer,
+      previousFullProduct: currentProduct,
+      status: 'Manual Edit Applied',
+      fileProcessingInfo: { numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0, filesSentToApiIteration: null },
     });
-    
+  
+    const newChunks = splitToChunks(editedProductBuffer);
     processActions.updateProcessState({
-        currentProduct: editedProductBuffer,
-        documentChunks: splitToChunks(editedProductBuffer),
-        currentMinorVersion: newMinorVersion,
-        isEditingCurrentProduct: false,
-        editedProductBuffer: null,
-        statusMessage: `Saved manual edit as version ${formatVersion(newVersion)}`,
+      currentProduct: editedProductBuffer,
+      documentChunks: newChunks,
+      currentMinorVersion: currentMinorVersion + 1,
+      isEditingCurrentProduct: false,
+      editedProductBuffer: null,
     });
-    
-  }, [processState, processActions]);
+    await autoSave.performAutoSave();
+  }, [processState, processActions, autoSave]);
 
   const openDiffViewer = useCallback((version: Version) => {
     const history = processState.iterationHistory;
-    const basePrompt = processState.initialPrompt;
-    
-    const { product: newText } = reconstructProduct(version, history, basePrompt);
+    const sortedHistory = [...history].sort(compareVersions);
+    const currentIndex = sortedHistory.findIndex(e => formatVersion(e) === formatVersion(version));
 
-    const currentEntryIndex = history.findIndex(e => e.majorVersion === version.major && e.minorVersion === version.minor && (version.patch === undefined || e.patchVersion === version.patch));
-    
-    let oldText = "";
-    if (currentEntryIndex > 0) {
-        const previousEntry = history[currentEntryIndex - 1];
-        const prevVersion = { major: previousEntry.majorVersion, minor: previousEntry.minorVersion, patch: previousEntry.patchVersion };
-        const { product } = reconstructProduct(prevVersion, history, basePrompt);
-        oldText = product;
-    } else if (currentEntryIndex === 0) {
-        // The first entry is compared against an empty string or the initial prompt
-        oldText = "";
-    }
+    const oldText = currentIndex > 0
+      ? reconstructProduct(sortedHistory[currentIndex - 1], history, processState.initialPrompt).product
+      : "";
+    const newText = reconstructProduct(version, history, processState.initialPrompt).product;
 
     processActions.updateProcessState({
-        isDiffViewerOpen: true,
-        diffViewerContent: { oldText, newText, version: formatVersion(version) }
+      isDiffViewerOpen: true,
+      diffViewerContent: {
+        oldText,
+        newText,
+        version: formatVersion(version),
+      },
     });
   }, [processState.iterationHistory, processState.initialPrompt, processActions]);
 
@@ -344,8 +240,45 @@ iteration_status: ${toYamlStringLiteral(logEntry.status)}
     processActions.updateProcessState({ isDiffViewerOpen: false, diffViewerContent: null });
   }, [processActions]);
 
+  const onFilesSelectedForImport = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const isProjectFile = Array.from(files).some(file => file.name.endsWith('.autologos.json'));
 
-  const engineValue: EngineContextType = {
+    if (isProjectFile) {
+      if (files.length > 1) {
+        alert("Please import project files one at a time.");
+        return;
+      }
+      const file = files[0];
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result;
+          if (typeof text !== 'string') throw new Error("File content is not a string");
+          const projectData: AutologosProjectFile = JSON.parse(text);
+          projectIO.handleImportProjectData(projectData);
+        } catch (err) {
+          const error = err as Error;
+          console.error("Failed to parse project file:", error);
+          alert(`Error parsing project file: ${error.message}`);
+        }
+      };
+      reader.readAsText(file);
+    } else {
+      const loadedFiles: LoadedFile[] = await Promise.all(
+        Array.from(files).map(async (file) => ({
+          name: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          content: await file.text(),
+          size: file.size,
+        }))
+      );
+      processActions.handleLoadedFilesChange(loadedFiles, 'add');
+      setPromptChangedByFileLoad(true);
+    }
+  };
+
+  const value: EngineContextType = useMemo(() => ({
     app: {
       apiKeyStatus: processState.apiKeyStatus,
       isApiRateLimited: processState.isApiRateLimited,
@@ -363,7 +296,7 @@ iteration_status: ${toYamlStringLiteral(logEntry.status)}
       handleReset,
       handleRewind,
       handleExportIterationMarkdown,
-      reconstructProductCallback: (targetVersion, history, basePrompt) => reconstructProduct(targetVersion, history, basePrompt),
+      reconstructProductCallback: reconstructProduct,
       handleInitialPromptChange: processActions.handleInitialPromptChange,
       addDevLogEntry: processActions.addDevLogEntry,
       updateDevLogEntry: processActions.updateDevLogEntry,
@@ -375,7 +308,7 @@ iteration_status: ${toYamlStringLiteral(logEntry.status)}
     modelConfig: {
       ...modelParams,
       maxIterations: processState.maxMajorVersions,
-      onMaxIterationsChange
+      onMaxIterationsChange,
     },
     plan: {
       ...planTemplates,
@@ -387,10 +320,31 @@ iteration_status: ${toYamlStringLiteral(logEntry.status)}
     },
     projectIO,
     autoSave,
-  };
-
+  }), [
+    processState,
+    staticAiModelDetails,
+    onSelectedModelChange,
+    onFilesSelectedForImport,
+    iterativeLogic,
+    processActions,
+    handleReset,
+    handleRewind,
+    handleExportIterationMarkdown,
+    saveManualEdits,
+    openDiffViewer,
+    closeDiffViewer,
+    modelParams,
+    onMaxIterationsChange,
+    planTemplates,
+    onIsPlanActiveChange,
+    onPlanStagesChange,
+    onLoadPlanTemplate,
+    projectIO,
+    autoSave,
+  ]);
+  
   return (
-    <EngineContext.Provider value={engineValue}>
+    <EngineContext.Provider value={value}>
       {children}
     </EngineContext.Provider>
   );

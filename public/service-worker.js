@@ -1,3 +1,5 @@
+
+
 // public/service-worker.js
 
 const PROXY_HOST = 'https://autologos-iterative-process-engine-183501038626.us-west1.run.app';
@@ -20,51 +22,88 @@ const handleGeminiProxy = async (request) => {
   const headers = new Headers(request.headers);
   headers.set('X-Forwarded-Host', url.hostname);
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 90000); // 90-second timeout for generative AI call
+
   try {
-    // The original request's body is a stream. To use it in a new fetch,
-    // we must pass it directly. We cannot read it first (e.g., with .blob() or .json())
-    // because that would consume the stream and break streaming.
-    const response = await fetch(proxyUrl, {
+    const GeminiRequest = new Request(proxyUrl, {
       method: request.method,
       headers: headers,
-      // Pass the body stream directly if it's not a GET/HEAD request.
       body: (request.method !== 'GET' && request.method !== 'HEAD') ? request.body : null,
-      // 'duplex: "half"' is required by some browsers to allow streaming request bodies.
       duplex: 'half',
       mode: 'cors',
+      signal: controller.signal,
     });
-    return response;
+
+    const response = await fetch(GeminiRequest);
+    clearTimeout(timeoutId); // Clear timeout on successful fetch start
+
+    if (!response.ok || response.status === 204) {
+      return response;
+    }
+
+    const { readable, writable } = new TransformStream();
+    response.body.pipeTo(writable);
+    
+    return new Response(readable, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+
   } catch (error) {
-    console.error(`[SW] Error proxying Gemini API request to ${proxyUrl}:`, error);
-    return new Response('Service Worker: API proxy failed', { status: 500 });
+    clearTimeout(timeoutId);
+    const errorMessage = error.name === 'AbortError' 
+      ? `Service Worker: API proxy request timed out after 90 seconds.`
+      : `Service Worker: API proxy failed. ${error.message}`;
+    
+    console.error(`[SW] Error proxying Gemini API request to ${proxyUrl}:`, errorMessage);
+    return new Response(JSON.stringify({ error: { message: errorMessage } }), {
+      status: error.name === 'AbortError' ? 504 : 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 };
 
 // Function to handle the URL browsing proxy
 const handleUrlBrowseProxy = async (request) => {
   const requestUrl = new URL(request.url);
-  // The full target URL is expected to be encoded as the final part of the path
   const targetUrlEncoded = requestUrl.pathname.substring(BROWSE_PROXY_PREFIX.length);
   const targetUrl = decodeURIComponent(targetUrlEncoded);
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000); // 20-second timeout for browsing a URL
+
   try {
-    // Attempt a standard fetch. The service worker context can bypass some CORS preflight issues.
-    const response = await fetch(targetUrl, { redirect: 'follow' });
+    const response = await fetch(targetUrl, { 
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`Server responded with status ${response.status}`);
     }
 
     const textContent = await response.text();
-    return new Response(textContent, {
+    // Return a JSON object for consistency with other tool responses
+    return new Response(JSON.stringify({ content: textContent }), {
       status: 200,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+      headers: { 'Content-Type': 'application/json; charset=utf-8' }
     });
 
   } catch (error) {
-    const errorMessage = `Service Worker: Browse proxy failed for ${targetUrl}. The server may be unreachable or has a strict CORS policy. Error: ${error.message}`;
+    clearTimeout(timeoutId);
+    let errorMessage = `Service Worker: Browse proxy failed for ${targetUrl}. Error: ${error.message}`;
+    if (error.name === 'AbortError') {
+      errorMessage = `Service Worker: Browse proxy timed out after 20 seconds for ${targetUrl}.`;
+    }
+
     console.error(`[SW] Error in browse proxy for ${targetUrl}:`, error);
-    return new Response(errorMessage, { status: 502 }); // Bad Gateway, as we failed to proxy
+    return new Response(JSON.stringify({ error: { message: errorMessage } }), {
+      status: error.name === 'AbortError' ? 504 : 502,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 };
 

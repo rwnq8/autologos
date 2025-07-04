@@ -1,3 +1,5 @@
+
+
 import React, { useRef, useState, useCallback } from 'react';
 import { toYamlStringLiteral, generateFileName } from './services/utils.ts';
 import Controls from './components/Controls.tsx';
@@ -8,6 +10,7 @@ import ErrorBoundary from './components/shared/ErrorBoundary.tsx';
 import ProcessStatusDisplay from './components/display/ProcessStatusDisplay.tsx';
 import ProductOutputDisplay from './components/display/ProductOutputDisplay.tsx';
 import IterationLog from './components/display/IterationLog.tsx';
+import DocumentMap from './components/display/DocumentMap.tsx';
 import { EngineProvider, useEngine } from './contexts/ApplicationContext.tsx';
 import { inferProjectNameFromInput } from './services/projectUtils.ts';
 import { reconstructProduct } from './services/diffService.ts';
@@ -48,15 +51,16 @@ const AppLayout: React.FC = () => {
     };
 
     const onSaveFinalProduct = useCallback(() => {
-        const { isOutlineMode, finalOutline, finalProduct, currentProduct, currentMajorVersion, currentMinorVersion, configAtFinalization, initialPrompt, projectName, projectCodename, loadedFiles, promptSourceName } = engine.process;
+        const { isOutlineMode, outlineId, finalOutline, finalProduct, currentProduct, currentMajorVersion, currentMinorVersion, configAtFinalization, initialPrompt, projectName, projectCodename, loadedFiles, promptSourceName } = engine.process;
 
         if (isOutlineMode) {
             const outlineToSave = finalOutline || engine.process.currentOutline;
             if (!outlineToSave) return;
-            const content = JSON.stringify(outlineToSave, null, 2);
+            const content = JSON.stringify({ outlineId, outline: outlineToSave }, null, 2);
             const versionString = formatVersion({ major: currentMajorVersion, minor: currentMinorVersion });
             const fileName = generateFileName("outline", "json", {
                 projectCodename: projectCodename,
+                outlineId: outlineId,
                 projectName: projectName,
                 versionString: versionString,
             });
@@ -186,8 +190,10 @@ ${contentWarning}
                 onImportClick={handleImportClick}
             />
 
-            <main className="flex-1 overflow-y-auto">
-                 <div className="space-y-8 p-6">
+            <main className="flex-1 flex overflow-y-hidden">
+                {!engine.process.isOutlineMode && engine.process.documentChunks && engine.process.documentChunks.length > 0 && <DocumentMap />}
+
+                <div className="flex-1 overflow-y-auto space-y-8 p-6">
                     <ProcessStatusDisplay />
                     <ProductOutputDisplay onSaveFinalProduct={onSaveFinalProduct} />
                     <IterationLog

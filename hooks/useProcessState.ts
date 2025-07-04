@@ -87,9 +87,11 @@ export const createInitialProcessState = (
   ensembleSubProducts: null,
   awaitingStrategyDecision: false,
   projectCodename: null,
+  isDocumentMapOpen: true,
   isDiffViewerOpen: false,
   diffViewerContent: null,
   isOutlineMode: false,
+  outlineId: null,
   currentOutline: null,
   finalOutline: null,
 });
@@ -199,6 +201,7 @@ export const useProcessState = () => {
         updates.iterationHistory = [];
         updates.documentChunks = [];
         updates.projectCodename = null; // Also reset codename on input change
+        updates.outlineId = null;
         updates.currentOutline = null;
         updates.finalOutline = null;
       }

@@ -1,3 +1,4 @@
+
 import React from 'react'; 
 import type { LoadedFile, CommonControlProps } from '../../types/index.ts';
 import { useEngine } from '../../contexts/ApplicationContext.tsx';
@@ -106,18 +107,6 @@ const InputDataControls: React.FC<InputDataControlsProps> = ({
           >
             Clear All Loaded Files
         </button>
-      )}
-
-      {processCtx.loadedFiles.length > 1 && (
-        <div className="mt-4 pt-4 border-t border-slate-300/70 dark:border-white/10">
-            <h4 className="text-md font-medium text-primary-600 dark:text-primary-300 mb-1">
-                Ensemble Synthesis
-            </h4>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-               This optional step creates a more stable starting document from multiple files. It runs AI sub-processes on random samples of your files, then integrates the results.
-               The 'Generate Ensemble Base' button is now located in the main header for easier access.
-            </p>
-        </div>
       )}
     </div>
   );

@@ -46,7 +46,7 @@ const AI_ERROR_PHRASES = [
   "okay, i need the context from where i left off.",
   "please provide the last sentence or paragraph i generated, or a summary of the topic we were discussing, so i can continue the response appropriately and ensure completion.",
   "i'm ready to pick up where i left off!",
-  "Okay, I'm ready! Please provide me with the text you want me to continue generating from. I will do my best to seamlessly pick up where I left off and complete the task you've assigned. Just give me the context I need!",
+  "Okay, i'm ready! Please provide me with the text you want me to continue generating from. I will do my best to seamlessly pick up where I left off and complete the task you've assigned. Just give me the context I need!",
   "okay, i'm ready!", "please provide me with the text", "i need the previous part of the response",
   "once you provide the starting point", "what has already been said", "i'm ready when you are! just paste the text.",
   "what you've already written", "complete your response!", "complete the thought or idea.",
@@ -164,9 +164,22 @@ export function isLikelyAiErrorResponse(
   inputComplexity?: 'SIMPLE' | 'MODERATE' | 'COMPLEX'
 ): IsLikelyAiErrorResponseResult {
 
-  const newCleanedForErrorPhrases = newProduct.trim().toLowerCase();
   const newLengthChars = newProduct.trim().length;
   const prevLengthChars = previousProduct.trim().length;
+
+  // CATASTROPHIC EXPANSION CHECK (PREVENTS UI FREEZE)
+  // Add this check at the very beginning to prevent long-running synchronous analysis on massive strings.
+  const MAX_REASONABLE_PRODUCT_SIZE = 2 * 1024 * 1024; // 2MB
+  if (newLengthChars > MAX_REASONABLE_PRODUCT_SIZE) {
+    return {
+      isError: true,
+      isCriticalFailure: true,
+      reason: `CRITICAL: AI response resulted in catastrophic output expansion (${(newLengthChars / 1024 / 1024).toFixed(1)}MB), far exceeding reasonable limits. This is likely a data dump, which would freeze the application during analysis.`,
+      checkDetails: { type: 'catastrophic_expansion', value: { newLengthChars } }
+    };
+  }
+
+  const newCleanedForErrorPhrases = newProduct.trim().toLowerCase();
   const newWordCount = countWords(newProduct);
   const prevWordCount = countWords(previousProduct);
 
@@ -224,17 +237,45 @@ export function isLikelyAiErrorResponse(
                                (prevWordCount > MIN_PREVIOUS_WORDS_FOR_ABSOLUTE_EXTREME_CHECK && (prevWordCount - newWordCount) > EXTREME_REDUCTION_ABSOLUTE_WORD_LOSS);
     
     if (isExtremeReduction) {
-        if (foundErrorPhrase) { return { isError: true, isCriticalFailure: true, reason: `CRITICAL: Extreme reduction combined with an error phrase ("${foundErrorPhrase}").`, checkDetails: { type: 'extreme_reduction_instructed_but_with_error_phrase', value: { ...reductionDetailsBase, thresholdUsed: 'extreme', additionalInfo: `Error phrase found: ${foundErrorPhrase}` }}}; }
-        if (isInstructedToShortenOrCondense) { return { isError: false, isCriticalFailure: false, reason: 'Tolerated extreme reduction as instructed.', checkDetails: { type: 'extreme_reduction_tolerated_instruction', value: { ...reductionDetailsBase, thresholdUsed: 'extreme' }}}; }
-        if (isGlobalModeContext) { return { isError: false, isCriticalFailure: false, reason: 'Tolerated extreme reduction in Global Mode, may be intentional restructuring.', checkDetails: { type: 'extreme_reduction_tolerated_global_mode', value: { ...reductionDetailsBase, thresholdUsed: 'extreme' }}}; }
-        return { isError: true, isCriticalFailure: true, reason: `CRITICAL: Extreme uninstructed reduction of content occurred (over 75% reduction).`, checkDetails: { type: 'extreme_reduction_error', value: { ...reductionDetailsBase, thresholdUsed: 'extreme' }}};
+        if (foundErrorPhrase) { 
+            return { 
+                isError: true, 
+                isCriticalFailure: true, 
+                reason: `CRITICAL: Extreme reduction combined with an error phrase ("${foundErrorPhrase}").`, 
+                checkDetails: { 
+                    type: 'extreme_reduction_instructed_but_with_error_phrase', 
+                    value: { ...reductionDetailsBase, thresholdUsed: 'extreme', additionalInfo: `Error phrase found: ${foundErrorPhrase}` }
+                }
+            }; 
+        }
+        if (isInstructedToShortenOrCondense) { 
+            return { 
+                isError: false, 
+                isCriticalFailure: false, 
+                reason: 'Tolerated extreme reduction as instructed.', 
+                checkDetails: { 
+                    type: 'extreme_reduction_tolerated_instruction', 
+                    value: { ...reductionDetailsBase, thresholdUsed: 'extreme' }
+                }
+            }; 
+        }
+        // Any other uninstructed extreme reduction is now a critical failure.
+        return { 
+            isError: true, 
+            isCriticalFailure: true, 
+            reason: `CRITICAL: Extreme uninstructed reduction of content occurred (over 75% reduction). This is a critical failure as the AI likely misunderstood the task (e.g., switched to summarization). Halting process.`, 
+            checkDetails: { 
+                type: 'extreme_reduction_error', 
+                value: { ...reductionDetailsBase, thresholdUsed: 'extreme' }
+            }
+        };
     }
     
     const isDrasticReduction = charPercentageChange < DRASTIC_REDUCTION_CHAR_PERCENT_THRESHOLD && wordPercentageChange < DRASTIC_REDUCTION_WORD_PERCENT_THRESHOLD;
     if (isDrasticReduction) {
         if (foundErrorPhrase) { return { isError: true, isCriticalFailure: false, reason: `Drastic reduction combined with an error phrase ("${foundErrorPhrase}").`, checkDetails: { type: 'drastic_reduction_with_error_phrase', value: { ...reductionDetailsBase, thresholdUsed: 'drastic', additionalInfo: `Error phrase found: ${foundErrorPhrase}` }}}; }
         if (isInstructedToShortenOrCondense) { return { isError: false, isCriticalFailure: false, reason: 'Tolerated drastic reduction as instructed.', checkDetails: { type: 'drastic_reduction_tolerated_instruction', value: { ...reductionDetailsBase, thresholdUsed: 'drastic' }}}; }
-        if (isGlobalModeContext) { return { isError: false, isCriticalFailure: false, reason: 'Tolerated drastic reduction in Global Mode.', checkDetails: { type: 'drastic_reduction_tolerated_global_mode', value: { ...reductionDetailsBase, thresholdUsed: 'drastic' }}}; }
+        if (isGlobalModeContext) { return { isError: true, isCriticalFailure: false, reason: 'Drastic reduction in Global Mode is likely an error. Triggering retry.', checkDetails: { type: 'drastic_reduction_error_global_mode', value: { ...reductionDetailsBase, thresholdUsed: 'drastic' }}}; }
         return { isError: true, isCriticalFailure: false, reason: `Uninstructed drastic reduction of content (over 50% reduction).`, checkDetails: { type: 'uninstructed_reduction', value: { ...reductionDetailsBase, thresholdUsed: 'drastic' }}};
     }
   }

@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import ReactDiffViewer from 'react-diff-viewer';
 import type { IterationLogEntry, ReconstructedProductResult, Version, IterationEntryType } from '../../types/index.ts';
@@ -24,13 +25,6 @@ const getDiffTitle = (entry: IterationLogEntry): string => {
   if (entry.entryType === 'initial_state') {
     return `Initial Product (${currentVersionString})`;
   }
-  if (entry.entryType === 'ensemble_integration') {
-    return `Changes to create Integrated Base (${currentVersionString})`;
-  }
-  if (entry.entryType === 'ensemble_sub_iteration' || entry.entryType === 'bootstrap_sub_iteration') {
-      const runType = entry.entryType === 'ensemble_sub_iteration' ? 'Ensemble' : 'Bootstrap';
-      return `Product of ${runType} Sub-Iteration (Run ${entry.bootstrapRun || entry.ensembleSampleId})`;
-  }
   return `Changes for ${currentVersionString}`;
 };
 
@@ -39,8 +33,6 @@ const getEntryTypeFriendlyName = (entryType?: IterationEntryType): string => {
         case 'initial_state': return 'Initial State';
         case 'ai_iteration': return 'AI Version';
         case 'manual_edit': return 'Manual Edit';
-        case 'ensemble_integration': return 'Ensemble Integration';
-        case 'ensemble_sub_iteration': return 'Ensemble Sub-Run';
         case 'targeted_refinement': return 'Targeted Refinement';
         case 'bootstrap_sub_iteration': return 'Bootstrap Sub-Run';
         case 'bootstrap_synthesis_milestone': return 'Bootstrap Milestone';
@@ -147,7 +139,7 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     <span className="font-bold text-primary-600 dark:text-primary-300">{versionString}</span>
                     <span className={`text-xs px-1.5 py-0.5 rounded ${logEntry.isCriticalFailure ? 'bg-red-200 dark:bg-red-800/70 text-red-800 dark:text-red-100' : 'bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200'}`}>{logEntry.status}</span>
                     <span className="text-xs text-slate-500 dark:text-slate-400">{getEntryTypeFriendlyName(logEntry.entryType)}</span>
-                    {logEntry.ensembleSampleId && <span className="text-xs text-teal-600 dark:text-teal-400">(Sample {logEntry.ensembleSampleId})</span>}
+                    {logEntry.bootstrapRun && <span className="text-xs text-teal-600 dark:text-teal-400">(Run {logEntry.bootstrapRun})</span>}
                 </div>
                 <p className="text-sm text-slate-700 dark:text-slate-200 mt-1 break-words">{logEntry.productSummary}</p>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400 mt-1.5">

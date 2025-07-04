@@ -41,12 +41,12 @@ export const determineInitialStrategy = (
         case 'MODERATE':
             modelName = 'gemini-2.5-flash-preview-04-17';
             thinkingBudget = 1;
-            rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Flash Preview (thinking enabled) for moderate input, balancing capability and efficiency. User preferences applied.");
+            rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Flash (thinking enabled) for moderate input, balancing capability and efficiency. User preferences applied.");
             break;
         case 'COMPLEX':
-            modelName = 'gemini-2.5-flash-preview-04-17';
-            thinkingBudget = 1;
-            rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Flash Preview (thinking enabled) for complex/large input, focusing on efficient processing. User preferences applied.");
+            modelName = 'gemini-2.5-lite-preview-04-17';
+            thinkingBudget = 0;
+            rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Lite for very large/complex input, optimizing for efficiency and speed. User preferences applied.");
             break;
         default:
             modelName = processState.selectedModelName || DEFAULT_MODEL_NAME;
@@ -55,11 +55,17 @@ export const determineInitialStrategy = (
             break;
     }
 
-    if (thinkingBudget !== undefined && modelName === 'gemini-2.5-flash-preview-04-17') {
-        config.thinkingConfig = { thinkingBudget };
+    if (thinkingBudget !== undefined) {
+        const modelData = SELECTABLE_MODELS.find(m => m.name === modelName);
+        if (modelData?.supportsThinking) {
+           config.thinkingConfig = { thinkingBudget };
+        } else {
+           delete config.thinkingConfig;
+        }
     } else {
         delete config.thinkingConfig;
     }
+
     return { modelName, config: sanitizeConfig(config, rationales), rationale: rationales.join(' | '), activeMetaInstruction: undefined };
 };
 

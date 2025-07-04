@@ -1,6 +1,6 @@
 
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useEngine } from '../../contexts/ApplicationContext.tsx';
 import { SELECTABLE_MODELS, type ProcessState, type StagnationInfo } from '../../types/index.ts'; 
 import * as ModelStrategyService from '../../services/ModelStrategyService.ts';
@@ -62,6 +62,28 @@ const ProcessStatusDisplay: React.FC = () => {
   const { process: processCtx, app: appCtx, modelConfig: modelConfigCtx, plan: planCtx } = engine;
 
   const [showConvergenceInfo, setShowConvergenceInfo] = useState(false);
+  const [isTakingTooLong, setIsTakingTooLong] = useState(false);
+  const isProcessingRef = useRef(processCtx.isProcessing);
+
+  useEffect(() => {
+    isProcessingRef.current = processCtx.isProcessing;
+
+    if (processCtx.isProcessing) {
+      setIsTakingTooLong(false); // Reset on new process start
+      const timer = setTimeout(() => {
+        // Only set the message if the process is still running after the timeout
+        if (isProcessingRef.current) {
+          setIsTakingTooLong(true);
+        }
+      }, 90000); // 90 seconds
+
+      return () => {
+        clearTimeout(timer);
+      };
+    }
+  }, [processCtx.isProcessing]);
+
+
   const convergenceTooltipText = `The AI signals convergence by setting a flag in its structured response:
 - It believes the current Plan Stage goals or Global Mode refinement is maximally achieved.
 - Further changes would be trivial, purely stylistic, or detrimental.`;
@@ -90,7 +112,7 @@ const ProcessStatusDisplay: React.FC = () => {
     if (!planCtx.isPlanActive) {
         let completedIterations = processCtx.currentMinorVersion;
         if (processCtx.finalProduct) { // Converged or max iterations reached
-            completedIterations = processCtx.currentMinorVersion + 1;
+            completedIterations = processCtx.currentMinorVersion;
         }
         progressPercentValue = modelConfigCtx.maxIterations > 0 ? (completedIterations / modelConfigCtx.maxIterations) * 100 : 0;
         progressText = `Global Iter. ${completedIterations} / ${modelConfigCtx.maxIterations} (Completed)`;
@@ -165,6 +187,11 @@ const ProcessStatusDisplay: React.FC = () => {
           <p className={`text-xs min-h-[1.25em] break-words font-medium ${stagnationDisplay.colorClass}`} aria-live="polite">
             {stagnationDisplay.text}
           </p>
+          {isTakingTooLong && processCtx.isProcessing && (
+             <p className="text-xs text-orange-500 dark:text-orange-400 animate-pulse font-semibold" aria-live="polite">
+                This iteration is taking longer than usual. The AI might be processing a very complex task...
+             </p>
+          )}
           {processCtx.isProcessing && processCtx.streamBuffer && (
             <p className="text-xs text-gray-500 dark:text-gray-400 animate-pulse" aria-live="polite">
               [AI is generating response... buffer size: {processCtx.streamBuffer.length}]

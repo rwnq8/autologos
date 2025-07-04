@@ -25,7 +25,6 @@ export interface IterationLogEntry {
   majorVersion: number;
   minorVersion: number;
   patchVersion?: number; 
-
   entryType: IterationEntryType;
   productSummary: string;
   status: string;

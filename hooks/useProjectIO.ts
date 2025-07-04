@@ -1,8 +1,8 @@
 // hooks/useProjectIO.ts
 
 import { useCallback, useRef, useEffect } from 'react';
-import type { ProcessState, AutologosProjectFile, AutologosIterativeEngineData, ProjectFileHeader, ModelConfig, LoadedFile, PlanTemplate, SettingsSuggestionSource, SelectableModelName, IterationLogEntry, Version } from '../types/index.ts';
-import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION, SELECTABLE_MODELS } from '../types/index.ts';
+import type { ProcessState, AutologosProjectFile, AutologosIterativeEngineData, ProjectFileHeader, ModelConfig, LoadedFile, PlanTemplate, SettingsSuggestionSource, SelectableModelName, IterationLogEntry, Version, OutlineNode } from '../types/index.ts';
+import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION } from '../types/index.ts';
 import { generateFileName, DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
 import * as GeminaiService from '../services/geminiService.ts';
@@ -66,6 +66,10 @@ export const useProjectIO = (
       iterationHistory: currentState.iterationHistory,
       documentChunks: currentState.documentChunks,
       currentFocusChunkIndex: currentState.currentFocusChunkIndex,
+      isOutlineMode: currentState.isOutlineMode,
+      outlineId: currentState.outlineId,
+      currentOutline: currentState.currentOutline,
+      finalOutline: currentState.finalOutline,
       maxMajorVersions: currentState.maxMajorVersions,
       temperature: currentModelParams.temperature,
       topP: currentModelParams.topP,
@@ -105,6 +109,7 @@ export const useProjectIO = (
       bootstrapSampleSizePercent: currentState.bootstrapSampleSizePercent,
       bootstrapSubIterations: currentState.bootstrapSubIterations,
       ensembleSubProducts: currentState.ensembleSubProducts,
+      isDocumentMapOpen: currentState.isDocumentMapOpen,
     };
 
     const projectFile: AutologosProjectFile = {
@@ -121,6 +126,7 @@ export const useProjectIO = (
       projectName: currentState.projectName,
       contentForSlug: currentState.finalProduct || currentState.currentProduct,
       versionString: versionString,
+      outlineId: currentState.outlineId,
     });
     const blob = new Blob([JSON.stringify(projectFile, null, 2)], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -175,6 +181,10 @@ export const useProjectIO = (
       devLog: engineData.devLog || [],
       documentChunks: documentChunks,
       currentFocusChunkIndex: engineData.currentFocusChunkIndex ?? null,
+      isOutlineMode: engineData.isOutlineMode ?? false,
+      outlineId: engineData.outlineId ?? null,
+      currentOutline: engineData.currentOutline ?? null,
+      finalOutline: engineData.finalOutline ?? null,
       projectId: projectFile.header.projectId,
       projectName: projectFile.header.projectName || DEFAULT_PROJECT_NAME_FALLBACK,
       projectObjective: projectFile.header.projectObjective || null,
@@ -189,6 +199,7 @@ export const useProjectIO = (
       currentMajorVersion: engineData.currentVersionBeforeHalt?.major ?? lastVersion.major,
       currentMinorVersion: engineData.currentVersionBeforeHalt?.minor ?? lastVersion.minor,
       ensembleSubProducts: engineData.ensembleSubProducts || null,
+      isDocumentMapOpen: engineData.isDocumentMapOpen ?? true,
     };
 
     const fullNewState: ProcessState = {

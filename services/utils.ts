@@ -34,12 +34,17 @@ export const generateFileName = (
     versionString?: string;
     contentForSlug?: string | null;
     projectName?: string | null;
+    outlineId?: string | null;
   } = {}
 ): string => {
   const parts: string[] = [];
 
   // Use project codename as the base, or a fallback.
   parts.push(options.projectCodename || 'iteration');
+  
+  if (options.outlineId) {
+    parts.push(options.outlineId);
+  }
 
   parts.push(suffix);
 

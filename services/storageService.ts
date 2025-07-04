@@ -1,5 +1,4 @@
 
-
 import type { AutologosIterativeEngineData } from '../types/index.ts';
 
 const DB_NAME = 'AutologosIterativeEngineDB';

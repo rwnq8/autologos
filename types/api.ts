@@ -2,7 +2,6 @@
 
 import type { ModelConfig } from './models.ts';
 import type { DocumentChunk, OutlineNode } from './document.ts';
-import type { LoadedFile } from './project.ts';
 
 export interface ApiStreamCallDetail {
   callCount: number;
@@ -21,16 +20,25 @@ export interface ApiStreamCallDetail {
 export interface StructuredIterationResponse {
   versionRationale: string;
   // For text refinement mode
-  windowChunks?: { chunkId: string; content: string; }[];
+  windowChunks?: {
+    chunkId: string;
+    content: string;
+    sourceFileNames: string[];
+    changeRationale: string | null;
+  }[];
+  // For initial synthesis text mode
+  newProductContent?: string;
   // For outline refinement mode
+  outlineId?: string;
   outline?: OutlineNode[];
   selfCritique: string;
   suggestedNextStep: 'refine_further' | 'expand_section' | 'declare_convergence';
 }
 
 export interface IterateProductResult {
-  product: string; // This will hold the newProductContent from the JSON or stringified outline
+  product: string;
   updatedChunks?: DocumentChunk[];
+  outlineId?: string | null;
   outline?: OutlineNode[] | null;
   versionRationale?: string;
   selfCritique?: string;
@@ -73,8 +81,9 @@ export interface RetryContext {
 }
 
 export interface OutlineGenerationResult {
-  outline: string; // The text-based outline
-  outlineNodes?: OutlineNode[]; // The structured outline
+  outline: string;
+  outlineId?: string | null;
+  outlineNodes?: OutlineNode[];
   identifiedRedundancies: string;
   errorMessage?: string;
   apiDetails?: ApiStreamCallDetail[];
