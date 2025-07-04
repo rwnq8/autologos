@@ -1,5 +1,6 @@
 
 
+
 import React, { useState, useEffect, useRef, useContext } from 'react';
 import type { PlanStage, PlanTemplate, OutputFormat, OutputLength, OutputComplexity, CommonControlProps } from '../../types.ts';
 import { usePlanContext } from '../../contexts/PlanContext.tsx';
@@ -292,13 +293,13 @@ const IterativePlanEditor: React.FC<CommonControlProps> = ({
                   <details className="text-xs mt-1.5">
                     <summary className="cursor-pointer text-slate-600 dark:text-slate-400 hover:text-primary-600 dark:hover:text-primary-400">Override Paragraph Defaults (Optional)</summary>
                     <div className="mt-1 p-2 bg-slate-50 dark:bg-black/20 rounded border border-slate-200 dark:border-white/5 space-y-1.5">
-                       <label className={commonCheckboxLabelClasses + " text-xs"} htmlFor={`stage-show-headings-${stage.id}`}>
+                       <label className={commonCheckboxLabelClasses + " text-xs"}>
                          <input type="checkbox" id={`stage-show-headings-${stage.id}`} checked={stage.outputParagraphShowHeadings ?? processCtx.outputParagraphShowHeadings /* fallback to global default for display */} onChange={(e) => handlePlanStageChange(stage.id, 'outputParagraphShowHeadings', e.target.checked)} disabled={processCtx.isProcessing} className={commonCheckboxInputClasses + " mr-1.5"} />
                          Include Headings
                        </label>
                        {(stage.outputParagraphShowHeadings ?? processCtx.outputParagraphShowHeadings) && (
                          <>
-                           <label className={commonCheckboxLabelClasses + " text-xs ml-3"} htmlFor={`stage-numbered-headings-${stage.id}`}>
+                           <label className={commonCheckboxLabelClasses + " text-xs ml-3"}>
                              <input type="checkbox" id={`stage-numbered-headings-${stage.id}`} checked={stage.outputParagraphNumberedHeadings ?? processCtx.outputParagraphNumberedHeadings} onChange={(e) => handlePlanStageChange(stage.id, 'outputParagraphNumberedHeadings', e.target.checked)} disabled={processCtx.isProcessing} className={commonCheckboxInputClasses + " mr-1.5"} />
                              Numbered Headings
                            </label>

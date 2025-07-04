@@ -190,29 +190,39 @@ const DevLogControls: React.FC<CommonControlProps> = ({
 
           {/* Filters */}
           <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-slate-200 dark:border-white/10">
-            <select value={typeFilter} onChange={e => setTypeFilter(e.target.value as DevLogEntryType | 'all')} className={commonSelectClasses + " flex-1"}>
-              <option value="all">All Types</option>
-              <option value="note">Note</option>
-              <option value="issue">Issue</option>
-              <option value="fix">Fix</option>
-              <option value="feature">Feature Request</option>
-              <option value="decision">Decision</option>
-            </select>
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as DevLogEntryStatus | 'all')} className={commonSelectClasses + " flex-1"}>
-              <option value="all">All Statuses</option>
-              <option value="open">Open</option>
-              <option value="in_progress">In Progress</option>
-              <option value="resolved">Resolved</option>
-              <option value="implemented">Implemented</option>
-              <option value="closed">Closed</option>
-              <option value="deferred">Deferred</option>
-            </select>
-            <input 
-              type="text" 
-              placeholder="Search summaries..." 
-              value={searchTerm} 
-              onChange={e => setSearchTerm(e.target.value)} 
-              className={commonInputClasses + " flex-1"}/>
+            <div className="flex-1">
+              <label htmlFor="devlog-filter-type" className="sr-only">Filter by type</label>
+              <select id="devlog-filter-type" value={typeFilter} onChange={e => setTypeFilter(e.target.value as DevLogEntryType | 'all')} className={commonSelectClasses}>
+                <option value="all">All Types</option>
+                <option value="note">Note</option>
+                <option value="issue">Issue</option>
+                <option value="fix">Fix</option>
+                <option value="feature">Feature Request</option>
+                <option value="decision">Decision</option>
+              </select>
+            </div>
+            <div className="flex-1">
+              <label htmlFor="devlog-filter-status" className="sr-only">Filter by status</label>
+              <select id="devlog-filter-status" value={statusFilter} onChange={e => setStatusFilter(e.target.value as DevLogEntryStatus | 'all')} className={commonSelectClasses}>
+                <option value="all">All Statuses</option>
+                <option value="open">Open</option>
+                <option value="in_progress">In Progress</option>
+                <option value="resolved">Resolved</option>
+                <option value="implemented">Implemented</option>
+                <option value="closed">Closed</option>
+                <option value="deferred">Deferred</option>
+              </select>
+            </div>
+            <div className="flex-1">
+              <label htmlFor="devlog-filter-search" className="sr-only">Search summaries</label>
+              <input 
+                id="devlog-filter-search"
+                type="text" 
+                placeholder="Search summaries..." 
+                value={searchTerm} 
+                onChange={e => setSearchTerm(e.target.value)} 
+                className={commonInputClasses}/>
+            </div>
           </div>
 
           {filteredDevLog.length === 0 && !showAddForm && (

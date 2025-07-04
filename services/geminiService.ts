@@ -213,38 +213,34 @@ export const iterateProduct = async ({
         initialUserParts.push({ text: fullUserPromptText });
 
         const conversationHistory: Content[] = [{ role: 'user', parts: initialUserParts }];
+        
+        const modelData = SELECTABLE_MODELS.find(m => m.name === modelToUse);
+        let configForRequest: any;
+
+        if (isSearchGroundingEnabled) {
+            const tools: any[] = [{ googleSearch: {} }];
+            configForRequest = { tools };
+        } else {
+            const tools: any[] = [];
+            if (isUrlBrowsingEnabled && modelData?.supportsFunctionCalling) {
+                tools.push({ functionDeclarations: [urlBrowseTool] });
+            }
+            configForRequest = {
+                ...apiConfig,
+                systemInstruction,
+                ...(tools.length > 0 && { tools }),
+            };
+        }
 
         let accumulatedText = "";
         const apiStreamDetails: ApiStreamCallDetail[] = [];
         let callCount = 0;
         let continueStreaming = true;
 
-        const modelData = SELECTABLE_MODELS.find(m => m.name === modelToUse);
-
         while (continueStreaming) {
             callCount++;
             if (isHaltSignalled()) {
                 return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: 'Process halted by user during preparation for API call.' };
-            }
-
-            let configForRequest: any;
-
-            if (isSearchGroundingEnabled) {
-                // When using Google Search grounding, it should be the only tool. No other tools, including functionDeclarations, should be added.
-                const tools: any[] = [{ googleSearch: {} }];
-                // Per documentation, when using Google Search grounding, other parameters like temperature, topP, topK, and responseMimeType are omitted.
-                configForRequest = { tools };
-                // Note: systemInstruction is also omitted to strictly follow grounding guidelines.
-            } else {
-                const tools: any[] = [];
-                if (isUrlBrowsingEnabled && modelData?.supportsFunctionCalling) {
-                    tools.push({ functionDeclarations: [urlBrowseTool] });
-                }
-                configForRequest = {
-                    ...apiConfig,
-                    systemInstruction,
-                    ...(tools.length > 0 && { tools }),
-                };
             }
             
             const requestPayload: any = {
@@ -252,8 +248,40 @@ export const iterateProduct = async ({
                 contents: conversationHistory,
                 config: configForRequest,
             };
+            
+            const MAX_RETRIES = 3;
+            const INITIAL_DELAY_MS = 2000;
+            let attempt = 0;
+            let streamResult;
 
-            const streamResult = await ai.models.generateContentStream(requestPayload);
+            while (attempt < MAX_RETRIES) {
+                if (isHaltSignalled()) {
+                    return { product: accumulatedText || currentProduct, status: 'HALTED', errorMessage: 'Process halted by user during API retry loop.' };
+                }
+                try {
+                    streamResult = await ai.models.generateContentStream(requestPayload);
+                    break; // Success
+                } catch (error: any) {
+                    const errorStr = String(error.message || error.toString() || '').toUpperCase();
+                    const isRateLimitError = error.toString().includes("429") || errorStr.includes("QUOTA") || errorStr.includes("RATE LIMIT") || errorStr.includes("RESOURCE_EXHAUSTED");
+
+                    if (isRateLimitError && attempt < MAX_RETRIES - 1) {
+                        attempt++;
+                        const delay = INITIAL_DELAY_MS * Math.pow(2, attempt - 1);
+                        console.warn(`Rate limit hit on API call ${callCount}. Retrying attempt ${attempt}/${MAX_RETRIES} after ${delay}ms...`, error);
+                        onStreamChunk(`\n[SYSTEM: API rate limit hit. Retrying in ${delay / 1000}s...]\n`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        onStreamChunk(`\n[SYSTEM: Retrying API call, attempt ${attempt + 1}...]\n`);
+                    } else {
+                        // Not a rate limit error, or max retries reached. Re-throw to be caught by the main function's catch block.
+                        throw error;
+                    }
+                }
+            }
+            
+            if (!streamResult) {
+                 throw new Error("API call failed to produce a result after multiple retries.");
+            }
 
             let responseTextThisStream = "";
             let finalResponse: GenerateContentResponse | undefined;
@@ -278,7 +306,6 @@ export const iterateProduct = async ({
             const functionCalls = finalResponse?.candidates?.[0]?.content?.parts?.filter(part => !!part.functionCall);
 
             if (functionCalls && functionCalls.length > 0 && finalFinishReason === "TOOL_CALL") {
-                // BUGFIX: The model's turn which includes the function call must be added to history.
                 if(finalResponse?.candidates?.[0]?.content) {
                     conversationHistory.push(finalResponse.candidates[0].content);
                 }
@@ -296,10 +323,8 @@ export const iterateProduct = async ({
 
                 if(call.name === 'url_browse') {
                     const browseUrl = call.args.url;
-                    // In a real app, you'd fetch the URL here. We simulate it.
                     const simulatedContent = `Simulated browsing of [${browseUrl}]: Content was analyzed. The key themes appear to be X, Y, and Z. This information will be used to improve the response.`;
                     
-                    // BUGFIX: The role for a tool response MUST be 'tool', not 'user'.
                     conversationHistory.push({
                       role: 'tool',
                       parts: [{ functionResponse: { name: 'url_browse', response: { content: simulatedContent, success: true }}}]
@@ -308,11 +333,8 @@ export const iterateProduct = async ({
                     toolDetail.functionResponse = { name: 'url_browse', response: { success: true, detail: simulatedContent } };
                 }
                 apiStreamDetails.push(toolDetail);
-                // The loop continues to get the model's response after the tool call
                 continue;
             } else {
-                 // Update the model's full response in the history for this turn
-                // This logic correctly handles continuations by appending to the last model message
                 const lastMessage = conversationHistory[conversationHistory.length - 1];
                 if (lastMessage?.role === 'model') {
                     lastMessage.parts[0].text += responseTextThisStream;
@@ -335,7 +357,6 @@ export const iterateProduct = async ({
 
             if (finalFinishReason === 'MAX_TOKENS') {
                 continueStreaming = true;
-                // Add a user message to prompt continuation, only if the last message was from the model
                 if (conversationHistory.length > 0 && conversationHistory[conversationHistory.length - 1].role === 'model') {
                     conversationHistory.push({ role: 'user', parts: [{ text: "Please continue generating the response from exactly where you left off. Do not repeat any part of the previous response or add conversational filler." }] });
                 }
@@ -346,8 +367,6 @@ export const iterateProduct = async ({
         
         const trimmedProduct = accumulatedText.trim();
         const isConverged = trimmedProduct.startsWith(CONVERGED_PREFIX);
-        // If converged, strip the prefix and trim. Otherwise, return the raw accumulated text
-        // to preserve any intentional leading/trailing whitespace.
         const finalProduct = isConverged
           ? trimmedProduct.substring(CONVERGED_PREFIX.length).trim()
           : accumulatedText;
@@ -373,7 +392,7 @@ export const iterateProduct = async ({
 
         const errorStr = String(error.message || '').toUpperCase();
         if (errorStr.includes("429") || errorStr.includes("QUOTA") || errorStr.includes("RATE LIMIT") || errorStr.includes("RESOURCE_EXHAUSTED")) {
-            errorMessage = `API Quota Exceeded or Rate Limit Hit. Original: "${error.message}".`;
+            errorMessage = `API Quota Exceeded or Rate Limit Hit after multiple retries. Original: "${error.message}".`;
             isRateLimitErrorFlag = true;
         } else if (errorStr.includes("FUNCTION CALLING IS UNSUPPORTED")) {
             errorMessage = `The selected model (${modelToUse}) does not support function calling (URL Browsing tool). Please disable the tool or select a different model.`;

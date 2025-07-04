@@ -242,9 +242,10 @@ This setting does NOT apply in Plan Mode.`;
                 <div id="advanced-model-settings-details" className="mt-2 space-y-4 p-3 bg-slate-100/50 dark:bg-black/10 rounded-md border border-slate-200 dark:border-white/5 animate-fadeIn">
                     <div className="space-y-2">
                          <h4 className="block text-xs font-medium text-primary-600 dark:text-primary-400" title={aiToolsTooltip}>AI Tools (Global Mode Only)</h4>
-                         <label className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
+                         <label htmlFor="enable-google-search" className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
                             <span className="flex-grow mr-2">Enable Google Search Grounding</span>
                             <input
+                                id="enable-google-search"
                                 type="checkbox"
                                 checked={processCtx.isSearchGroundingEnabled}
                                 onChange={(e) => processCtx.updateProcessState({ isSearchGroundingEnabled: e.target.checked })}
@@ -252,9 +253,10 @@ This setting does NOT apply in Plan Mode.`;
                                 className={commonCheckboxInputClasses}
                             />
                         </label>
-                        <label className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
+                        <label htmlFor="enable-url-browsing" className={(commonCheckboxLabelClasses ?? '') + " justify-between"}>
                             <span className="flex-grow mr-2">Enable URL Browsing Tool</span>
                             <input
+                                id="enable-url-browsing"
                                 type="checkbox"
                                 checked={processCtx.isUrlBrowsingEnabled}
                                 onChange={(e) => processCtx.updateProcessState({ isUrlBrowsingEnabled: e.target.checked })}

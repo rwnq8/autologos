@@ -1,4 +1,5 @@
 
+
 import React, { useState, useContext } from 'react';
 import type { CommonControlProps } from '../../types.ts';
 import { useProcessContext } from '../../contexts/ProcessContext';
@@ -37,13 +38,13 @@ const OutputStructureDefaults: React.FC<CommonControlProps> = ({
             In Basic Autonomous Mode, the AI generally determines structure; these settings act as a hint if applicable.
           </p>
           <label className={commonCheckboxLabelClasses}>
-            <input type="checkbox" checked={processCtx.outputParagraphShowHeadings} onChange={(e) => processCtx.updateProcessState({ outputParagraphShowHeadings: e.target.checked })} disabled={processCtx.isProcessing} className={(commonCheckboxInputClasses ?? '') + " mr-2"} />
+            <input id="output-show-headings" type="checkbox" checked={processCtx.outputParagraphShowHeadings} onChange={(e) => processCtx.updateProcessState({ outputParagraphShowHeadings: e.target.checked })} disabled={processCtx.isProcessing} className={(commonCheckboxInputClasses ?? '') + " mr-2"} />
             Include Headings (Default)
           </label>
           {processCtx.outputParagraphShowHeadings && (
             <>
               <label className={commonCheckboxLabelClasses + " ml-4"}>
-                <input type="checkbox" checked={processCtx.outputParagraphNumberedHeadings} onChange={(e) => processCtx.updateProcessState({ outputParagraphNumberedHeadings: e.target.checked })} disabled={processCtx.isProcessing} className={(commonCheckboxInputClasses ?? '') + " mr-2"} />
+                <input id="output-numbered-headings" type="checkbox" checked={processCtx.outputParagraphNumberedHeadings} onChange={(e) => processCtx.updateProcessState({ outputParagraphNumberedHeadings: e.target.checked })} disabled={processCtx.isProcessing} className={(commonCheckboxInputClasses ?? '') + " mr-2"} />
                 Numbered Headings (Default, APA Style)
               </label>
               <div>

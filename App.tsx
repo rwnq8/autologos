@@ -1,3 +1,5 @@
+
+
 import React, { useEffect, useCallback, useRef, useState, useMemo } from 'react';
 import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType, DevLogEntry } from './types.ts';
 import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID } from './types.ts';
@@ -203,7 +205,7 @@ const AppContent: React.FC = () => {
       modelParamsHook.handleTopPChange(params.topP);
       modelParamsHook.handleTopKChange(params.topK);
       modelParamsHook.setUserManuallyAdjustedSettings(params.userManuallyAdjustedSettings);
-    }, [modelParamsHook.handleTemperatureChange, modelParamsHook.handleTopPChange, modelParamsHook.handleTopKChange, modelParamsHook.setUserManuallyAdjustedSettings]);
+    }, [modelParamsHook]);
 
     const initialProcessStateForReset = useMemo(() => createInitialProcessState(apiKeyStatus, GeminaiService.DEFAULT_MODEL_NAME), [apiKeyStatus]);
     const initialModelParamsForReset = useMemo(() => ({
@@ -230,62 +232,81 @@ const AppContent: React.FC = () => {
 
     // --- MEMOIZED CALLBACKS for Contexts ---
     const onFilesSelectedForImport = useCallback(async (files: FileList | null) => {
-        if (!files) return;
-        const file = files[0];
-        if (!file) return;
-
-        const handleTextFileLoad = (fileToLoad: File) => {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const loadedFile: LoadedFile = { name: fileToLoad.name, mimeType: fileToLoad.type, content: e.target?.result as string, size: fileToLoad.size };
-                handleLoadedFilesChange([loadedFile], 'add');
-            };
-            reader.onerror = () => updateProcessState({ statusMessage: `Error reading file: ${fileToLoad.name}` });
-            reader.readAsText(fileToLoad);
-        };
+        if (!files || files.length === 0) return;
     
-        if (file.name.endsWith('.autologos.json')) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                try {
-                    const projectFile: AutologosProjectFile = JSON.parse(e.target?.result as string);
-                    projectIOHook.handleImportProjectData(projectFile);
-                } catch (err) {
-                    updateProcessState({ statusMessage: 'Error parsing project file.' });
-                }
-            };
-            reader.readAsText(file);
-        } else if (file.name.endsWith('.json')) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                try {
-                    const logData: IterationLogEntry[] = JSON.parse(e.target?.result as string);
-                    if (Array.isArray(logData) && logData.length > 0 && typeof logData[0].iteration === 'number') {
-                       projectIOHook.handleImportIterationLogData(logData, file.name);
-                    } else {
-                       handleTextFileLoad(file);
+        // --- Special Handling for Single Project/Log Files ---
+        if (files.length === 1) {
+            const file = files[0];
+            if (file.name.endsWith('.autologos.json')) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const projectFile: AutologosProjectFile = JSON.parse(e.target?.result as string);
+                        projectIOHook.handleImportProjectData(projectFile);
+                    } catch (err) {
+                        updateProcessState({ statusMessage: 'Error parsing project file.' });
                     }
-                } catch (err) {
-                    handleTextFileLoad(file);
-                }
-            };
-            reader.readAsText(file);
-        } else {
-            const filePromises = Array.from(files).map(f => new Promise<LoadedFile | null>((resolve) => {
-                if (f.type.startsWith('text/') || f.type === 'application/json' || f.type === 'application/xml' || !f.type) {
-                     const reader = new FileReader();
-                     reader.onload = (e) => resolve({ name: f.name, mimeType: f.type || 'text/plain', content: e.target?.result as string, size: f.size });
-                     reader.onerror = () => resolve(null);
-                     reader.readAsText(f);
+                };
+                reader.readAsText(file);
+                return; // Exit after handling
+            }
+    
+            if (file.name.endsWith('.json')) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    let isLogFile = false;
+                    try {
+                        const logData: IterationLogEntry[] = JSON.parse(e.target?.result as string);
+                        if (Array.isArray(logData) && logData.length > 0 && typeof logData[0].iteration === 'number') {
+                            projectIOHook.handleImportIterationLogData(logData, file.name);
+                            isLogFile = true;
+                        }
+                    } catch (err) {
+                        // Not a valid log file, will be treated as a generic text file below.
+                    }
+                    if (!isLogFile) {
+                        loadGenericFiles(files);
+                    }
+                };
+                reader.readAsText(file);
+                return; // Exit, loadGenericFiles will be called from onload if needed
+            }
+        }
+    
+        // --- Generic File Loader for all other cases ---
+        const loadGenericFiles = async (fileList: FileList) => {
+            const textFileExtensions = ['.md', '.txt', '.csv', '.xml', '.html', '.js', '.py', '.css', '.rb', '.java', '.c', '.cpp', '.h', '.hpp', '.json'];
+            
+            const filePromises = Array.from(fileList).map(f => new Promise<LoadedFile | null>((resolve) => {
+                const isTextFileByExtension = textFileExtensions.some(ext => f.name.toLowerCase().endsWith(ext));
+    
+                // Forcibly treat known text extensions and unknown/binary types as 'text/plain'
+                if (isTextFileByExtension || f.type.startsWith('text/') || !f.type || f.type === 'application/octet-stream') {
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve({ name: f.name, mimeType: 'text/plain', content: e.target?.result as string, size: f.size });
+                    reader.onerror = () => { console.error('File read error:', f.name); resolve(null); };
+                    reader.readAsText(f);
+                } else if (f.type.startsWith('image/')) {
+                    console.warn(`Image file loading not yet fully supported for API calls: ${f.name}`);
+                    resolve({ name: f.name, mimeType: f.type, content: `[Content of image file '${f.name}' not displayed]`, size: f.size });
                 } else {
-                    console.warn(`Unsupported file type for content loading: ${f.name} (${f.type}).`);
-                    resolve({ name: f.name, mimeType: f.type, content: `Content of non-text file '${f.name}' not loaded.`, size: f.size });
+                    console.warn(`Unsupported file type: ${f.name} (${f.type}). Treating as plain text.`);
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve({ name: f.name, mimeType: 'text/plain', content: e.target?.result as string, size: f.size });
+                    reader.onerror = () => { console.error('File read error:', f.name); resolve(null); };
+                    reader.readAsText(f);
                 }
             }));
+    
             const results = await Promise.all(filePromises);
-            const successfullyLoadedFiles = results.filter(r => r !== null) as LoadedFile[];
-            if (successfullyLoadedFiles.length > 0) handleLoadedFilesChange(successfullyLoadedFiles, 'add');
-        }
+            const successfullyLoadedFiles = results.filter((r): r is LoadedFile => r !== null);
+            if (successfullyLoadedFiles.length > 0) {
+                handleLoadedFilesChange(successfullyLoadedFiles, 'add');
+            }
+        };
+    
+        loadGenericFiles(files);
+    
     }, [handleLoadedFilesChange, projectIOHook.handleImportProjectData, projectIOHook.handleImportIterationLogData, updateProcessState]);
     
     const handleResetApp = useCallback(async () => {
@@ -293,7 +314,7 @@ const AppContent: React.FC = () => {
             await handleReset(modelParamsHook.getUserSetBaseConfig(), planTemplatesHook.savedPlanTemplates);
             modelParamsHook.resetModelParametersToDefaults();
         }
-    }, [handleReset, modelParamsHook.getUserSetBaseConfig, planTemplatesHook.savedPlanTemplates, modelParamsHook.resetModelParametersToDefaults]);
+    }, [handleReset, modelParamsHook, planTemplatesHook.savedPlanTemplates]);
 
     const handleRewind = useCallback((iterationNumber: number) => {
         if (processState.isProcessing) return;
