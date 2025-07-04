@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName } from '../types.ts';
 import * as storageService from '../services/storageService.ts';
@@ -106,6 +105,9 @@ export const useAutoSave = (
         strategistInfluenceLevel: currentState.strategistInfluenceLevel, 
         stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, 
         devLog: currentState.devLog,
+        bootstrapSamples: currentState.bootstrapSamples,
+        bootstrapSampleSizePercent: currentState.bootstrapSampleSizePercent,
+        bootstrapSubIterations: currentState.bootstrapSubIterations,
     };
 
     try {
@@ -175,6 +177,9 @@ export const useAutoSave = (
           strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, 
           stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness,
           devLog: engineData.devLog || [],
+          bootstrapSamples: engineData.bootstrapSamples ?? initialProcessStateValues.bootstrapSamples,
+          bootstrapSampleSizePercent: engineData.bootstrapSampleSizePercent ?? initialProcessStateValues.bootstrapSampleSizePercent,
+          bootstrapSubIterations: engineData.bootstrapSubIterations ?? initialProcessStateValues.bootstrapSubIterations,
         };
         updateProcessState(restoredProcessState);
 

@@ -1,5 +1,3 @@
-
-
 import React, { useEffect, useCallback, useRef, useState, useMemo } from 'react';
 import type { StaticAiModelDetails, IterationLogEntry, PlanTemplate, ModelConfig, LoadedFile, PlanStage, SettingsSuggestionSource, ReconstructedProductResult, SelectableModelName, ProcessState, CommonControlProps, AutologosProjectFile, IterationEntryType, DevLogEntry } from './types.ts';
 import { SELECTABLE_MODELS, AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID } from './types.ts';
@@ -37,7 +35,7 @@ const commonControlProps: CommonControlProps = {
 const AppLayout: React.FC = () => {
     const appCtx = useApplicationContext();
     const processCtx = useProcessContext();
-    const autoSaveHook = (appCtx as any).autoSaveHook; 
+    const autoSaveHook = appCtx.autoSaveHook; 
 
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
@@ -170,11 +168,15 @@ const AppLayout: React.FC = () => {
 };
 
 const AppContent: React.FC = () => {
+    // --- STATE AND HOOKS ---
     const [apiKeyStatus] = useState<'loaded' | 'missing'>(GeminaiService.isApiKeyAvailable() ? 'loaded' : 'missing');
     const [staticAiModelDetails, setStaticAiModelDetails] = useState<StaticAiModelDetails | null>(null);
 
     const { state: processState, ...processStateActions } = useProcessState();
-    const { updateProcessState, addLogEntry, addDevLogEntry } = processStateActions;
+    const { 
+      updateProcessState, handleLoadedFilesChange, addLogEntry, handleReset, 
+      handleInitialPromptChange, addDevLogEntry, updateDevLogEntry, deleteDevLogEntry 
+    } = processStateActions;
 
     const debouncedInitialPrompt = useDebounce(processState.initialPrompt, 500);
 
@@ -186,22 +188,6 @@ const AppContent: React.FC = () => {
         () => updateProcessState({ promptChangedByFileLoad: false })
     );
 
-    const initialProcessStateForReset = useMemo(() => createInitialProcessState(apiKeyStatus, GeminaiService.DEFAULT_MODEL_NAME), [apiKeyStatus]);
-    const initialModelParamsForReset = useMemo(() => ({
-      temperature: GeminaiService.CREATIVE_DEFAULTS.temperature,
-      topP: GeminaiService.CREATIVE_DEFAULTS.topP,
-      topK: GeminaiService.CREATIVE_DEFAULTS.topK,
-      settingsSuggestionSource: 'mode' as SettingsSuggestionSource,
-      userManuallyAdjustedSettings: false
-    }), []);
-    
-    const setLoadedModelParams = useCallback((params: { temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean }) => {
-      modelParamsHook.handleTemperatureChange(params.temperature);
-      modelParamsHook.handleTopPChange(params.topP);
-      modelParamsHook.handleTopKChange(params.topK);
-      modelParamsHook.setUserManuallyAdjustedSettings(params.userManuallyAdjustedSettings);
-    }, [modelParamsHook]);
-
     const planTemplatesHook = usePlanTemplates();
 
     const debouncedProjectNameInput = useDebounce(processState.projectName, 800);
@@ -212,9 +198,29 @@ const AppContent: React.FC = () => {
         }
     }, [processState.initialPrompt, processState.loadedFiles, debouncedProjectNameInput, updateProcessState]);
     
+    const setLoadedModelParams = useCallback((params: { temperature: number, topP: number, topK: number, settingsSuggestionSource: SettingsSuggestionSource, userManuallyAdjustedSettings: boolean }) => {
+      modelParamsHook.handleTemperatureChange(params.temperature);
+      modelParamsHook.handleTopPChange(params.topP);
+      modelParamsHook.handleTopKChange(params.topK);
+      modelParamsHook.setUserManuallyAdjustedSettings(params.userManuallyAdjustedSettings);
+    }, [modelParamsHook.handleTemperatureChange, modelParamsHook.handleTopPChange, modelParamsHook.handleTopKChange, modelParamsHook.setUserManuallyAdjustedSettings]);
+
+    const initialProcessStateForReset = useMemo(() => createInitialProcessState(apiKeyStatus, GeminaiService.DEFAULT_MODEL_NAME), [apiKeyStatus]);
+    const initialModelParamsForReset = useMemo(() => ({
+      temperature: GeminaiService.CREATIVE_DEFAULTS.temperature,
+      topP: GeminaiService.CREATIVE_DEFAULTS.topP,
+      topK: GeminaiService.CREATIVE_DEFAULTS.topK,
+      settingsSuggestionSource: 'mode' as SettingsSuggestionSource,
+      userManuallyAdjustedSettings: false
+    }), []);
+    
     const autoSaveHook = useAutoSave(processState, modelParamsHook, updateProcessState, planTemplatesHook.overwriteUserTemplates, initialProcessStateForReset, initialModelParamsForReset, setLoadedModelParams);
 
-    const iterativeLogicHook = useIterativeLogic(processState, updateProcessState, addLogEntry, addDevLogEntry, modelParamsHook.getUserSetBaseConfig, autoSaveHook.performAutoSave, () => updateProcessState({ isApiRateLimited: true, statusMessage: "API Rate Limit Hit. Process halted." }));
+    const handleRateLimitErrorEncountered = useCallback(() => {
+        updateProcessState({ isApiRateLimited: true, statusMessage: "API Rate Limit Hit. Process halted." });
+    }, [updateProcessState]);
+
+    const { handleStartProcess, handleHaltProcess, handleBootstrapSynthesis } = useIterativeLogic(processState, updateProcessState, addLogEntry, addDevLogEntry, modelParamsHook.getUserSetBaseConfig, autoSaveHook.performAutoSave, handleRateLimitErrorEncountered);
 
     const projectIOHook = useProjectIO(processState, modelParamsHook, updateProcessState, planTemplatesHook.overwriteUserTemplates, initialProcessStateForReset, initialModelParamsForReset, setLoadedModelParams);
     
@@ -222,7 +228,8 @@ const AppContent: React.FC = () => {
         setStaticAiModelDetails(GeminaiService.getAiModelDetails(processState.selectedModelName));
     }, [processState.selectedModelName]);
 
-    const onFilesSelectedForImport = async (files: FileList | null) => {
+    // --- MEMOIZED CALLBACKS for Contexts ---
+    const onFilesSelectedForImport = useCallback(async (files: FileList | null) => {
         if (!files) return;
         const file = files[0];
         if (!file) return;
@@ -231,7 +238,7 @@ const AppContent: React.FC = () => {
             const reader = new FileReader();
             reader.onload = (e) => {
                 const loadedFile: LoadedFile = { name: fileToLoad.name, mimeType: fileToLoad.type, content: e.target?.result as string, size: fileToLoad.size };
-                processStateActions.handleLoadedFilesChange([loadedFile], 'add');
+                handleLoadedFilesChange([loadedFile], 'add');
             };
             reader.onerror = () => updateProcessState({ statusMessage: `Error reading file: ${fileToLoad.name}` });
             reader.readAsText(fileToLoad);
@@ -277,16 +284,16 @@ const AppContent: React.FC = () => {
             }));
             const results = await Promise.all(filePromises);
             const successfullyLoadedFiles = results.filter(r => r !== null) as LoadedFile[];
-            if (successfullyLoadedFiles.length > 0) processStateActions.handleLoadedFilesChange(successfullyLoadedFiles, 'add');
+            if (successfullyLoadedFiles.length > 0) handleLoadedFilesChange(successfullyLoadedFiles, 'add');
         }
-    };
+    }, [handleLoadedFilesChange, projectIOHook.handleImportProjectData, projectIOHook.handleImportIterationLogData, updateProcessState]);
     
     const handleResetApp = useCallback(async () => {
         if (window.confirm("Are you sure you want to reset everything? All current progress will be lost.")) {
-            await processStateActions.handleReset(modelParamsHook.getUserSetBaseConfig(), planTemplatesHook.savedPlanTemplates);
+            await handleReset(modelParamsHook.getUserSetBaseConfig(), planTemplatesHook.savedPlanTemplates);
             modelParamsHook.resetModelParametersToDefaults();
         }
-    }, [processStateActions, modelParamsHook, planTemplatesHook.savedPlanTemplates]);
+    }, [handleReset, modelParamsHook.getUserSetBaseConfig, planTemplatesHook.savedPlanTemplates, modelParamsHook.resetModelParametersToDefaults]);
 
     const handleRewind = useCallback((iterationNumber: number) => {
         if (processState.isProcessing) return;
@@ -313,61 +320,171 @@ const AppContent: React.FC = () => {
         document.body.removeChild(link); URL.revokeObjectURL(url);
     }, [processState.iterationHistory, processState.initialPrompt, processState.projectName, updateProcessState]);
 
-    const handleExportIterationDiffs = useCallback(() => {
-        const diffs = processState.iterationHistory.map(entry => `==== ITERATION ${entry.iteration} ====\n${entry.productDiff || 'No diff available.'}`).join('\n\n');
-        const fileName = generateFileName(processState.projectName, "diffs", "txt");
-        const blob = new Blob([diffs], { type: 'text/plain;charset=utf-t' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url; link.download = fileName;
-        document.body.appendChild(link); link.click();
-        document.body.removeChild(link); URL.revokeObjectURL(url);
-    }, [processState.iterationHistory, processState.projectName]);
+    const onSelectedModelChange = useCallback((modelName: SelectableModelName) => {
+        updateProcessState({ selectedModelName: modelName });
+    }, [updateProcessState]);
 
-    const applicationContextValue: ApplicationContextType = {
-        apiKeyStatus,
-        selectedModelName: processState.selectedModelName,
-        projectName: processState.projectName,
-        projectId: processState.projectId,
-        isApiRateLimited: processState.isApiRateLimited || false,
-        rateLimitCooldownActiveSeconds: processState.rateLimitCooldownActiveSeconds || 0,
-        updateProcessState,
-        handleImportProjectData: projectIOHook.handleImportProjectData,
-        handleImportIterationLogData: projectIOHook.handleImportIterationLogData,
-        handleExportProject: projectIOHook.handleExportProject,
-        handleExportIterationDiffs,
-        handleRateLimitErrorEncountered: () => updateProcessState({ isApiRateLimited: true, statusMessage: "API Rate Limit Hit. Process halted." }),
-        staticAiModelDetails,
-        onSelectedModelChange: (modelName) => updateProcessState({ selectedModelName: modelName }),
-        onFilesSelectedForImport,
-        autoSaveHook,
-    };
-    
-    const processContextValue: ProcessContextType = {
-        ...processState,
-        ...processStateActions,
-        ...iterativeLogicHook,
-        handleResetApp,
-        handleRewind,
-        handleExportIterationMarkdown,
-        reconstructProductCallback: (iter, hist, prompt) => reconstructProduct(iter, hist, prompt),
-        openTargetedRefinementModal: (selectedText: string) => updateProcessState({ isTargetedRefinementModalOpen: true, currentTextSelectionForRefinement: selectedText }),
-        toggleEditMode: (forceOff = false) => updateProcessState({ isEditingCurrentProduct: forceOff ? false : !processState.isEditingCurrentProduct, editedProductBuffer: !processState.isEditingCurrentProduct ? processState.currentProduct : null }),
-        saveManualEdits: async () => {
-            const manualEditEntry: AddLogEntryParams = { iteration: processState.currentIteration + 1, entryType: 'manual_edit', currentFullProduct: processState.editedProductBuffer, previousFullProduct: processState.currentProduct, status: 'Manual Edit Applied', fileProcessingInfo: { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0 }};
-            addLogEntry(manualEditEntry);
-            updateProcessState({ currentProduct: processState.editedProductBuffer, currentIteration: processState.currentIteration + 1, isEditingCurrentProduct: false, editedProductBuffer: null, statusMessage: `Manual edit applied as Iteration ${processState.currentIteration + 1}.`});
-            await autoSaveHook.performAutoSave();
-        },
-    };
-    
-    const modelConfigContextValue: ModelConfigContextType = {
-        ...modelParamsHook,
-        maxIterations: processState.maxIterations,
-        onMaxIterationsChange: (val) => updateProcessState({ maxIterations: val }),
-    };
+    const reconstructProductCallback = useCallback((iter: number, hist: IterationLogEntry[], prompt: string) => {
+        return reconstructProduct(iter, hist, prompt);
+    }, []);
 
-    const planContextValue: PlanContextType = {
+    const openTargetedRefinementModal = useCallback((selectedText: string) => {
+        updateProcessState({ isTargetedRefinementModalOpen: true, currentTextSelectionForRefinement: selectedText });
+    }, [updateProcessState]);
+
+    const toggleEditMode = useCallback((forceOff = false) => {
+        updateProcessState({
+            isEditingCurrentProduct: forceOff ? false : !processState.isEditingCurrentProduct,
+            editedProductBuffer: !processState.isEditingCurrentProduct ? processState.currentProduct : null
+        });
+    }, [updateProcessState, processState.isEditingCurrentProduct, processState.currentProduct]);
+
+    const saveManualEdits = useCallback(async () => {
+        const manualEditEntry: AddLogEntryParams = {
+            iteration: processState.currentIteration + 1,
+            entryType: 'manual_edit',
+            currentFullProduct: processState.editedProductBuffer,
+            previousFullProduct: processState.currentProduct,
+            status: 'Manual Edit Applied',
+            fileProcessingInfo: { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0 }
+        };
+        addLogEntry(manualEditEntry);
+        updateProcessState({
+            currentProduct: processState.editedProductBuffer,
+            currentIteration: processState.currentIteration + 1,
+            isEditingCurrentProduct: false,
+            editedProductBuffer: null,
+            statusMessage: `Manual edit applied as Iteration ${processState.currentIteration + 1}.`
+        });
+        await autoSaveHook.performAutoSave();
+    }, [addLogEntry, updateProcessState, processState.currentIteration, processState.currentProduct, processState.editedProductBuffer, autoSaveHook]);
+
+    const onMaxIterationsChange = useCallback((val: number) => {
+        updateProcessState({ maxIterations: val });
+    }, [updateProcessState]);
+
+    const onIsPlanActiveChange = useCallback((isActive: boolean) => {
+        updateProcessState({ isPlanActive: isActive });
+    }, [updateProcessState]);
+
+    const onPlanStagesChange = useCallback((stages: PlanStage[]) => {
+        updateProcessState({ planStages: stages });
+    }, [updateProcessState]);
+
+    const onLoadPlanTemplate = useCallback((template: PlanTemplate) => {
+        updateProcessState({ planStages: template.stages });
+    }, [updateProcessState]);
+
+    // --- Memoized Context Values ---
+    const applicationContextValue: ApplicationContextType = useMemo(() => ({
+      apiKeyStatus,
+      selectedModelName: processState.selectedModelName,
+      projectName: processState.projectName,
+      projectId: processState.projectId,
+      isApiRateLimited: processState.isApiRateLimited,
+      rateLimitCooldownActiveSeconds: processState.rateLimitCooldownActiveSeconds,
+      updateProcessState,
+      handleImportProjectData: projectIOHook.handleImportProjectData,
+      handleImportIterationLogData: projectIOHook.handleImportIterationLogData,
+      handleExportProject: projectIOHook.handleExportProject,
+      handleExportIterationDiffs: projectIOHook.handleExportIterationDiffs,
+      handleRateLimitErrorEncountered,
+      staticAiModelDetails,
+      onSelectedModelChange,
+      onFilesSelectedForImport,
+      autoSaveHook,
+    }), [
+      apiKeyStatus,
+      processState.selectedModelName,
+      processState.projectName,
+      processState.projectId,
+      processState.isApiRateLimited,
+      processState.rateLimitCooldownActiveSeconds,
+      updateProcessState,
+      projectIOHook.handleImportProjectData,
+      projectIOHook.handleImportIterationLogData,
+      projectIOHook.handleExportProject,
+      projectIOHook.handleExportIterationDiffs,
+      handleRateLimitErrorEncountered,
+      staticAiModelDetails,
+      onSelectedModelChange,
+      onFilesSelectedForImport,
+      autoSaveHook,
+    ]);
+    
+    const processContextValue: ProcessContextType = useMemo(() => ({
+      ...processState,
+      updateProcessState,
+      handleLoadedFilesChange,
+      addLogEntry,
+      handleResetApp,
+      handleStartProcess,
+      handleHaltProcess,
+      handleBootstrapSynthesis,
+      handleRewind,
+      handleExportIterationMarkdown,
+      reconstructProductCallback,
+      handleInitialPromptChange,
+      openTargetedRefinementModal,
+      toggleEditMode,
+      saveManualEdits,
+      addDevLogEntry,
+      updateDevLogEntry,
+      deleteDevLogEntry,
+    }), [
+      processState,
+      updateProcessState,
+      handleLoadedFilesChange,
+      addLogEntry,
+      handleResetApp,
+      handleStartProcess,
+      handleHaltProcess,
+      handleBootstrapSynthesis,
+      handleRewind,
+      handleExportIterationMarkdown,
+      reconstructProductCallback,
+      handleInitialPromptChange,
+      openTargetedRefinementModal,
+      toggleEditMode,
+      saveManualEdits,
+      addDevLogEntry,
+      updateDevLogEntry,
+      deleteDevLogEntry,
+    ]);
+    
+    const modelConfigContextValue: ModelConfigContextType = useMemo(() => ({
+      temperature: modelParamsHook.temperature,
+      topP: modelParamsHook.topP,
+      topK: modelParamsHook.topK,
+      maxIterations: processState.maxIterations,
+      settingsSuggestionSource: modelParamsHook.settingsSuggestionSource,
+      userManuallyAdjustedSettings: modelParamsHook.userManuallyAdjustedSettings,
+      modelConfigRationales: modelParamsHook.modelConfigRationales,
+      modelParameterAdvice: modelParamsHook.modelParameterAdvice,
+      modelConfigWarnings: modelParamsHook.modelConfigWarnings,
+      handleTemperatureChange: modelParamsHook.handleTemperatureChange,
+      handleTopPChange: modelParamsHook.handleTopPChange,
+      handleTopKChange: modelParamsHook.handleTopKChange,
+      onMaxIterationsChange,
+      setUserManuallyAdjustedSettings: modelParamsHook.setUserManuallyAdjustedSettings,
+    }), [
+      modelParamsHook.temperature,
+      modelParamsHook.topP,
+      modelParamsHook.topK,
+      processState.maxIterations,
+      modelParamsHook.settingsSuggestionSource,
+      modelParamsHook.userManuallyAdjustedSettings,
+      modelParamsHook.modelConfigRationales,
+      modelParamsHook.modelParameterAdvice,
+      modelParamsHook.modelConfigWarnings,
+      modelParamsHook.handleTemperatureChange,
+      modelParamsHook.handleTopPChange,
+      modelParamsHook.handleTopKChange,
+      onMaxIterationsChange,
+      modelParamsHook.setUserManuallyAdjustedSettings,
+    ]);
+
+    const planContextValue: PlanContextType = useMemo(() => ({
         isPlanActive: processState.isPlanActive,
         planStages: processState.planStages,
         currentPlanStageIndex: processState.currentPlanStageIndex,
@@ -375,13 +492,27 @@ const AppContent: React.FC = () => {
         savedPlanTemplates: planTemplatesHook.savedPlanTemplates,
         planTemplateStatus: planTemplatesHook.planTemplateStatusMessage,
         updateProcessState,
-        onIsPlanActiveChange: (isActive) => updateProcessState({ isPlanActive: isActive }),
-        onPlanStagesChange: (stages) => updateProcessState({ planStages: stages }),
+        onIsPlanActiveChange,
+        onPlanStagesChange,
         handleSavePlanAsTemplate: planTemplatesHook.handleSavePlanAsTemplate,
         handleDeletePlanTemplate: planTemplatesHook.handleDeletePlanTemplate,
         clearPlanTemplateStatus: planTemplatesHook.clearPlanTemplateStatusMessage,
-        onLoadPlanTemplate: (template) => updateProcessState({ planStages: template.stages }),
-    };
+        onLoadPlanTemplate,
+    }), [
+        processState.isPlanActive,
+        processState.planStages,
+        processState.currentPlanStageIndex,
+        processState.currentStageIteration,
+        planTemplatesHook.savedPlanTemplates,
+        planTemplatesHook.planTemplateStatusMessage,
+        updateProcessState,
+        onIsPlanActiveChange,
+        onPlanStagesChange,
+        planTemplatesHook.handleSavePlanAsTemplate,
+        planTemplatesHook.handleDeletePlanTemplate,
+        planTemplatesHook.clearPlanTemplateStatusMessage,
+        onLoadPlanTemplate
+    ]);
 
     return (
         <ApplicationProvider value={applicationContextValue}>

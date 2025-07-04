@@ -1,4 +1,3 @@
-
 import React, { useState, useContext } from 'react';
 import type { IterationLogEntry, ReconstructedProductResult, ModelConfig, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, SelectableModelName, IterationEntryType } from '../../types.ts';
 import * as GeminaiDiff from 'diff';
@@ -32,6 +31,9 @@ const getDiffTitle = (entry: IterationLogEntry): string => {
   if (entry.entryType === 'segmented_synthesis_milestone' && entry.iteration === 1) {
     return `Changes from Iteration 0 (Full Product after Segmented Synthesis)`;
   }
+  if (entry.entryType === 'bootstrap_synthesis_milestone') {
+    return `Changes from Ensemble Sub-Products`;
+  }
   // For all other cases, including AI iterations, manual edits, targeted refinements
   // that are not Iteration 0 or the special Iteration 1 milestone.
   if (entry.iteration > 0) {
@@ -49,6 +51,8 @@ const getEntryTypeFriendlyName = (entryType?: IterationEntryType): string => {
         case 'manual_edit': return 'Manual Edit';
         case 'segmented_synthesis_milestone': return 'Segmented Synthesis';
         case 'targeted_refinement': return 'Targeted Refinement';
+        case 'bootstrap_sub_iteration': return 'Ensemble Sub-Iteration';
+        case 'bootstrap_synthesis_milestone': return 'Ensemble Integration';
         default: return 'AI Iteration';
     }
 }
@@ -62,7 +66,7 @@ const renderDiff = (diffStr: string) => {
     <div key={i}>
       {file.hunks.map((hunk, j) => (
         <pre key={j} className="text-xs font-mono whitespace-pre-wrap break-all">
-          <div className="bg-blue-100/50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 px-2 py-0.5 rounded-t-md">{hunk.header}</div>
+          <div className="bg-blue-100/50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 px-2 py-0.5 rounded-t-md">{`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`}</div>
           {hunk.lines.map((line, k) => {
             const colorClass = line.startsWith('+') ? 'bg-green-100/50 dark:bg-green-800/20 text-green-800 dark:text-green-200'
                              : line.startsWith('-') ? 'bg-red-100/50 dark:bg-red-800/20 text-red-800 dark:text-red-200'
@@ -76,7 +80,7 @@ const renderDiff = (diffStr: string) => {
 };
 
 
-export const LogEntryItem: React.FC<LogEntryItemProps> = ({
+const LogEntryItemComponent: React.FC<LogEntryItemProps> = ({
   logEntry,
   isExpanded,
   onToggleExpand,
@@ -136,10 +140,11 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
     <div className={`p-3 rounded-md transition-colors duration-200 ${isExpanded ? 'bg-white dark:bg-slate-800 shadow-lg border border-primary-500/30 dark:border-primary-500/50' : 'bg-slate-100/70 dark:bg-black/10 hover:bg-slate-200/70 dark:hover:bg-black/20'}`}>
         <button onClick={() => onToggleExpand(logEntry.iteration)} className="w-full text-left flex justify-between items-start gap-2 focus:outline-none">
             <div className="flex-grow">
-                <div className="flex items-baseline gap-2">
+                <div className="flex items-baseline gap-2 flex-wrap">
                     <span className="font-bold text-primary-600 dark:text-primary-300">Iter. {logEntry.iteration}</span>
                     <span className={`text-xs px-1.5 py-0.5 rounded ${logEntry.isCriticalFailure ? 'bg-red-200 dark:bg-red-800/70 text-red-800 dark:text-red-100' : 'bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-200'}`}>{logEntry.status}</span>
                     <span className="text-xs text-slate-500 dark:text-slate-400">{getEntryTypeFriendlyName(logEntry.entryType)}</span>
+                    {logEntry.bootstrapRun && <span className="text-xs text-teal-600 dark:text-teal-400">(Ensemble Run {logEntry.bootstrapRun})</span>}
                 </div>
                 <p className="text-sm text-slate-700 dark:text-slate-200 mt-1 break-words">{getProductSummaryForDisplay(logEntry)}</p>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400 mt-1.5">
@@ -173,3 +178,5 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
     </div>
   );
 };
+
+export const LogEntryItem = React.memo(LogEntryItemComponent);

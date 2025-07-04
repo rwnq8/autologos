@@ -36,13 +36,17 @@ export const reconstructProduct = (
 
   // Step 1: Establish the correct base product.
   // The true "base" is the result of Iteration 0 if it exists and represents a synthesis.
-  const iterZeroEntry = history.find(e => e.iteration === 0 && (e.entryType === 'initial_state' || e.entryType === 'segmented_synthesis_milestone'));
+  const iterZeroEntry = history.find(e => e.iteration === 0 && (
+    e.entryType === 'initial_state' || 
+    e.entryType === 'segmented_synthesis_milestone' ||
+    e.entryType === 'bootstrap_synthesis_milestone'
+  ));
 
   if (iterZeroEntry && iterZeroEntry.productDiff) {
     try {
       const patchedResult = Diff.applyPatch("", iterZeroEntry.productDiff);
       if (typeof patchedResult === 'string') {
-        currentText = cleanDiffMarkerLiterals(normalizeNewlines(patchedResult));
+        currentText = normalizeNewlines(patchedResult); // FIX: Only normalize, do not clean here.
         lastReconstructedIteration = 0;
       } else {
         return { product: "", error: `Failed to apply base patch from Iteration 0.` };
@@ -78,7 +82,7 @@ export const reconstructProduct = (
       const patchedResult = Diff.applyPatch(currentText, patchObjects[0]);
 
       if (typeof patchedResult === 'string') {
-        currentText = cleanDiffMarkerLiterals(normalizeNewlines(patchedResult));
+        currentText = normalizeNewlines(patchedResult); // FIX: Only normalize newlines. Do not clean diff markers inside the loop.
       } else {
         const errorMsg = `Failed to apply parsed patch for Iteration ${logEntry.iteration}. Reconstruction stopped. The diff may not match the reconstructed text from the previous iteration.`;
         console.error(`reconstructProduct: ${errorMsg}`);
@@ -91,5 +95,6 @@ export const reconstructProduct = (
     }
   }
 
+  // The final text after all patches should not be cleaned either, to maintain consistency.
   return { product: currentText };
 };

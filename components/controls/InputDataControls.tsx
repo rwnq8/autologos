@@ -1,5 +1,3 @@
-
-
 import React, { useState, useContext } from 'react'; 
 import type { LoadedFile, CommonControlProps } from '../../types.ts';
 import { useProcessContext } from '../../contexts/ProcessContext.tsx';
@@ -7,6 +5,7 @@ import { XCircleIcon } from '../shared/Icons.tsx';
 
 const InputDataControls: React.FC<CommonControlProps> = ({
   commonInputClasses, 
+  commonButtonClasses,
 }) => {
   const processCtx = useProcessContext();
 
@@ -97,6 +96,26 @@ const InputDataControls: React.FC<CommonControlProps> = ({
           >
             Clear All Loaded Files
         </button>
+      )}
+
+      {processCtx.loadedFiles.length > 1 && (
+        <div className="mt-4 pt-4 border-t border-slate-300/70 dark:border-white/10">
+            <h4 className="text-md font-medium text-primary-600 dark:text-primary-300 mb-1">
+                Ensemble Synthesis (via Bootstrapping)
+            </h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+                For multi-file inputs, this optional step creates a more stable starting document. It runs multiple AI sub-processes on random samples of your files, then integrates the results. This ensemble method reduces variance and prevents the final output from being overly influenced by any single file, leading to a more robust and representative foundation.
+            </p>
+            <button
+                onClick={() => processCtx.handleBootstrapSynthesis()}
+                disabled={processCtx.isProcessing}
+                className={`${commonButtonClasses} w-full bg-teal-500/10 hover:bg-teal-500/20 dark:bg-teal-600/30 dark:hover:bg-teal-700/40 text-teal-700 dark:text-teal-200`}
+                title="Run an ensemble pre-processing step to create a robust synthesized document from random samples of the loaded files."
+                aria-label="Generate synthesized base document using ensemble method"
+            >
+                Generate Ensemble-Synthesized Base
+            </button>
+        </div>
       )}
     </div>
   );

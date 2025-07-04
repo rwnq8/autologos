@@ -70,6 +70,9 @@ export const createInitialProcessState = (
   isEditingCurrentProduct: false,
   editedProductBuffer: null,
   devLog: [], 
+  bootstrapSamples: 2,
+  bootstrapSampleSizePercent: 60,
+  bootstrapSubIterations: 2,
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
@@ -122,6 +125,7 @@ export type AddLogEntryParams = {
   isStagnantIterationLogged?: boolean;
   isEffectivelyIdenticalLogged?: boolean;
   isLowValueIterationLogged?: boolean;
+  bootstrapRun?: number;
 };
 
 
@@ -341,6 +345,7 @@ export const useProcessState = () => {
       isCriticalFailure: logData.isCriticalFailure, 
       similarityWithPreviousLogged: logData.similarityWithPreviousLogged, isStagnantIterationLogged: logData.isStagnantIterationLogged,
       isEffectivelyIdenticalLogged: logData.isEffectivelyIdenticalLogged, isLowValueIterationLogged: logData.isLowValueIterationLogged,
+      bootstrapRun: logData.bootstrapRun,
     };
 
     setState(prev => {
@@ -357,7 +362,7 @@ export const useProcessState = () => {
         }
         updatedHistory.sort((a, b) => {
             if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-            const typeOrder: Record<IterationEntryType, number> = { 'initial_state': 0, 'segmented_synthesis_milestone': 1, 'ai_iteration': 2, 'targeted_refinement': 3, 'manual_edit': 4 };
+            const typeOrder: Record<IterationEntryType, number> = { 'initial_state': 0, 'bootstrap_sub_iteration': 1, 'bootstrap_synthesis_milestone': 2, 'segmented_synthesis_milestone': 3, 'ai_iteration': 4, 'targeted_refinement': 5, 'manual_edit': 6 };
             const aTypeOrder = typeOrder[a.entryType || 'ai_iteration'];
             const bTypeOrder = typeOrder[b.entryType || 'ai_iteration'];
             if (aTypeOrder !== bTypeOrder) return aTypeOrder - bTypeOrder;

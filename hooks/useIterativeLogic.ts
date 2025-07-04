@@ -1,11 +1,14 @@
-import { useRef, useState, useCallback } from 'react';
-import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType, DevLogEntry } from '../types.ts';
+
+
+
+import { useRef, useState, useCallback, useEffect } from 'react';
+import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType, DevLogEntry, StrategistLLMContext } from '../types.ts';
 import * as GeminaiService from '../services/geminiService.ts';
 import { getUserPromptComponents } from '../services/promptBuilderService.ts';
-import { isLikelyAiErrorResponse, getProductSummary, parseAndCleanJsonOutput, CONVERGED_PREFIX, MIN_CHARS_FOR_DEVELOPED_PRODUCT, isDataDump } from '../services/iterationUtils.ts';
+import { isLikelyAiErrorResponse, getProductSummary, parseAndCleanJsonOutput, CONVERGED_PREFIX, isDataDump } from '../services/iterationUtils.ts';
+import * as ModelStrategyService from '../services/ModelStrategyService.ts';
+import { calculateQualitativeStates } from '../services/strategistUtils.ts';
 import { calculateFleschReadingEase, calculateJaccardSimilarity, calculateLexicalDensity, calculateAvgSentenceLength, calculateSimpleTTR } from '../services/textAnalysisService.ts';
-import { DETERMINISTIC_TARGET_ITERATION, FOCUSED_END_DEFAULTS } from '../hooks/useModelParameters.ts';
-import * as Diff from 'diff';
 import type { AddLogEntryParams } from './useProcessState.ts';
 import { getRelevantDevLogContext } from '../services/devLogContextualizerService.ts';
 import { reconstructProduct } from '../services/diffService.ts';
@@ -34,6 +37,7 @@ interface UseIterativeLogicReturn {
     userRawPromptForContextualizer?: string;
   }) => Promise<void>;
   handleHaltProcess: () => void;
+  handleBootstrapSynthesis: () => Promise<void>;
 }
 
 export const useIterativeLogic = (
@@ -48,6 +52,11 @@ export const useIterativeLogic = (
   const isProcessingRef = useRef(false);
   const haltSignalRef = useRef(false);
   const currentStreamBufferRef = useRef("");
+
+  const latestStateRef = useRef({ processState, getUserSetBaseConfig });
+  useEffect(() => {
+    latestStateRef.current = { processState, getUserSetBaseConfig };
+  }, [processState, getUserSetBaseConfig]);
   
   const logIterationData = useCallback((
     iterationNumber: number,
@@ -73,8 +82,10 @@ export const useIterativeLogic = (
     similarityWithPreviousLogged?: number,
     isStagnantIterationLogged?: boolean,
     isEffectivelyIdenticalLogged?: boolean,
-    isLowValueIterationLogged?: boolean
+    isLowValueIterationLogged?: boolean,
+    bootstrapRun?: number
   ) => {
+    const { processState } = latestStateRef.current;
     const directResponseHead = iterationProductForLog ? iterationProductForLog.substring(0, 500) : "";
     const directResponseTail = iterationProductForLog && iterationProductForLog.length > 500 ? iterationProductForLog.substring(iterationProductForLog.length - 500) : "";
 
@@ -125,11 +136,19 @@ export const useIterativeLogic = (
       similarityWithPreviousLogged,
       isStagnantIterationLogged,
       isEffectivelyIdenticalLogged,
-      isLowValueIterationLogged
+      isLowValueIterationLogged,
+      bootstrapRun,
     });
-  }, [addLogEntryFromHook, processState.isPlanActive, processState.currentPlanStageIndex, processState.planStages]);
+  }, [addLogEntryFromHook, latestStateRef]);
 
-  const handleProcessHalt = (currentIterForHalt: number, currentProdForHalt: string | null, haltMessage: string, apiResultForHalt?: IterateProductResult, currentEntryTypeForHalt: IterationEntryType = 'ai_iteration') => {
+  const handleProcessHalt = useCallback((
+    currentIterForHalt: number, 
+    currentProdForHalt: string | null, 
+    haltMessage: string, 
+    apiResultForHalt?: IterateProductResult, 
+    currentEntryTypeForHalt: IterationEntryType = 'ai_iteration'
+  ) => {
+    const { processState } = latestStateRef.current;
     isProcessingRef.current = false;
     haltSignalRef.current = true;
     updateProcessState({
@@ -140,21 +159,204 @@ export const useIterativeLogic = (
         finalProduct: processState.finalProduct || ((currentStreamBufferRef.current || currentProdForHalt || "").startsWith(CONVERGED_PREFIX) ? null : (currentStreamBufferRef.current || currentProdForHalt)),
     });
     const fileInfo = { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0 };
-    logIterationData(currentIterForHalt, currentEntryTypeForHalt, currentStreamBufferRef.current || currentProdForHalt, haltMessage, currentProdForHalt, apiResultForHalt, processState.currentAppliedModelConfig || undefined, fileInfo, undefined, undefined, undefined, undefined, processState.aiProcessInsight, processState.currentModelForIteration, processState.activeMetaInstructionForNextIter);
+    logIterationData(
+        currentIterForHalt, 
+        currentEntryTypeForHalt, 
+        currentStreamBufferRef.current || currentProdForHalt, 
+        haltMessage, 
+        currentProdForHalt, 
+        apiResultForHalt, 
+        processState.currentAppliedModelConfig || undefined, 
+        fileInfo, 
+        undefined, 
+        undefined, 
+        undefined, 
+        undefined, 
+        processState.aiProcessInsight, 
+        processState.currentModelForIteration, 
+        processState.activeMetaInstructionForNextIter
+    );
     performAutoSave();
-  };
+  }, [latestStateRef, updateProcessState, logIterationData, performAutoSave]);
 
-  const onStreamChunk = (chunkText: string) => {
+  const onStreamChunk = useCallback((chunkText: string) => {
     if (haltSignalRef.current) return;
     currentStreamBufferRef.current += chunkText;
     updateProcessState({ currentProduct: currentStreamBufferRef.current });
-  };
+  }, [updateProcessState]);
   
-  const handleHaltProcess = () => {
+  const handleHaltProcess = useCallback(() => {
     haltSignalRef.current = true;
-  };
+  }, []);
 
-  const handleStartProcess = async (
+  const handleBootstrapSynthesis = useCallback(async () => {
+    const { processState: initialProcessState, getUserSetBaseConfig: getBaseConfig } = latestStateRef.current;
+    if (isProcessingRef.current || initialProcessState.loadedFiles.length < 2) {
+      updateProcessState({ statusMessage: "Ensemble synthesis requires at least 2 files and cannot run while another process is active." });
+      return;
+    }
+
+    isProcessingRef.current = true;
+    haltSignalRef.current = false;
+    updateProcessState({ isProcessing: true, statusMessage: "Starting Ensemble Synthesis...", iterationHistory: [], currentIteration: 0, currentProduct: null });
+
+    const subProducts: string[] = [];
+    let logCounter = 0;
+    const userBaseConfig = getBaseConfig();
+    const originalLoadedFiles = [...initialProcessState.loadedFiles];
+
+    // Phase 1: Sub-processing
+    for (let i = 0; i < initialProcessState.bootstrapSamples; i++) {
+      const shuffled = [...originalLoadedFiles].sort(() => 0.5 - Math.random());
+      const sampleSize = Math.max(1, Math.round(shuffled.length * (initialProcessState.bootstrapSampleSizePercent / 100)));
+      const sampledFiles = shuffled.slice(0, sampleSize);
+      const sampleManifest = `Ensemble Sample ${i + 1}: ${sampledFiles.map(f => f.name).join(', ')}.`;
+      let productForThisSample = "";
+
+      for (let j = 0; j < initialProcessState.bootstrapSubIterations; j++) {
+        if (haltSignalRef.current) { handleProcessHalt(logCounter, productForThisSample, "Ensemble process halted by user."); return; }
+        
+        updateProcessState({ statusMessage: `Processing Sample ${i + 1}/${initialProcessState.bootstrapSamples}, Sub-iteration ${j + 1}/${initialProcessState.bootstrapSubIterations}...` });
+        currentStreamBufferRef.current = "";
+
+        const apiResult = await GeminaiService.iterateProduct({
+          currentProduct: productForThisSample,
+          loadedFiles: sampledFiles,
+          fileManifest: sampleManifest,
+          currentIterationOverall: j + 1,
+          maxIterationsOverall: initialProcessState.bootstrapSubIterations,
+          activePlanStage: null,
+          outputParagraphShowHeadings: initialProcessState.outputParagraphShowHeadings,
+          outputParagraphMaxHeadingDepth: initialProcessState.outputParagraphMaxHeadingDepth,
+          outputParagraphNumberedHeadings: initialProcessState.outputParagraphNumberedHeadings,
+          modelConfigToUse: userBaseConfig,
+          isGlobalMode: true,
+          isSearchGroundingEnabled: initialProcessState.isSearchGroundingEnabled,
+          isUrlBrowsingEnabled: initialProcessState.isUrlBrowsingEnabled,
+          modelToUse: initialProcessState.selectedModelName,
+          onStreamChunk,
+          isHaltSignalled: () => haltSignalRef.current,
+        });
+
+        if (apiResult.status === 'ERROR' || apiResult.status === 'HALTED') {
+          handleProcessHalt(logCounter, apiResult.product, `Error during ensemble sample ${i + 1}: ${apiResult.errorMessage || 'Process Halted'}`);
+          return;
+        }
+
+        const prevProductForLog = productForThisSample;
+        productForThisSample = apiResult.product;
+        logIterationData(
+          logCounter++,
+          'bootstrap_sub_iteration',
+          productForThisSample,
+          `Sample ${i + 1}, Sub-iter ${j + 1}`,
+          prevProductForLog,
+          apiResult,
+          userBaseConfig,
+          { filesSentToApiIteration: j === 0 ? 0 : null, numberOfFilesActuallySent: sampledFiles.length, totalFilesSizeBytesSent: sampledFiles.reduce((s, f) => s + f.size, 0), fileManifestProvidedCharacterCount: sampleManifest.length },
+          undefined,
+          productForThisSample?.length,
+          productForThisSample?.length,
+          undefined,
+          undefined,
+          initialProcessState.selectedModelName,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          i + 1
+        );
+      }
+      subProducts.push(productForThisSample);
+    }
+
+    // Phase 2: Final Integration
+    if (haltSignalRef.current) { handleProcessHalt(logCounter, null, "Ensemble process halted by user before final integration."); return; }
+    updateProcessState({ statusMessage: "Integrating ensemble results..." });
+    currentStreamBufferRef.current = "";
+
+    const integrationFiles: LoadedFile[] = subProducts.map((p, i) => ({
+      name: `Ensemble_Result_${i + 1}.md`,
+      content: p, mimeType: 'text/markdown', size: p.length
+    }));
+    const integrationManifest = `Input consists of ${integrationFiles.length} ensemble-synthesized products from original file samples. Your task is to integrate these into one final, coherent document.`;
+
+    const finalApiResult = await GeminaiService.iterateProduct({
+      currentProduct: "",
+      loadedFiles: integrationFiles,
+      fileManifest: integrationManifest,
+      currentIterationOverall: 1,
+      maxIterationsOverall: 1,
+      activePlanStage: null,
+      outputParagraphShowHeadings: initialProcessState.outputParagraphShowHeadings,
+      outputParagraphMaxHeadingDepth: initialProcessState.outputParagraphMaxHeadingDepth,
+      outputParagraphNumberedHeadings: initialProcessState.outputParagraphNumberedHeadings,
+      modelConfigToUse: userBaseConfig,
+      isGlobalMode: true,
+      isSearchGroundingEnabled: initialProcessState.isSearchGroundingEnabled,
+      isUrlBrowsingEnabled: initialProcessState.isUrlBrowsingEnabled,
+      modelToUse: initialProcessState.selectedModelName,
+      onStreamChunk,
+      isHaltSignalled: () => haltSignalRef.current,
+    });
+
+    if (finalApiResult.status === 'ERROR' || finalApiResult.status === 'HALTED') {
+      handleProcessHalt(logCounter, finalApiResult.product, `Error during final ensemble integration: ${finalApiResult.errorMessage || 'Process Halted'}`);
+      return;
+    }
+    
+    // Finalize State
+    const finalSynthesizedProduct = finalApiResult.product;
+    logIterationData(
+      0, // The final integration becomes Iteration 0
+      'bootstrap_synthesis_milestone',
+      finalSynthesizedProduct,
+      `Final Ensemble Integration`,
+      subProducts.join('\n\n---\n\n'),
+      finalApiResult,
+      userBaseConfig,
+      { filesSentToApiIteration: 0, numberOfFilesActuallySent: integrationFiles.length, totalFilesSizeBytesSent: integrationFiles.reduce((s, f) => s + f.size, 0), fileManifestProvidedCharacterCount: integrationManifest.length },
+      undefined,
+      finalSynthesizedProduct?.length,
+      finalSynthesizedProduct?.length,
+      undefined,
+      undefined,
+      initialProcessState.selectedModelName,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined
+    );
+
+    updateProcessState({
+      isProcessing: false,
+      statusMessage: "Ensemble Synthesis complete. Ready for main iterative process.",
+      initialPrompt: `Product synthesized via ensemble sub-sampling from ${originalLoadedFiles.length} files. Original Objective: ${initialProcessState.initialPrompt}`,
+      loadedFiles: [], // Clear original files, the product is now the base
+      currentProduct: finalSynthesizedProduct,
+      finalProduct: null,
+      currentIteration: 0, // This is now the base state for iteration 0
+      activeMetaInstructionForNextIter: "The process will now refine a robustly synthesized document created via an ensemble method (bootstrapping). This baseline represents a statistical 'mean' of the source material.",
+    });
+    isProcessingRef.current = false;
+    await performAutoSave();
+  }, [latestStateRef, updateProcessState, logIterationData, performAutoSave, onStreamChunk, handleProcessHalt, addLogEntryFromHook]);
+
+
+  const handleStartProcess = useCallback(async (
     options?: {
       isTargetedRefinement?: boolean;
       targetedSelection?: string;
@@ -162,13 +364,14 @@ export const useIterativeLogic = (
       userRawPromptForContextualizer?: string;
     }
   ) => {
+    const { processState, getUserSetBaseConfig: getBaseConfig } = latestStateRef.current;
     if (isProcessingRef.current) {
       updateProcessState({ statusMessage: "Process already running." }); return;
     }
     if (!GeminaiService.isApiKeyAvailable()) {
       updateProcessState({ statusMessage: "API Key not available. Cannot start process." }); return;
     }
-    if (!options?.isTargetedRefinement && processState.loadedFiles.length === 0 && !processState.initialPrompt.trim()) {
+    if (!options?.isTargetedRefinement && processState.loadedFiles.length === 0 && !processState.initialPrompt.trim() && processState.currentProduct === null) {
       updateProcessState({ statusMessage: "No input data provided. Load files or ensure initial prompt is set." }); return;
     }
     if (options?.isTargetedRefinement && (!options.targetedSelection || !processState.currentProduct)) {
@@ -191,7 +394,7 @@ export const useIterativeLogic = (
         currentStageIterCount = 0;
     }
 
-    const userBaseConfig = getUserSetBaseConfig();
+    const userBaseConfig = getBaseConfig();
     
     let currentStagnationInfo: StagnationInfo = { ...(processState.stagnationInfo) };
     if (currentIter === 0) {
@@ -207,12 +410,11 @@ export const useIterativeLogic = (
       stagnationInfo: currentStagnationInfo, 
     });
 
-    if (currentIter === 0 && !options?.isTargetedRefinement && (currentProd === null || currentProd.trim() === "")) {
+    if (currentIter === 0 && !options?.isTargetedRefinement && (currentProd === null || currentProd.trim() === "") && processState.iterationHistory.length === 0) {
       let initialProductForStateAndLog: string;
       let statusForLog: string;
       
       if (processState.loadedFiles.length > 0) {
-        // Concatenate file contents with a separator for clarity
         initialProductForStateAndLog = processState.loadedFiles.map(f => `--- FILE: ${f.name} ---\n${f.content}`).join('\n\n');
         statusForLog = "Initial State from Loaded Files";
       } else {
@@ -221,14 +423,13 @@ export const useIterativeLogic = (
       }
 
       const fileInfo = {
-        filesSentToApiIteration: null, // No API call for initial state
+        filesSentToApiIteration: null, 
         numberOfFilesActuallySent: processState.loadedFiles.length,
         totalFilesSizeBytesSent: processState.loadedFiles.reduce((sum, f) => sum + f.size, 0),
         fileManifestProvidedCharacterCount: processState.initialPrompt.length,
         loadedFilesForIterationContext: processState.loadedFiles,
       };
 
-      // Log this true initial state. previousProductForLog is "" to generate the initial diff.
       logIterationData(
         0, 
         'initial_state', 
@@ -241,7 +442,6 @@ export const useIterativeLogic = (
       );
       
       currentProd = initialProductForStateAndLog;
-      // Immediately update the state so the rest of the loop and UI has the correct product and iteration number.
       updateProcessState({ currentProduct: currentProd, currentIteration: 0 });
     }
 
@@ -256,8 +456,7 @@ export const useIterativeLogic = (
       let validationResult: IsLikelyAiErrorResponseResult | undefined;
       let retryContext: RetryContext | undefined;
       let currentLogIncomplete: IterationLogEntry;
-      let activeMetaInstruction: string | undefined = undefined;
-
+      
       currentIter++;
       if (currentIter > maxIterationsOverall && !processState.isPlanActive) {
         updateProcessState({ isProcessing: false, finalProduct: currentProd, statusMessage: `Reached max iterations (${maxIterationsOverall}). Global process complete.`, configAtFinalization: userBaseConfig, aiProcessInsight: `Global Mode: Max iterations reached. Final product displayed.` });
@@ -273,52 +472,55 @@ export const useIterativeLogic = (
 
       const devLogContextString = await getRelevantDevLogContext(processState.devLog || [], devLogContextPrompt);
 
-      // Simplified strategy logic
-      const rationales: string[] = [];
-      let nextConfig = { ...userBaseConfig };
-      if (!processState.isPlanActive) {
-        const interpolationFactor = Math.min(1.0, currentIter / DETERMINISTIC_TARGET_ITERATION);
-        nextConfig.temperature = userBaseConfig.temperature - interpolationFactor * (userBaseConfig.temperature - FOCUSED_END_DEFAULTS.temperature);
-        nextConfig.topP = userBaseConfig.topP - interpolationFactor * (userBaseConfig.topP - FOCUSED_END_DEFAULTS.topP);
-        nextConfig.topK = Math.max(1, Math.round(userBaseConfig.topK - interpolationFactor * (userBaseConfig.topK - FOCUSED_END_DEFAULTS.topK)));
-        rationales.push(`Heuristic Sweep: Iter ${currentIter}/${maxIterationsOverall}.`);
-      } else {
-        rationales.push("Plan Mode: Using fixed user-defined parameters.");
-      }
+      const { processState: currentStateForStrategy } = latestStateRef.current;
+      const isBootstrappedBase = currentStateForStrategy.iterationHistory[0]?.entryType === 'bootstrap_synthesis_milestone';
+      const { productDevelopmentState, stagnationSeverity, recentIterationPerformance } = calculateQualitativeStates(currentProd, currentStagnationInfo, currentStateForStrategy.inputComplexity, currentStateForStrategy.stagnationNudgeAggressiveness, isBootstrappedBase);
+      const isRadicalRefinementKickstartAttempt = stagnationSeverity === 'CRITICAL' || (stagnationSeverity === 'SEVERE' && productDevelopmentState === 'NEEDS_EXPANSION_STALLED');
 
-      // Simple stagnation nudge
-      if (currentStagnationInfo.consecutiveStagnantIterations >= 2 && processState.stagnationNudgeEnabled) {
-          nextConfig.temperature = Math.min(2.0, nextConfig.temperature + 0.1);
-          activeMetaInstruction = "Previous iteration was stagnant. Please make a more significant and creative change.";
-          rationales.push("Heuristic Nudge: Stagnation detected, increasing temperature and adding meta-instruction.");
-      }
+      const strategyArgs = {
+        ...currentStateForStrategy,
+        currentProduct: previousProductSnapshot,
+        currentIteration: currentIter,
+        stagnationInfo: currentStagnationInfo,
+        productDevelopmentState,
+        stagnationSeverity,
+        recentIterationPerformance,
+        isRadicalRefinementKickstartAttempt,
+        isBootstrappedBase,
+      };
 
+      const { modelName: nextModelName, config: nextConfig, rationale: strategyRationale, activeMetaInstruction } = await ModelStrategyService.reevaluateStrategy(strategyArgs, userBaseConfig);
+      
       updateProcessState({
-          aiProcessInsight: rationales.join(' | '),
-          currentModelForIteration: processState.selectedModelName,
-          currentAppliedModelConfig: nextConfig,
-          activeMetaInstructionForNextIter: activeMetaInstruction,
+        aiProcessInsight: strategyRationale,
+        currentModelForIteration: nextModelName,
+        currentAppliedModelConfig: nextConfig,
+        activeMetaInstructionForNextIter: activeMetaInstruction,
       });
+
 
       for (iterationAttemptCount = 0; iterationAttemptCount <= SELF_CORRECTION_MAX_ATTEMPTS; iterationAttemptCount++) {
         if (haltSignalRef.current) { handleProcessHalt(currentIter, currentProd, "Process halted by user."); return; }
-        const activePlanStageForCall = processState.isPlanActive && currentPlanStageIdx !== null ? processState.planStages[currentPlanStageIdx] : null;
+        const { processState: currentStateForLoop } = latestStateRef.current;
+        const activePlanStageForCall = currentStateForLoop.isPlanActive && currentPlanStageIdx !== null ? currentStateForLoop.planStages[currentPlanStageIdx] : null;
         
+        const isKickstartThisAttempt = isRadicalRefinementKickstartAttempt && iterationAttemptCount === 0;
+
         apiResultForLog = await GeminaiService.iterateProduct({
             currentProduct: currentProd || "",
             currentIterationOverall: currentIter,
             maxIterationsOverall: maxIterationsOverall,
-            fileManifest: processState.initialPrompt,
-            loadedFiles: processState.loadedFiles,
+            fileManifest: currentStateForLoop.initialPrompt,
+            loadedFiles: currentStateForLoop.loadedFiles,
             activePlanStage: activePlanStageForCall,
-            outputParagraphShowHeadings: processState.outputParagraphShowHeadings,
-            outputParagraphMaxHeadingDepth: processState.outputParagraphMaxHeadingDepth,
-            outputParagraphNumberedHeadings: processState.outputParagraphNumberedHeadings,
+            outputParagraphShowHeadings: currentStateForLoop.outputParagraphShowHeadings,
+            outputParagraphMaxHeadingDepth: currentStateForLoop.outputParagraphMaxHeadingDepth,
+            outputParagraphNumberedHeadings: currentStateForLoop.outputParagraphNumberedHeadings,
             modelConfigToUse: nextConfig,
-            isGlobalMode: !processState.isPlanActive,
-            isSearchGroundingEnabled: processState.isSearchGroundingEnabled,
-            isUrlBrowsingEnabled: processState.isUrlBrowsingEnabled,
-            modelToUse: processState.selectedModelName,
+            isGlobalMode: !currentStateForLoop.isPlanActive,
+            isSearchGroundingEnabled: currentStateForLoop.isSearchGroundingEnabled,
+            isUrlBrowsingEnabled: currentStateForLoop.isUrlBrowsingEnabled,
+            modelToUse: nextModelName,
             onStreamChunk,
             isHaltSignalled: () => haltSignalRef.current,
             retryContext,
@@ -326,7 +528,8 @@ export const useIterativeLogic = (
             devLogContextString: devLogContextString,
             isTargetedRefinementMode: options?.isTargetedRefinement,
             targetedSelectionText: options?.targetedSelection,
-            targetedRefinementInstructions: options?.targetedInstructions
+            targetedRefinementInstructions: options?.targetedInstructions,
+            isRadicalRefinementKickstart: isKickstartThisAttempt
         });
 
         if (haltSignalRef.current) { handleProcessHalt(currentIter, currentProd, "Process halted by user.", apiResultForLog); return; }
@@ -347,6 +550,27 @@ export const useIterativeLogic = (
         }
 
         const newProductCandidate = currentStreamBufferRef.current || "";
+        
+        const isInitialSynthesisFromFile = currentIter === 1 && currentStateForLoop.loadedFiles.length > 0;
+        if (isInitialSynthesisFromFile) {
+            const tempFileProcessingInfoForCheck: FileProcessingInfo = {
+                filesSentToApiIteration: 1,
+                numberOfFilesActuallySent: currentStateForLoop.loadedFiles.length,
+                totalFilesSizeBytesSent: currentStateForLoop.loadedFiles.reduce((acc, f) => acc + f.size, 0),
+                fileManifestProvidedCharacterCount: currentStateForLoop.initialPrompt.length,
+                loadedFilesForIterationContext: currentStateForLoop.loadedFiles
+            };
+            const dataDumpCheck = isDataDump(newProductCandidate, tempFileProcessingInfoForCheck, false); // Outline feature not used, so false
+            if (dataDumpCheck.isError) {
+                validationResult = { 
+                    isError: true, 
+                    isCriticalFailure: true,
+                    reason: dataDumpCheck.reason, 
+                    checkDetails: { type: 'initial_synthesis_failed_data_dump', value: { dataDumpReason: dataDumpCheck.reason } }
+                };
+            }
+        }
+
         currentLogIncomplete = {
             iteration: currentIter,
             entryType: 'ai_iteration',
@@ -357,21 +581,23 @@ export const useIterativeLogic = (
                 filesSentToApiIteration: null,
                 numberOfFilesActuallySent: 0,
                 totalFilesSizeBytesSent: 0,
-                fileManifestProvidedCharacterCount: processState.initialPrompt.length,
+                fileManifestProvidedCharacterCount: currentStateForLoop.initialPrompt.length,
                 loadedFilesForIterationContext: []
             },
             apiStreamDetails: apiResultForLog.apiStreamDetails,
         };
         
-        validationResult = isLikelyAiErrorResponse(
-          newProductCandidate,
-          previousProductSnapshot || "",
-          currentLogIncomplete,
-          undefined,
-          activePlanStageForCall?.length,
-          activePlanStageForCall?.format,
-          processState.inputComplexity
-        );
+        if (!validationResult) {
+            validationResult = isLikelyAiErrorResponse(
+              newProductCandidate,
+              previousProductSnapshot || "",
+              currentLogIncomplete,
+              undefined,
+              activePlanStageForCall?.length,
+              activePlanStageForCall?.format,
+              currentStateForLoop.inputComplexity
+            );
+        }
         
         isCurrentIterationCriticalFailure = validationResult.isCriticalFailure || false;
 
@@ -384,8 +610,8 @@ export const useIterativeLogic = (
         
         const { coreUserInstructions } = getUserPromptComponents(
             currentIter, maxIterationsOverall, activePlanStageForCall,
-            processState.outputParagraphShowHeadings, processState.outputParagraphMaxHeadingDepth, processState.outputParagraphNumberedHeadings,
-            !processState.isPlanActive, false, undefined, undefined, undefined, processState.loadedFiles,
+            currentStateForLoop.outputParagraphShowHeadings, currentStateForLoop.outputParagraphMaxHeadingDepth, currentStateForLoop.outputParagraphNumberedHeadings,
+            !currentStateForLoop.isPlanActive, false, undefined, undefined, undefined, currentStateForLoop.loadedFiles,
             activeMetaInstruction, false, undefined, undefined,
             options?.isTargetedRefinement, options?.targetedSelection, options?.targetedInstructions, false
         );
@@ -403,7 +629,7 @@ export const useIterativeLogic = (
             details: validationResult.checkDetails,
         };
 
-        logIterationData(currentIter, 'ai_iteration', newProductCandidate, `Attempt ${iterationAttemptCount + 1} failed validation: ${validationResult.reason}. Retrying...`, previousProductSnapshot, apiResultForLog, nextConfig, currentLogIncomplete.fileProcessingInfo, aiValidationInfoForLog, newProductCandidate.length, newProductCandidate.length, iterationAttemptCount + 1, rationales.join(' | '), processState.selectedModelName, activeMetaInstruction);
+        logIterationData(currentIter, 'ai_iteration', newProductCandidate, `Attempt ${iterationAttemptCount + 1} failed validation: ${validationResult.reason}. Retrying...`, previousProductSnapshot, apiResultForLog, nextConfig, currentLogIncomplete.fileProcessingInfo, aiValidationInfoForLog, newProductCandidate.length, newProductCandidate.length, iterationAttemptCount + 1, strategyRationale, nextModelName, activeMetaInstruction);
       }
       
       if (haltSignalRef.current) { handleProcessHalt(currentIter, currentProd, "Process halted by user.", apiResultForLog); return; }
@@ -447,7 +673,7 @@ export const useIterativeLogic = (
           similarityWithPrevious: similarity, 
           lastProductLengthForStagnation: currentProd?.length || 0,
           lastMeaningfulChangeProductLength: (isLowValueIteration && currentStagnationInfo.lastMeaningfulChangeProductLength) ? currentStagnationInfo.lastMeaningfulChangeProductLength : (currentProd?.length || 0),
-          nudgeStrategyApplied: 'none' // Nudge is determined and applied at start of loop now
+          nudgeStrategyApplied: activeMetaInstruction ? 'meta_instruct' : 'none'
       };
       
       currentStagnationInfo = newStagnationInfo;
@@ -458,7 +684,7 @@ export const useIterativeLogic = (
       logIterationData(
         currentIter, currentEntryType, currentProd, `Iteration ${currentIter} ${apiResultForLog.status}.`, previousProductSnapshot,
         apiResultForLog, nextConfig, fileProcessingInfoForApi, finalValidationInfoForLog, currentProd?.length,
-        currentProd?.length, iterationAttemptCount, rationales.join(' | '), processState.selectedModelName,
+        currentProd?.length, iterationAttemptCount, strategyRationale, nextModelName,
         activeMetaInstruction, isCurrentIterationCriticalFailure,
         options?.isTargetedRefinement ? options.targetedSelection : undefined, options?.isTargetedRefinement ? options.targetedInstructions : undefined,
         netLineChange, charDelta, similarity, isStagnantIteration, isEffectivelyIdentical, isLowValueIteration
@@ -482,7 +708,17 @@ export const useIterativeLogic = (
 
       await performAutoSave();
     }
-  };
+  }, [
+    latestStateRef,
+    updateProcessState,
+    addLogEntryFromHook,
+    addDevLogEntry,
+    performAutoSave,
+    handleRateLimitErrorEncountered,
+    logIterationData,
+    handleProcessHalt,
+    onStreamChunk,
+  ]);
 
-  return { handleStartProcess, handleHaltProcess };
+  return { handleStartProcess, handleHaltProcess, handleBootstrapSynthesis };
 };

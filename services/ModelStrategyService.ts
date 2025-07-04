@@ -1,9 +1,9 @@
+
 import type { ProcessState, ModelConfig, SelectableModelName, IterationLogEntry, PlanStage, StagnationInfo, ModelStrategy, LoadedFile, AiResponseValidationInfo, StrategistLLMContext } from '../types.ts';
 import { CREATIVE_DEFAULTS, GENERAL_BALANCED_DEFAULTS, DEFAULT_MODEL_NAME } from './geminiService.ts';
 import { CONVERGED_PREFIX } from './promptBuilderService.ts';
-import { STAGNATION_TEMP_NUDGE_LIGHT, STAGNATION_TOPP_NUDGE_LIGHT, STAGNATION_TOPK_NUDGE_FACTOR_LIGHT, STAGNATION_TEMP_NUDGE_HEAVY, STAGNATION_TOPP_NUDGE_HEAVY, STAGNATION_TOPK_NUDGE_FACTOR_HEAVY, DETERMINISTIC_TARGET_ITERATION, FOCUSED_END_DEFAULTS } from '../hooks/useModelParameters.ts';
+import { STAGNATION_TEMP_NUDGE_LIGHT, STAGNATION_TOPP_NUDGE_LIGHT, STAGNATION_TOPK_NUDGE_FACTOR_LIGHT, STAGNATION_TEMP_NUDGE_HEAVY, STAGNATION_TOPP_NUDGE_HEAVY, STAGNATION_TOPK_NUDGE_FACTOR_HEAVY, DETERMINISTIC_TARGET_ITERATION, FOCUSED_END_DEFAULTS } from './strategyConstants.ts';
 import { SELECTABLE_MODELS } from '../types.ts';
-import { MIN_CHARS_FOR_DEVELOPED_PRODUCT } from './iterationUtils.ts';
 
 
 export const sanitizeConfig = (config: ModelConfig, rationaleParts: string[]): ModelConfig => {
@@ -75,23 +75,59 @@ export const reevaluateStrategy = async (
     },
     baseUserConfig: ModelConfig
 ): Promise<ModelStrategy> => {
-    const { currentIteration, maxIterations, isPlanActive, strategistInfluenceLevel } = processState;
+    const { 
+        currentIteration, maxIterations, isPlanActive, stagnationInfo,
+        stagnationNudgeEnabled, stagnationNudgeAggressiveness,
+        currentModelForIteration, selectedModelName,
+        isRadicalRefinementKickstartAttempt
+    } = processState;
+
     const rationales: string[] = [];
     let nextConfig: ModelConfig;
-    let nextModelName: SelectableModelName = processState.currentModelForIteration || processState.selectedModelName || DEFAULT_MODEL_NAME;
-    let activeMetaInstruction = processState.activeMetaInstructionForNextIter;
+    let nextModelName: SelectableModelName = currentModelForIteration || selectedModelName || DEFAULT_MODEL_NAME;
+    let activeMetaInstruction: string | undefined = undefined;
 
     if (isPlanActive) {
         nextConfig = { ...baseUserConfig };
         rationales.push("Plan Mode: Using fixed parameters set by user for all plan stages.");
     } else {
-        const interpolationFactor = Math.min(1.0, currentIteration / DETERMINISTIC_TARGET_ITERATION);
-        nextConfig = {
-            temperature: baseUserConfig.temperature - interpolationFactor * (baseUserConfig.temperature - FOCUSED_END_DEFAULTS.temperature),
-            topP: baseUserConfig.topP - interpolationFactor * (baseUserConfig.topP - FOCUSED_END_DEFAULTS.topP),
-            topK: Math.max(1, Math.round(baseUserConfig.topK - interpolationFactor * (baseUserConfig.topK - FOCUSED_END_DEFAULTS.topK)))
-        };
-        rationales.push(`Heuristic Sweep: Iter ${currentIteration + 1}/${maxIterations}. Swept towards deterministic params.`);
+        // Global Mode Logic
+        if (isRadicalRefinementKickstartAttempt) {
+            rationales.push("Strategy: Radical Refinement Kickstart initiated to break stagnation.");
+            nextModelName = 'gemini-2.5-pro'; // Use a more powerful model for kickstart
+            nextConfig = { ...CREATIVE_DEFAULTS, temperature: 0.8 }; // High creativity
+            activeMetaInstruction = "The process has stalled. Re-evaluate the product's core concepts and generate a substantially different and improved version. Focus on adding net-new information, depth, or a fresh perspective. Avoid minor changes.";
+            rationales.push("Radical Kickstart: Switching to Gemini 2.5 Pro with high creativity. Applying forceful meta-instruction.");
+        } else {
+            // Heuristic sweep
+            const interpolationFactor = Math.min(1.0, (currentIteration + 1) / DETERMINISTIC_TARGET_ITERATION);
+            nextConfig = {
+                temperature: baseUserConfig.temperature - interpolationFactor * (baseUserConfig.temperature - FOCUSED_END_DEFAULTS.temperature),
+                topP: baseUserConfig.topP - interpolationFactor * (baseUserConfig.topP - FOCUSED_END_DEFAULTS.topP),
+                topK: Math.max(1, Math.round(baseUserConfig.topK - interpolationFactor * (baseUserConfig.topK - FOCUSED_END_DEFAULTS.topK)))
+            };
+            rationales.push(`Heuristic Sweep: Iter ${currentIteration + 1}/${maxIterations}. Swept towards deterministic params.`);
+
+            // Stagnation Nudge Logic
+            if (stagnationNudgeEnabled) {
+                const aggressivenessMultiplier = stagnationNudgeAggressiveness === 'LOW' ? 0.6 : (stagnationNudgeAggressiveness === 'HIGH' ? 1.4 : 1.0);
+                const heavyNudgeThreshold = stagnationNudgeAggressiveness === 'LOW' ? 4 : (stagnationNudgeAggressiveness === 'HIGH' ? 2 : 3);
+
+                if (stagnationInfo.consecutiveLowValueIterations >= heavyNudgeThreshold) {
+                    nextConfig.temperature += STAGNATION_TEMP_NUDGE_HEAVY * aggressivenessMultiplier;
+                    nextConfig.topP += STAGNATION_TOPP_NUDGE_HEAVY * aggressivenessMultiplier;
+                    nextConfig.topK = Math.ceil(nextConfig.topK * (1 + (STAGNATION_TOPK_NUDGE_FACTOR_HEAVY - 1) * aggressivenessMultiplier));
+                    activeMetaInstruction = "Progress has stalled significantly. Attempt a major, creative revision. Focus on adding new information or perspectives.";
+                    rationales.push(`Heuristic Nudge (Heavy): Detected ${stagnationInfo.consecutiveLowValueIterations} low-value iterations. Applying aggressive parameter adjustments and meta-instruction.`);
+                } else if (stagnationInfo.consecutiveStagnantIterations >= 2) {
+                    nextConfig.temperature += STAGNATION_TEMP_NUDGE_LIGHT * aggressivenessMultiplier;
+                    nextConfig.topP += STAGNATION_TOPP_NUDGE_LIGHT * aggressivenessMultiplier;
+                    nextConfig.topK = Math.ceil(nextConfig.topK * (1 + (STAGNATION_TOPK_NUDGE_FACTOR_LIGHT - 1) * aggressivenessMultiplier));
+                    activeMetaInstruction = "Previous iteration was stagnant. Please make a more significant and creative change.";
+                    rationales.push(`Heuristic Nudge (Light): Detected ${stagnationInfo.consecutiveStagnantIterations} stagnant iterations. Applying light parameter adjustments and meta-instruction.`);
+                }
+            }
+        }
     }
     
     return {

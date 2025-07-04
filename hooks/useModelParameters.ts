@@ -1,21 +1,11 @@
 
 
+
 import { useState, useEffect, useCallback } from 'react';
 import type { ModelConfig, SettingsSuggestionSource, ParameterAdvice, ModelParameterGuidance, SuggestedParamsResponse, StagnationInfo, NudgeStrategy, SelectableModelName } from '../types.ts';
 import * as geminiService from '../services/geminiService.ts';
+import { FOCUSED_END_DEFAULTS } from '../services/strategyConstants.ts';
 
-export const STAGNATION_TEMP_NUDGE_LIGHT = 0.05;
-export const STAGNATION_TOPP_NUDGE_LIGHT = 0.02;
-export const STAGNATION_TOPK_NUDGE_FACTOR_LIGHT = 1.05; // Multiplicative factor
-
-export const STAGNATION_TEMP_NUDGE_HEAVY = 0.10;
-export const STAGNATION_TOPP_NUDGE_HEAVY = 0.05;
-export const STAGNATION_TOPK_NUDGE_FACTOR_HEAVY = 1.15; // Multiplicative factor
-
-export const DETERMINISTIC_TARGET_ITERATION = 20; // Iteration by which Global Mode aims for deterministic params
-export const FOCUSED_END_DEFAULTS: ModelConfig = { temperature: 0.0, topP: 0.9, topK: 5 };
-
-// STAGNATION_NUDGE_IGNORE_AFTER_ITERATION_PERCENT is now in useIterativeLogic
 
 export const useModelParameters = (
     initialPromptText: string,

@@ -1,3 +1,5 @@
+
+
 import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
 import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, LoadedFile, PlanStage, SuggestedParamsResponse, RetryContext, OutlineGenerationResult, NudgeStrategy, SelectableModelName } from "../types.ts";
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents, CONVERGED_PREFIX } from './promptBuilderService.ts';
@@ -228,10 +230,8 @@ export const iterateProduct = async ({
             let configForRequest: any;
 
             if (isSearchGroundingEnabled) {
+                // When using Google Search grounding, it should be the only tool. No other tools, including functionDeclarations, should be added.
                 const tools: any[] = [{ googleSearch: {} }];
-                if (isUrlBrowsingEnabled && modelData?.supportsFunctionCalling) {
-                    tools.push({ functionDeclarations: [urlBrowseTool] });
-                }
                 // Per documentation, when using Google Search grounding, other parameters like temperature, topP, topK, and responseMimeType are omitted.
                 configForRequest = { tools };
                 // Note: systemInstruction is also omitted to strictly follow grounding guidelines.
@@ -275,20 +275,14 @@ export const iterateProduct = async ({
                  finalFinishReason = "HALTED";
             }
 
-            // This logic is simplified. It assumes one tool call per turn maximum.
-            // A more complex implementation would loop over multiple tool calls.
-            const functionCalls = finalResponse?.candidates?.[0].content.parts.filter(part => !!part.functionCall);
-
-            // Update the model's full response in the history for this turn
-            // This logic correctly handles continuations by appending to the last model message
-            const lastMessage = conversationHistory[conversationHistory.length - 1];
-            if (lastMessage.role === 'model') {
-                lastMessage.parts[0].text += responseTextThisStream;
-            } else {
-                conversationHistory.push({ role: 'model', parts: [{ text: responseTextThisStream }] });
-            }
+            const functionCalls = finalResponse?.candidates?.[0]?.content?.parts?.filter(part => !!part.functionCall);
 
             if (functionCalls && functionCalls.length > 0 && finalFinishReason === "TOOL_CALL") {
+                // BUGFIX: The model's turn which includes the function call must be added to history.
+                if(finalResponse?.candidates?.[0]?.content) {
+                    conversationHistory.push(finalResponse.candidates[0].content);
+                }
+
                 const call = functionCalls[0].functionCall!;
                 const toolDetail: ApiStreamCallDetail = {
                   callCount,
@@ -305,8 +299,9 @@ export const iterateProduct = async ({
                     // In a real app, you'd fetch the URL here. We simulate it.
                     const simulatedContent = `Simulated browsing of [${browseUrl}]: Content was analyzed. The key themes appear to be X, Y, and Z. This information will be used to improve the response.`;
                     
+                    // BUGFIX: The role for a tool response MUST be 'tool', not 'user'.
                     conversationHistory.push({
-                      role: 'user', // This should be 'tool' but the SDK might use user role for function responses
+                      role: 'tool',
                       parts: [{ functionResponse: { name: 'url_browse', response: { content: simulatedContent, success: true }}}]
                     });
 
@@ -315,6 +310,15 @@ export const iterateProduct = async ({
                 apiStreamDetails.push(toolDetail);
                 // The loop continues to get the model's response after the tool call
                 continue;
+            } else {
+                 // Update the model's full response in the history for this turn
+                // This logic correctly handles continuations by appending to the last model message
+                const lastMessage = conversationHistory[conversationHistory.length - 1];
+                if (lastMessage?.role === 'model') {
+                    lastMessage.parts[0].text += responseTextThisStream;
+                } else {
+                    conversationHistory.push({ role: 'model', parts: [{ text: responseTextThisStream }] });
+                }
             }
             
             accumulatedText += responseTextThisStream;
@@ -340,11 +344,19 @@ export const iterateProduct = async ({
             }
         }
         
-        const status = accumulatedText.startsWith(CONVERGED_PREFIX) ? 'CONVERGED' : 'COMPLETED';
+        const trimmedProduct = accumulatedText.trim();
+        const isConverged = trimmedProduct.startsWith(CONVERGED_PREFIX);
+        // If converged, strip the prefix and trim. Otherwise, return the raw accumulated text
+        // to preserve any intentional leading/trailing whitespace.
+        const finalProduct = isConverged
+          ? trimmedProduct.substring(CONVERGED_PREFIX.length).trim()
+          : accumulatedText;
+        const status = isConverged ? 'CONVERGED' : 'COMPLETED';
+
         const lastDetailWithMetadata = [...apiStreamDetails].reverse().find(d => d.groundingMetadata);
 
         return {
-            product: accumulatedText,
+            product: finalProduct,
             status,
             apiStreamDetails,
             isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',

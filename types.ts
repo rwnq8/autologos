@@ -134,7 +134,7 @@ export interface ProjectFileHeader {
   appManifest?: AppManifestEntry[];
 }
 
-export type IterationEntryType = 'initial_state' | 'ai_iteration' | 'manual_edit' | 'segmented_synthesis_milestone' | 'targeted_refinement';
+export type IterationEntryType = 'initial_state' | 'ai_iteration' | 'manual_edit' | 'segmented_synthesis_milestone' | 'targeted_refinement' | 'bootstrap_sub_iteration' | 'bootstrap_synthesis_milestone';
 
 export interface IterationLogEntry {
   iteration: number;
@@ -179,6 +179,7 @@ export interface IterationLogEntry {
   isStagnantIterationLogged?: boolean;
   isEffectivelyIdenticalLogged?: boolean;
   isLowValueIterationLogged?: boolean;
+  bootstrapRun?: number;
 }
 
 export type DevLogEntryType = 'issue' | 'fix' | 'feature' | 'decision' | 'note';
@@ -233,6 +234,9 @@ export interface AutologosIterativeEngineData {
   strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
   devLog?: DevLogEntry[];
+  bootstrapSamples: number;
+  bootstrapSampleSizePercent: number;
+  bootstrapSubIterations: number;
 }
 
 export interface AutologosProjectFile {
@@ -410,6 +414,9 @@ export interface ProcessState {
   isEditingCurrentProduct?: boolean;
   editedProductBuffer?: string | null;
   devLog?: DevLogEntry[];
+  bootstrapSamples: number;
+  bootstrapSampleSizePercent: number;
+  bootstrapSubIterations: number;
 }
 
 export interface RetryContext {

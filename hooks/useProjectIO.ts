@@ -1,4 +1,5 @@
 
+
 import { useCallback, useRef, useEffect } from 'react';
 import type { ProcessState, AutologosProjectFile, AutologosIterativeEngineData, ProjectFileHeader, ModelConfig, LoadedFile, PlanTemplate, SettingsSuggestionSource, SelectableModelName, IterationLogEntry } from '../types.ts';
 import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION, SELECTABLE_MODELS } from '../types.ts';
@@ -94,6 +95,9 @@ export const useProjectIO = (
       strategistInfluenceLevel: currentState.strategistInfluenceLevel, 
       stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, 
       devLog: currentState.devLog,
+      bootstrapSamples: currentState.bootstrapSamples,
+      bootstrapSampleSizePercent: currentState.bootstrapSampleSizePercent,
+      bootstrapSubIterations: currentState.bootstrapSubIterations,
     };
 
     const projectFile: AutologosProjectFile = {
@@ -356,5 +360,5 @@ export const useProjectIO = (
     URL.revokeObjectURL(url);
   }, [updateProcessState]);
 
-  return { handleExportProject, handleImportProjectData, handleImportIterationLogData };
+  return { handleExportProject, handleImportProjectData, handleImportIterationLogData, handleExportIterationDiffs };
 };

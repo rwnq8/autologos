@@ -51,6 +51,7 @@ export type AddLogEntryType = (logData: {
   isTargetedRefinement?: boolean; // Added for backward compatibility
   targetedSelection?: string; // Added for backward compatibility
   targetedRefinementInstructions?: string; // Added for backward compatibility
+  bootstrapRun?: number;
 }) => void;
 
 
@@ -70,6 +71,7 @@ export interface ProcessContextType extends Omit<ProcessState,
     userRawPromptForContextualizer?: string; // Added for DevLog context
   }) => Promise<void>;
   handleHaltProcess: () => void;
+  handleBootstrapSynthesis: () => Promise<void>;
   handleRewind: (iterationNumber: number) => void;
   handleExportIterationMarkdown: (iterationNumber: number) => void;
   reconstructProductCallback: (targetIteration: number, history: IterationLogEntry[], basePrompt: string) => ReconstructedProductResult;

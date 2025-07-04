@@ -2,6 +2,8 @@
 
 
 
+
+
 import React, { useState, useContext } from 'react';
 import { useProcessContext } from '../../contexts/ProcessContext';
 import { useApplicationContext } from '../../contexts/ApplicationContext';
@@ -9,52 +11,12 @@ import { usePlanContext } from '../../contexts/PlanContext';
 import { useModelConfigContext } from '../../contexts/ModelConfigContext';
 import { SELECTABLE_MODELS, type ProcessState, type StrategistLLMContext } from '../../types'; 
 import * as ModelStrategyService from '../../services/ModelStrategyService';
-import { MIN_CHARS_FOR_DEVELOPED_PRODUCT, MIN_CHARS_SHORT_PRODUCT_THRESHOLD, MIN_CHARS_MATURE_PRODUCT_THRESHOLD } from '../../services/iterationUtils'; // For qualitative state calculation context
+import { calculateQualitativeStates } from '../../services/strategistUtils'; 
+
 
 // Re-define calculateQualitativeStatesForStrategist locally for display purposes
 // This ensures the display logic is self-contained and mirrors the logic used for the Strategist LLM.
-const calculateQualitativeStatesForDisplay = (
-    currentProduct: string | null,
-    stagnationInfo: ProcessState['stagnationInfo'],
-    inputComplexity: ProcessState['inputComplexity'],
-    stagnationNudgeAggressiveness: ProcessState['stagnationNudgeAggressiveness']
-): Pick<StrategistLLMContext, 'productDevelopmentState' | 'stagnationSeverity' | 'recentIterationPerformance'> => {
-    const currentProductLength = currentProduct?.length || 0;
-
-    let productDevelopmentState: StrategistLLMContext['productDevelopmentState'] = 'UNKNOWN';
-    if (stagnationInfo.consecutiveLowValueIterations >= 2 && currentProductLength < MIN_CHARS_FOR_DEVELOPED_PRODUCT) {
-        productDevelopmentState = 'NEEDS_EXPANSION_STALLED';
-    } else if (currentProductLength < MIN_CHARS_SHORT_PRODUCT_THRESHOLD && (inputComplexity !== 'SIMPLE' || (stagnationInfo.lastMeaningfulChangeProductLength && currentProductLength < stagnationInfo.lastMeaningfulChangeProductLength * 0.7))) {
-        productDevelopmentState = 'UNDERDEVELOPED_KERNEL';
-    } else if (currentProductLength > MIN_CHARS_MATURE_PRODUCT_THRESHOLD) {
-        productDevelopmentState = 'MATURE_PRODUCT';
-    } else {
-        productDevelopmentState = 'DEVELOPED_DRAFT';
-    }
-
-    let stagnationSeverity: StrategistLLMContext['stagnationSeverity'] = 'NONE';
-    const identThreshold = stagnationNudgeAggressiveness === 'HIGH' ? 1 : (stagnationNudgeAggressiveness === 'MEDIUM' ? 2 : 3);
-    const lowValueThresholdSevere = stagnationNudgeAggressiveness === 'HIGH' ? 2 : (stagnationNudgeAggressiveness === 'MEDIUM' ? 3 : 4);
-    const stagnantThresholdSevere = stagnationNudgeAggressiveness === 'HIGH' ? 2 : (stagnationNudgeAggressiveness === 'MEDIUM' ? 3 : 4);
-    
-    if (stagnationInfo.consecutiveIdenticalProductIterations >= identThreshold) {
-        stagnationSeverity = 'CRITICAL';
-    } else if (stagnationInfo.consecutiveLowValueIterations >= lowValueThresholdSevere || stagnationInfo.consecutiveStagnantIterations >= stagnantThresholdSevere) {
-        stagnationSeverity = 'SEVERE';
-    } else if (stagnationInfo.consecutiveLowValueIterations >=1 || stagnationInfo.consecutiveStagnantIterations >=1) {
-        stagnationSeverity = 'MODERATE';
-    } else if (stagnationInfo.isStagnant) {
-        stagnationSeverity = 'MILD';
-    }
-
-    let recentIterationPerformance: StrategistLLMContext['recentIterationPerformance'] = 'PRODUCTIVE';
-    if (stagnationInfo.consecutiveIdenticalProductIterations > 0) {
-        recentIterationPerformance = 'STALLED';
-    } else if (stagnationInfo.consecutiveLowValueIterations > 0) {
-        recentIterationPerformance = 'LOW_VALUE';
-    }
-    return { productDevelopmentState, stagnationSeverity, recentIterationPerformance };
-};
+const calculateQualitativeStatesForDisplay = calculateQualitativeStates;
 
 
 const ProcessStatusDisplay: React.FC = () => {
@@ -136,7 +98,11 @@ const ProcessStatusDisplay: React.FC = () => {
       if (originalMsgMatch && originalMsgMatch[1]) {
         originalApiMessage = originalMsgMatch[1].trim();
       } else if (appCtx.isApiRateLimited) {
-        originalApiMessage = `The API rate limit is currently active. Please wait for the cooldown (${appCtx.rateLimitCooldownActiveSeconds}s).`;
+        if (appCtx.rateLimitCooldownActiveSeconds > 0) {
+            originalApiMessage = `The API rate limit is currently active. Please wait for the cooldown (${appCtx.rateLimitCooldownActiveSeconds}s).`;
+        } else {
+            originalApiMessage = `The API rate limit is currently active. Please wait for the cooldown period to end.`;
+        }
         if (processCtx.aiProcessInsight && !isQuotaErrorIndicatedByInsight) {
            originalApiMessage += ` General AI Insight: ${processCtx.aiProcessInsight}`;
         } else if (processCtx.aiProcessInsight) {
@@ -239,11 +205,13 @@ const ProcessStatusDisplay: React.FC = () => {
 
   // Stagnation Status Display Logic
   const { stagnationInfo } = processCtx;
+  const isBootstrappedBase = processCtx.iterationHistory[0]?.entryType === 'bootstrap_synthesis_milestone';
   const { stagnationSeverity } = calculateQualitativeStatesForDisplay(
       processCtx.currentProduct, 
       stagnationInfo, 
       processCtx.inputComplexity,
-      processCtx.stagnationNudgeAggressiveness
+      processCtx.stagnationNudgeAggressiveness,
+      isBootstrappedBase
   );
   
   let stagnationStatusText = `System Stagnation Assessment: ${stagnationSeverity}. `;
