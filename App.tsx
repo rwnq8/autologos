@@ -15,6 +15,7 @@ import { EngineProvider, useEngine } from './contexts/ApplicationContext.tsx';
 import { inferProjectNameFromInput } from './services/projectUtils.ts';
 import { reconstructProduct } from './services/diffService.ts';
 import { formatVersion } from './services/versionUtils.ts';
+import ChevronDownIcon from './components/shared/ChevronDownIcon.tsx';
 
 
 const commonControlProps = {
@@ -73,7 +74,7 @@ const AppLayout: React.FC = () => {
             return;
         }
 
-        const productToSave = finalProduct || (currentMajorVersion === 0 && currentProduct ? currentProduct : null);
+        const productToSave = finalProduct || currentProduct;
         if (!productToSave) return;
         
         const finalVersionString = formatVersion({
@@ -135,121 +136,161 @@ project_codename: ${toYamlStringLiteral(projectCodename || "none")}
             yamlFrontmatter += `  mode: global_autonomous\n`; 
             yamlFrontmatter += `  paragraph_show_headings_preference: ${engine.process.outputParagraphShowHeadings}\n`;
             if (engine.process.outputParagraphShowHeadings) {
-                yamlFrontmatter += `  paragraph_max_heading_depth_preference: ${engine.process.outputParagraphMaxHeadingDepth}\n`;
-                yamlFrontmatter += `  paragraph_numbered_headings_preference: ${engine.process.outputParagraphNumberedHeadings}\n`;
+                 yamlFrontmatter += `  paragraph_max_heading_depth: ${engine.process.outputParagraphMaxHeadingDepth}\n`;
+                 yamlFrontmatter += `  paragraph_numbered_headings: ${engine.process.outputParagraphNumberedHeadings}\n`;
             }
         }
-        yamlFrontmatter += `initial_prompt_summary: ${initialPromptSummary}
-final_version: ${finalVersionString}
-max_iterations_setting: ${engine.process.maxMajorVersions}
-prompt_input_type: ${loadedFiles && loadedFiles.length > 0 ? 'files' : 'direct_text'}
-`;
-        if (loadedFiles && loadedFiles.length > 0) {
-          yamlFrontmatter += `prompt_source_files:\n`;
-          loadedFiles.forEach(file => { yamlFrontmatter += `  - ${toYamlStringLiteral(file.name)}\n`; });
-        } else {
-          yamlFrontmatter += `prompt_source_details: ${toYamlStringLiteral(promptSourceName || 'typed_prompt')}\n`;
+
+        yamlFrontmatter += `initial_prompt_summary: ${initialPromptSummary}\n`;
+        yamlFrontmatter += `final_iteration_count: ${finalVersionString.replace('v','')}\n`;
+        yamlFrontmatter += `max_iterations_setting: ${engine.process.maxMajorVersions}\n`;
+
+        const promptInputType = loadedFiles.length > 0 ? "files" : "text";
+        yamlFrontmatter += `prompt_input_type: ${promptInputType}\n`;
+
+        if (loadedFiles.length > 0) {
+            yamlFrontmatter += `prompt_source_files:\n`;
+            loadedFiles.forEach(f => {
+                yamlFrontmatter += `  - ${toYamlStringLiteral(f.name)}\n`;
+            });
         }
-        yamlFrontmatter += `model_configuration_at_finalization:
-  model_name: '${engine.app.staticAiModelDetails.modelName}'
-  temperature: ${configAtFinalization.temperature.toFixed(2)}
-  top_p: ${configAtFinalization.topP.toFixed(2)}
-  top_k: ${configAtFinalization.topK}
----
-${contentWarning}
-`;
-        const markdownContent = yamlFrontmatter + productToSave;
+        
+        yamlFrontmatter += `model_configuration_at_finalization:\n`;
+        yamlFrontmatter += `  model_name: '${engine.app.staticAiModelDetails.modelName}'\n`;
+        yamlFrontmatter += `  temperature: ${configAtFinalization.temperature}\n`;
+        yamlFrontmatter += `  top_p: ${configAtFinalization.topP}\n`;
+        yamlFrontmatter += `  top_k: ${configAtFinalization.topK}\n`;
+        
+        const titleFromContent = inferProjectNameFromInput(productToSave, []);
+        if (titleFromContent) {
+            yamlFrontmatter += `title: ${toYamlStringLiteral(titleFromContent)}\n`;
+            yamlFrontmatter += `aliases:\n  - ${toYamlStringLiteral(titleFromContent)}\n`;
+        }
+        yamlFrontmatter += `modified: ${generationTimestamp}\n`;
+        
+        yamlFrontmatter += `---\n\n`;
+
+        const finalContent = yamlFrontmatter + contentWarning + productToSave;
+        
         const fileName = generateFileName("product", "md", {
           projectCodename: projectCodename,
           projectName: projectName,
           contentForSlug: productToSave,
           versionString: finalVersionString,
         });
-        const blob = new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' });
+
+        const blob = new Blob([finalContent], { type: 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.href = url; link.download = fileName;
-        document.body.appendChild(link); link.click();
-        document.body.removeChild(link); URL.revokeObjectURL(url);
-      }, [engine.app, engine.process]);
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    }, [engine.process, engine.app]);
 
+    const { autoSave } = engine;
+    
+    // MAIN RENDER
     return (
-        <div className="min-h-screen bg-slate-200 dark:bg-slate-900 text-slate-800 dark:text-slate-200 transition-colors duration-300 flex flex-col">
-            <AppHeader 
+        <div className="flex flex-col h-screen bg-slate-200 dark:bg-slate-900 overflow-hidden">
+            <AppHeader
                 fileInputRef={fileInputRef}
                 onImportClick={handleImportClick}
                 onFilesSelected={handleOnFilesSelected}
                 onToggleControls={toggleControlsPanel}
             />
-            
-            <Controls 
-                commonControlProps={commonControlProps} 
-                isOpen={isControlsOpen} 
-                onClose={closeControlsPanel}
-                initialTab={activeControlTab}
-                onImportClick={handleImportClick}
-            />
 
-            <main className="flex-1 flex overflow-y-hidden">
-                {!engine.process.isOutlineMode && engine.process.documentChunks && engine.process.documentChunks.length > 0 && <DocumentMap />}
-
-                <div className="flex-1 overflow-y-auto space-y-8 p-6">
-                    <ProcessStatusDisplay />
-                    <ProductOutputDisplay onSaveFinalProduct={onSaveFinalProduct} />
-                    <IterationLog
-                        onSaveLog={engine.projectIO.handleExportProject} // Reusing export project as it saves everything
-                    />
+            {autoSave.showRestorePrompt && (
+              <div className="p-3 bg-yellow-100 dark:bg-yellow-800/60 border-b border-yellow-300 dark:border-yellow-600 flex justify-between items-center text-sm">
+                <p className="text-yellow-800 dark:text-yellow-100">
+                  Found an auto-saved session for project "<strong>{autoSave.restorableStateInfo?.projectName || 'Untitled'}</strong>" from {autoSave.restorableStateInfo?.lastAutoSavedAt ? new Date(autoSave.restorableStateInfo.lastAutoSavedAt).toLocaleString() : 'a previous session'}.
+                </p>
+                <div>
+                  <button onClick={autoSave.handleRestoreAutoSave} className="font-semibold text-green-700 dark:text-green-300 hover:underline px-3 py-1">Restore</button>
+                  <button onClick={autoSave.handleClearAutoSaveAndDismiss} className="text-red-600 dark:text-red-400 hover:underline px-3 py-1">Dismiss</button>
                 </div>
+              </div>
+            )}
+            
+            <main className="flex-1 flex overflow-hidden">
+                <div className="flex-1 flex flex-col p-4 gap-4 overflow-y-auto">
+                    <ErrorBoundary>
+                        <ProcessStatusDisplay />
+                    </ErrorBoundary>
+                    <ErrorBoundary>
+                        <ProductOutputDisplay
+                            onSaveFinalProduct={onSaveFinalProduct}
+                        />
+                    </ErrorBoundary>
+                    <ErrorBoundary>
+                        <IterationLog
+                            onSaveLog={engine.projectIO.handleExportProject}
+                        />
+                    </ErrorBoundary>
+                </div>
+                
+                <div 
+                    className={`transition-all duration-300 ease-in-out ${engine.process.isDocumentMapOpen ? 'w-64' : 'w-0'} flex-shrink-0`}
+                >
+                    <div className={`w-64 h-full bg-slate-100 dark:bg-slate-800/50 p-4 border-l border-slate-300 dark:border-slate-700 overflow-y-auto ${engine.process.isDocumentMapOpen ? 'opacity-100' : 'opacity-0'}`}>
+                        <ErrorBoundary>
+                            <DocumentMap />
+                        </ErrorBoundary>
+                    </div>
+                </div>
+
             </main>
+            
+            <ErrorBoundary>
+                <Controls 
+                    commonControlProps={commonControlProps} 
+                    isOpen={isControlsOpen} 
+                    onClose={closeControlsPanel}
+                    initialTab={activeControlTab}
+                    onImportClick={handleImportClick}
+                />
+            </ErrorBoundary>
 
-            <TargetedRefinementModal
-                isOpen={engine.process.isTargetedRefinementModalOpen || false}
-                onClose={() => engine.process.updateProcessState({ isTargetedRefinementModalOpen: false })}
-                onSubmit={() => {
-                     engine.process.handleStartProcess({
-                        isTargetedRefinement: true,
-                        targetedSelection: engine.process.currentTextSelectionForRefinement || undefined,
-                        targetedInstructions: engine.process.instructionsForSelectionRefinement || undefined,
-                        userRawPromptForContextualizer: engine.process.instructionsForSelectionRefinement
-                    });
-                    engine.process.updateProcessState({ isTargetedRefinementModalOpen: false });
-                }}
-                selectedText={engine.process.currentTextSelectionForRefinement || ""}
-                instructions={engine.process.instructionsForSelectionRefinement || ""}
-                onInstructionsChange={(value) => engine.process.updateProcessState({ instructionsForSelectionRefinement: value })}
-            />
+            <ErrorBoundary>
+                <TargetedRefinementModal
+                    isOpen={engine.process.isTargetedRefinementModalOpen ?? false}
+                    onClose={() => engine.process.updateProcessState({ isTargetedRefinementModalOpen: false, currentTextSelectionForRefinement: null, instructionsForSelectionRefinement: "" })}
+                    onSubmit={() => {
+                        engine.process.handleStartProcess({
+                            isTargetedRefinement: true,
+                            targetedSelection: engine.process.currentTextSelectionForRefinement || '',
+                            targetedInstructions: engine.process.instructionsForSelectionRefinement || '',
+                        });
+                        engine.process.updateProcessState({ isTargetedRefinementModalOpen: false, currentTextSelectionForRefinement: null, instructionsForSelectionRefinement: "" });
+                    }}
+                    selectedText={engine.process.currentTextSelectionForRefinement || ''}
+                    instructions={engine.process.instructionsForSelectionRefinement || ''}
+                    onInstructionsChange={(value) => engine.process.updateProcessState({ instructionsForSelectionRefinement: value })}
+                />
+            </ErrorBoundary>
 
-            <DiffViewerModal
+            <ErrorBoundary>
+              <DiffViewerModal
                 isOpen={engine.process.isDiffViewerOpen}
                 onClose={engine.process.closeDiffViewer}
                 diffContent={engine.process.diffViewerContent}
-            />
-            
-            {engine.autoSave.showRestorePrompt && (
-                <div className="fixed bottom-4 right-4 bg-white dark:bg-slate-700 shadow-lg rounded-lg p-4 border border-primary-500/50 max-w-sm z-50">
-                    <p className="text-sm font-medium text-slate-800 dark:text-slate-100">Found Auto-Saved Session</p>
-                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
-                        Project: "{engine.autoSave.restorableStateInfo?.projectName || 'Untitled'}" saved at {engine.autoSave.restorableStateInfo?.lastAutoSavedAt ? new Date(engine.autoSave.restorableStateInfo.lastAutoSavedAt).toLocaleTimeString() : 'an unknown time'}.
-                    </p>
-                    <div className="flex justify-end gap-2 mt-3">
-                        <button onClick={engine.autoSave.handleClearAutoSaveAndDismiss} className="px-3 py-1 text-xs rounded-md border border-slate-300 dark:border-white/20 text-slate-600 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10">Dismiss</button>
-                        <button onClick={engine.autoSave.handleRestoreAutoSave} className="px-3 py-1 text-xs rounded-md bg-primary-600 text-white hover:bg-primary-700">Restore</button>
-                    </div>
-                </div>
-            )}
+              />
+            </ErrorBoundary>
         </div>
     );
 };
 
 
+// The main App component that wraps everything with the provider
 const App: React.FC = () => {
   return (
-    <ErrorBoundary>
-      <EngineProvider>
-        <AppLayout />
-      </EngineProvider>
-    </ErrorBoundary>
+    <EngineProvider>
+      <AppLayout />
+    </EngineProvider>
   );
 };
+
 
 export default App;

@@ -88,6 +88,7 @@ export const createInitialProcessState = (
   awaitingStrategyDecision: false,
   projectCodename: null,
   isDocumentMapOpen: true,
+  activeChunkId: null,
   isDiffViewerOpen: false,
   diffViewerContent: null,
   isOutlineMode: false,

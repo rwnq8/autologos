@@ -6,6 +6,7 @@ import * as storageService from '../services/storageService.ts';
 import { DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
 import { splitToChunks } from '../services/chunkingService.ts';
+import { compareVersions } from '../services/versionUtils.ts';
 
 type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'loaded' | 'not_found' | 'found_autosave' | 'cleared' | 'loading' | 'clearing';
 
@@ -16,8 +17,6 @@ type ModelParams = {
     settingsSuggestionSource: SettingsSuggestionSource;
     userManuallyAdjustedSettings: boolean;
 };
-
-const LEAN_HISTORY_COUNT = 5;
 
 export const useAutoSave = (
   processState: ProcessState,
@@ -59,183 +58,159 @@ export const useAutoSave = (
 
   const performAutoSave = useCallback(async () => {
     setAutoSaveStatus('saving');
-    const { processState: currentState, modelParams: currentModelParams } = latestDataRef.current;
-
-    const leanHistory = currentState.iterationHistory.map((entry, index, arr) => {
-        if (index < arr.length - LEAN_HISTORY_COUNT) {
-            const { productDiff, ...leanEntry } = entry;
-            return { ...leanEntry, productDiff: "(omitted for auto-save performance)" };
-        }
-        return entry;
-    });
-
-    const dataToSave: AutologosIterativeEngineData = {
-        initialPrompt: currentState.initialPrompt,
-        iterationHistory: leanHistory,
-        documentChunks: currentState.documentChunks,
-        currentFocusChunkIndex: currentState.currentFocusChunkIndex,
-        isOutlineMode: currentState.isOutlineMode,
-        outlineId: currentState.outlineId,
-        currentOutline: currentState.currentOutline,
-        finalOutline: currentState.finalOutline,
-        maxMajorVersions: currentState.maxMajorVersions,
-        temperature: currentModelParams.temperature,
-        topP: currentModelParams.topP,
-        topK: currentModelParams.topK,
-        settingsSuggestionSource: currentModelParams.settingsSuggestionSource,
-        userManuallyAdjustedSettings: currentModelParams.userManuallyAdjustedSettings,
-        selectedModelName: currentState.selectedModelName,
-        finalProduct: currentState.finalProduct,
-        currentProductBeforeHalt: currentState.currentProductBeforeHalt,
-        currentVersionBeforeHalt: currentState.currentVersionBeforeHalt,
-        promptSourceName: currentState.promptSourceName,
-        configAtFinalization: currentState.configAtFinalization,
-        loadedFiles: currentState.loadedFiles,
-        lastAutoSavedAt: Date.now(),
-        outputParagraphShowHeadings: currentState.outputParagraphShowHeadings,
-        outputParagraphMaxHeadingDepth: currentState.outputParagraphMaxHeadingDepth,
-        outputParagraphNumberedHeadings: currentState.outputParagraphNumberedHeadings,
-        isPlanActive: currentState.isPlanActive,
-        planStages: currentState.planStages,
-        currentPlanStageIndex: currentState.currentPlanStageIndex,
-        savedPlanTemplates: currentState.savedPlanTemplates,
-        currentDiffViewType: currentState.currentDiffViewType,
-        projectName: currentState.projectName,
-        projectObjective: currentState.projectObjective,
-        projectId: currentState.projectId,
-        projectCodename: currentState.projectCodename,
-        isApiRateLimited: currentState.isApiRateLimited,
-        rateLimitCooldownActiveSeconds: currentState.rateLimitCooldownActiveSeconds,
-        stagnationNudgeEnabled: currentState.stagnationNudgeEnabled,
-        isSearchGroundingEnabled: currentState.isSearchGroundingEnabled,
-        isUrlBrowsingEnabled: currentState.isUrlBrowsingEnabled,
-        inputComplexity: currentState.inputComplexity,
-        strategistInfluenceLevel: currentState.strategistInfluenceLevel, 
-        stagnationNudgeAggressiveness: currentState.stagnationNudgeAggressiveness, 
-        devLog: currentState.devLog,
-        bootstrapSamples: currentState.bootstrapSamples,
-        bootstrapSampleSizePercent: currentState.bootstrapSampleSizePercent,
-        bootstrapSubIterations: currentState.bootstrapSubIterations,
-        ensembleSubProducts: currentState.ensembleSubProducts,
-        isDocumentMapOpen: currentState.isDocumentMapOpen,
-    };
-
     try {
-      await storageService.saveState(dataToSave);
-      updateProcessState({ lastAutoSavedAt: dataToSave.lastAutoSavedAt });
+      const { processState, modelParams } = latestDataRef.current;
+
+      const engineData: AutologosIterativeEngineData = {
+        initialPrompt: processState.initialPrompt,
+        iterationHistory: processState.iterationHistory,
+        documentChunks: processState.documentChunks,
+        currentFocusChunkIndex: processState.currentFocusChunkIndex,
+        isOutlineMode: processState.isOutlineMode,
+        outlineId: processState.outlineId,
+        currentOutline: processState.currentOutline,
+        finalOutline: processState.finalOutline,
+        maxMajorVersions: processState.maxMajorVersions,
+        temperature: modelParams.temperature,
+        topP: modelParams.topP,
+        topK: modelParams.topK,
+        settingsSuggestionSource: modelParams.settingsSuggestionSource,
+        userManuallyAdjustedSettings: modelParams.userManuallyAdjustedSettings,
+        selectedModelName: processState.selectedModelName,
+        finalProduct: processState.finalProduct,
+        currentProductBeforeHalt: processState.currentProductBeforeHalt,
+        currentVersionBeforeHalt: processState.currentVersionBeforeHalt,
+        promptSourceName: processState.promptSourceName,
+        configAtFinalization: processState.configAtFinalization,
+        loadedFiles: processState.loadedFiles,
+        lastAutoSavedAt: Date.now(),
+        outputParagraphShowHeadings: processState.outputParagraphShowHeadings,
+        outputParagraphMaxHeadingDepth: processState.outputParagraphMaxHeadingDepth,
+        outputParagraphNumberedHeadings: processState.outputParagraphNumberedHeadings,
+        isPlanActive: processState.isPlanActive,
+        planStages: processState.planStages,
+        currentPlanStageIndex: processState.currentPlanStageIndex,
+        savedPlanTemplates: processState.savedPlanTemplates,
+        currentDiffViewType: processState.currentDiffViewType,
+        projectName: processState.projectName,
+        projectObjective: processState.projectObjective,
+        projectId: processState.projectId,
+        projectCodename: processState.projectCodename,
+        isApiRateLimited: processState.isApiRateLimited,
+        rateLimitCooldownActiveSeconds: processState.rateLimitCooldownActiveSeconds,
+        stagnationNudgeEnabled: processState.stagnationNudgeEnabled,
+        isSearchGroundingEnabled: processState.isSearchGroundingEnabled,
+        isUrlBrowsingEnabled: processState.isUrlBrowsingEnabled,
+        inputComplexity: processState.inputComplexity,
+        strategistInfluenceLevel: processState.strategistInfluenceLevel,
+        stagnationNudgeAggressiveness: processState.stagnationNudgeAggressiveness,
+        devLog: processState.devLog,
+        bootstrapSamples: processState.bootstrapSamples,
+        bootstrapSampleSizePercent: processState.bootstrapSampleSizePercent,
+        bootstrapSubIterations: processState.bootstrapSubIterations,
+        ensembleSubProducts: processState.ensembleSubProducts,
+        isDocumentMapOpen: processState.isDocumentMapOpen,
+        activeChunkId: processState.activeChunkId,
+      };
+
+      await storageService.saveState(engineData);
       setAutoSaveStatus('saved');
-      setTimeout(() => {
-        setAutoSaveStatus(prevStatus => prevStatus === 'saved' ? 'idle' : prevStatus);
-      }, 3000);
+      setRestorableStateInfo({ projectName: engineData.projectName, lastAutoSavedAt: engineData.lastAutoSavedAt });
     } catch (error) {
       console.error("Auto-save failed:", error);
       setAutoSaveStatus('error');
-      updateProcessState({ statusMessage: "Warning: Auto-save failed." });
     }
-  }, [updateProcessState]);
-
+  }, [latestDataRef]);
 
   const handleRestoreAutoSave = useCallback(async () => {
     setAutoSaveStatus('loading');
+    setShowRestorePrompt(false);
     try {
-      const engineData = await storageService.loadState();
-      if (engineData) {
-        if (Array.isArray(engineData.savedPlanTemplates)) {
-          overwriteUserTemplates(engineData.savedPlanTemplates);
+      const loadedData = await storageService.loadState();
+      if (loadedData) {
+        if (Array.isArray(loadedData.savedPlanTemplates)) {
+          overwriteUserTemplates(loadedData.savedPlanTemplates);
         } else {
           overwriteUserTemplates([]);
         }
-        
-        let correctedInitialPrompt = engineData.initialPrompt;
-        const loadedFilesFromData = engineData.loadedFiles || [];
+
+        let correctedInitialPrompt = loadedData.initialPrompt;
+        const loadedFilesFromData = loadedData.loadedFiles || [];
         if (loadedFilesFromData.length > 0) {
-            correctedInitialPrompt = `Input consists of ${loadedFilesFromData.length} file(s): ${loadedFilesFromData.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
+          correctedInitialPrompt = `Input consists of ${loadedFilesFromData.length} file(s): ${loadedFilesFromData.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
         }
         
-        const lastEntry = engineData.iterationHistory && engineData.iterationHistory.length > 0 ? engineData.iterationHistory[engineData.iterationHistory.length - 1] : null;
-        const lastVersion: Version = lastEntry ? { major: lastEntry.majorVersion, minor: lastEntry.minorVersion, patch: lastEntry.patchVersion } : { major: 0, minor: 0 };
+        const lastEntry = loadedData.iterationHistory && loadedData.iterationHistory.length > 0 ? [...loadedData.iterationHistory].sort((a,b) => compareVersions(b, a))[0] : null;
+        const lastVersion = lastEntry ? { major: lastEntry.majorVersion, minor: lastEntry.minorVersion, patch: lastEntry.patchVersion } : { major: 0, minor: 0, patch: 0 };
+          
+        const { product: productAtLastIter } = reconstructProduct(lastVersion, loadedData.iterationHistory, correctedInitialPrompt);
 
-        const { product: productAtLastIter } = reconstructProduct(lastVersion, engineData.iterationHistory, correctedInitialPrompt);
+        const documentChunks = loadedData.documentChunks && loadedData.documentChunks.length > 0
+            ? loadedData.documentChunks
+            : splitToChunks(loadedData.currentProductBeforeHalt || productAtLastIter || "");
 
-        // Backward compatibility for chunking
-        const documentChunks = engineData.documentChunks && engineData.documentChunks.length > 0
-            ? engineData.documentChunks
-            : splitToChunks(engineData.currentProductBeforeHalt || productAtLastIter || "");
-
-        const restoredProcessState: ProcessState = {
-          ...initialProcessStateValues,
-          ...engineData,
-          initialPrompt: correctedInitialPrompt, 
-          loadedFiles: loadedFilesFromData,
-          documentChunks: documentChunks,
-          currentFocusChunkIndex: engineData.currentFocusChunkIndex ?? null,
-          isOutlineMode: engineData.isOutlineMode ?? false,
-          outlineId: engineData.outlineId ?? null,
-          currentOutline: engineData.currentOutline ?? null,
-          finalOutline: engineData.finalOutline ?? null,
-          apiKeyStatus: initialProcessStateValues.apiKeyStatus, 
-          isProcessing: false, 
-          statusMessage: "Session restored from auto-save.",
-          currentProduct: engineData.currentProductBeforeHalt || productAtLastIter,
-          currentMajorVersion: engineData.currentVersionBeforeHalt?.major ?? lastVersion.major,
-          currentMinorVersion: engineData.currentVersionBeforeHalt?.minor ?? lastVersion.minor,
-          currentStageIteration: 0, // Reset this, it's transient
-          selectedModelName: engineData.selectedModelName || initialProcessStateValues.selectedModelName,
-          planStages: engineData.planStages || [],
-          savedPlanTemplates: engineData.savedPlanTemplates || [], 
-          iterationHistory: engineData.iterationHistory || [],
-          outputParagraphShowHeadings: engineData.outputParagraphShowHeadings ?? initialProcessStateValues.outputParagraphShowHeadings,
-          outputParagraphMaxHeadingDepth: engineData.outputParagraphMaxHeadingDepth ?? initialProcessStateValues.outputParagraphMaxHeadingDepth,
-          outputParagraphNumberedHeadings: engineData.outputParagraphNumberedHeadings ?? initialProcessStateValues.outputParagraphNumberedHeadings,
-          isPlanActive: engineData.isPlanActive ?? false,
-          currentDiffViewType: engineData.currentDiffViewType || 'words',
-          aiProcessInsight: initialProcessStateValues.aiProcessInsight, 
-          stagnationNudgeEnabled: engineData.stagnationNudgeEnabled ?? initialProcessStateValues.stagnationNudgeEnabled,
-          isSearchGroundingEnabled: engineData.isSearchGroundingEnabled ?? initialProcessStateValues.isSearchGroundingEnabled,
-          isUrlBrowsingEnabled: engineData.isUrlBrowsingEnabled ?? initialProcessStateValues.isUrlBrowsingEnabled,
-          strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, 
-          stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness,
-          devLog: engineData.devLog || [],
-          bootstrapSamples: engineData.bootstrapSamples ?? initialProcessStateValues.bootstrapSamples,
-          bootstrapSampleSizePercent: engineData.bootstrapSampleSizePercent ?? initialProcessStateValues.bootstrapSampleSizePercent,
-          bootstrapSubIterations: engineData.bootstrapSubIterations ?? initialProcessStateValues.bootstrapSubIterations,
-          ensembleSubProducts: engineData.ensembleSubProducts || null,
-          isDocumentMapOpen: engineData.isDocumentMapOpen ?? true,
+        const restoredProcessStateBase: Partial<ProcessState> = {
+            initialPrompt: correctedInitialPrompt,
+            loadedFiles: loadedFilesFromData,
+            iterationHistory: loadedData.iterationHistory || [],
+            devLog: loadedData.devLog || [],
+            documentChunks: documentChunks,
+            currentFocusChunkIndex: loadedData.currentFocusChunkIndex ?? null,
+            isOutlineMode: loadedData.isOutlineMode ?? false,
+            outlineId: loadedData.outlineId ?? null,
+            currentOutline: loadedData.currentOutline ?? null,
+            finalOutline: loadedData.finalOutline ?? null,
+            projectId: loadedData.projectId,
+            projectName: loadedData.projectName || DEFAULT_PROJECT_NAME_FALLBACK,
+            projectObjective: loadedData.projectObjective || null,
+            projectCodename: loadedData.projectCodename || null,
+            isPlanActive: loadedData.isPlanActive ?? false,
+            planStages: loadedData.planStages || [],
+            savedPlanTemplates: loadedData.savedPlanTemplates || [],
+            finalProduct: loadedData.finalProduct,
+            currentProduct: loadedData.currentProductBeforeHalt || productAtLastIter,
+            currentProductBeforeHalt: loadedData.currentProductBeforeHalt,
+            currentVersionBeforeHalt: loadedData.currentVersionBeforeHalt,
+            currentMajorVersion: loadedData.currentVersionBeforeHalt?.major ?? lastVersion.major,
+            currentMinorVersion: loadedData.currentVersionBeforeHalt?.minor ?? lastVersion.minor,
+            ensembleSubProducts: loadedData.ensembleSubProducts || null,
+            isDocumentMapOpen: loadedData.isDocumentMapOpen ?? true,
+            activeChunkId: loadedData.activeChunkId ?? null
         };
-        updateProcessState(restoredProcessState);
-
-        resetModelParameters();
         
-        updateProcessState({statusMessage: `Project "${restoredProcessState.projectName || 'Restored Project'}" loaded.`});
+        const fullNewState: ProcessState = {
+            ...initialProcessStateValues,
+            ...restoredProcessStateBase,
+            statusMessage: `Restored auto-saved session for "${restoredProcessStateBase.projectName || 'Untitled'}".`,
+            aiProcessInsight: "Session restored. Review state and resume.",
+        };
 
+        updateProcessState(fullNewState);
+        resetModelParameters();
         setAutoSaveStatus('loaded');
       } else {
-        updateProcessState({ statusMessage: "Could not find auto-saved state to restore." });
         setAutoSaveStatus('not_found');
+        updateProcessState({ statusMessage: 'Auto-saved session not found.' });
       }
-    } catch (e) {
-      console.error("Error restoring state:", e);
-      updateProcessState({ statusMessage: "Error during session restore." });
+    } catch (error) {
+      console.error("Error restoring session:", error);
       setAutoSaveStatus('error');
+      updateProcessState({ statusMessage: 'Failed to restore session.' });
     }
-    setShowRestorePrompt(false);
-    setRestorableStateInfo(null);
-  }, [updateProcessState, overwriteUserTemplates, initialProcessStateValues, initialModelParamValues, resetModelParameters]);
+  }, [updateProcessState, overwriteUserTemplates, initialProcessStateValues, resetModelParameters]);
 
   const handleClearAutoSaveAndDismiss = useCallback(async () => {
     setAutoSaveStatus('clearing');
+    setShowRestorePrompt(false);
     try {
       await storageService.clearState();
-      updateProcessState({ statusMessage: "Auto-saved session dismissed and cleared." });
+      setRestorableStateInfo(null);
       setAutoSaveStatus('cleared');
-    } catch (e) {
-      console.error("Error clearing auto-saved state:", e);
-      updateProcessState({ statusMessage: "Error clearing auto-saved state." });
+    } catch (error) {
+      console.error("Error clearing auto-saved state:", error);
       setAutoSaveStatus('error');
     }
-    setShowRestorePrompt(false);
-    setRestorableStateInfo(null);
-  }, [updateProcessState]);
+  }, []);
 
   return {
     autoSaveStatus,

@@ -110,6 +110,7 @@ export const useProjectIO = (
       bootstrapSubIterations: currentState.bootstrapSubIterations,
       ensembleSubProducts: currentState.ensembleSubProducts,
       isDocumentMapOpen: currentState.isDocumentMapOpen,
+      activeChunkId: currentState.activeChunkId,
     };
 
     const projectFile: AutologosProjectFile = {
@@ -200,6 +201,7 @@ export const useProjectIO = (
       currentMinorVersion: engineData.currentVersionBeforeHalt?.minor ?? lastVersion.minor,
       ensembleSubProducts: engineData.ensembleSubProducts || null,
       isDocumentMapOpen: engineData.isDocumentMapOpen ?? true,
+      activeChunkId: engineData.activeChunkId ?? null,
     };
 
     const fullNewState: ProcessState = {

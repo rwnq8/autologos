@@ -5,6 +5,8 @@ import { reconstructFromChunks } from '../../services/chunkingService.ts';
 import type { OutlineNode, DocumentChunk } from '../../types/index.ts';
 import { OutlineNodeDisplay } from './OutlineNodeDisplay.tsx';
 import { DocumentChunkDisplay } from './DocumentChunkDisplay.tsx';
+import LayoutSidebarLeftCollapseIcon from '../shared/LayoutSidebarLeftCollapseIcon.tsx';
+import LayoutSidebarLeftExpandIcon from '../shared/LayoutSidebarLeftExpandIcon.tsx';
 
 
 export interface ProductOutputDisplayProps {
@@ -28,7 +30,7 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
   onSaveFinalProduct,
 }) => {
   const { process: processCtx, app: appCtx } = useEngine();
-  const productDisplayRef = useRef<HTMLDivElement>(null);
+  const scrollableContainerRef = useRef<HTMLDivElement>(null);
   const [isCurrentProductDetailsExpanded, setIsCurrentProductDetailsExpanded] = useState(true);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
 
@@ -70,6 +72,37 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
       processCtx.editedProductBuffer, 
       processCtx.documentChunks
   ]);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+        (entries) => {
+            const intersectingTopEntries = entries.filter(entry => entry.isIntersecting);
+            if (intersectingTopEntries.length > 0) {
+                const latestActiveEntry = intersectingTopEntries[intersectingTopEntries.length - 1];
+                const chunkId = latestActiveEntry.target.getAttribute('data-chunk-id');
+                if (chunkId && chunkId !== processCtx.activeChunkId) {
+                    processCtx.updateProcessState({ activeChunkId: chunkId });
+                }
+            }
+        },
+        {
+            root: null,
+            rootMargin: "0px 0px -85% 0px",
+            threshold: 0
+        }
+    );
+
+    const headings = scrollableContainerRef.current?.querySelectorAll('.heading-chunk');
+    if (headings) {
+        headings.forEach(heading => observer.observe(heading));
+    }
+
+    return () => {
+        if (headings) {
+            headings.forEach(heading => observer.unobserve(heading));
+        }
+    };
+  }, [processCtx.documentChunks, processCtx.activeChunkId, processCtx.updateProcessState]);
 
   const handleCopy = () => {
     if (copyStatus !== 'idle' || !textForCopy) return;
@@ -130,6 +163,14 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
     <div className="bg-white/50 dark:bg-black/20 p-6 rounded-lg border border-slate-300/70 dark:border-white/10">
       <div className="flex flex-wrap justify-between items-center mb-2">
         <div className="flex items-center">
+            <button
+                onClick={() => processCtx.updateProcessState({ isDocumentMapOpen: !processCtx.isDocumentMapOpen })}
+                className="mr-3 p-1.5 rounded-full text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                title={processCtx.isDocumentMapOpen ? "Collapse Document Map" : "Expand Document Map"}
+                aria-label={processCtx.isDocumentMapOpen ? "Collapse Document Map" : "Expand Document Map"}
+            >
+                {processCtx.isDocumentMapOpen ? <LayoutSidebarLeftCollapseIcon /> : <LayoutSidebarLeftExpandIcon />}
+            </button>
             <h2 className="text-xl font-semibold text-primary-600 dark:text-primary-300">{productSectionTitleValue}</h2>
             <button
                 onClick={() => setIsCurrentProductDetailsExpanded(!isCurrentProductDetailsExpanded)}
@@ -175,6 +216,7 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
       )}
       
       <div 
+        ref={scrollableContainerRef}
         className="w-full bg-slate-100 dark:bg-slate-800/60 rounded-lg p-4 border border-slate-200 dark:border-white/10 min-h-[200px] max-h-[70vh] overflow-y-auto"
         onMouseUp={handleTextSelection}
         onTouchEnd={handleTextSelection}
@@ -196,7 +238,6 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
             />
         ) : (chunksForDisplay && chunksForDisplay.length > 0) ? (
             <div 
-                ref={productDisplayRef} 
                 className="text-slate-700 dark:text-slate-200 font-sans text-base leading-relaxed"
                 aria-live="polite"
             >

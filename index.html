@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Autologos Iterative Process Engine</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
   @keyframes autologosGradientAnimation {
     0% { background-position: 0% 50%; }
     50% { background-position: 100% 50%; }
@@ -67,6 +69,9 @@
       darkMode: 'media', // Use 'media' for OS-level dark mode preference
       theme: {
         extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          },
           colors: {
             primary: { "50": "#f0f9ff", "100": "#e0f2fe", "200": "#bae6fd", "300": "#7dd3fc", "400": "#38bdf8", "500": "#0ea5e9", "600": "#0284c7", "700": "#0369a1", "800": "#075985", "900": "#0c4a6e", "950": "#082f49" }
           }
@@ -89,7 +94,7 @@
 </script>
 <link rel="stylesheet" href="/index.css">
 </head>
-<body class="text-slate-700 dark:text-slate-100 antialiased">
+<body class="font-sans text-slate-700 dark:text-slate-100 antialiased">
   <div id="root"></div>
   <script type="module" src="./index.tsx"></script>
 <script type="module" src="/index.tsx"></script>

@@ -115,6 +115,7 @@ export interface ProcessState {
   projectCodename: string | null;
 
   isDocumentMapOpen: boolean;
+  activeChunkId: string | null;
   isDiffViewerOpen: boolean;
   diffViewerContent: { oldText: string, newText: string, version: string } | null;
 }
@@ -184,6 +185,7 @@ export interface AutologosIterativeEngineData extends Omit<ModelConfig, 'maxIter
   bootstrapSubIterations: number;
   ensembleSubProducts: string[] | null;
   isDocumentMapOpen?: boolean;
+  activeChunkId?: string | null;
 }
 
 export interface ProjectFileHeader {

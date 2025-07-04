@@ -30,7 +30,8 @@ export const DocumentChunkDisplay: React.FC<{ chunk: DocumentChunk }> = ({ chunk
     const wrapperProps = {
         className: "group relative py-1",
         title: sourceTooltip,
-        id: `chunk-${chunk.id}`
+        id: `chunk-${chunk.id}`,
+        'data-chunk-id': chunk.id
     };
 
     switch (chunk.type) {
@@ -42,7 +43,7 @@ export const DocumentChunkDisplay: React.FC<{ chunk: DocumentChunk }> = ({ chunk
         case 'heading_6':
             const HeadingTag = chunk.type.replace('_', '') as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
             return (
-                <div {...wrapperProps}>
+                <div {...wrapperProps} className={`${wrapperProps.className} heading-chunk`}>
                     <HeadingTag className={getHeadingClasses(chunk.type)}>
                         {chunk.content.replace(/^#+\s*/, '')} <RationaleIcon />
                     </HeadingTag>
