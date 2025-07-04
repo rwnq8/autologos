@@ -1,7 +1,7 @@
 // contexts/ModelConfigContext.tsx
 
 import React, { createContext, useContext } from 'react';
-import type { SettingsSuggestionSource, ParameterAdvice, ProcessState, ModelConfig } from '../types';
+import type { SettingsSuggestionSource, ParameterAdvice, ProcessState, ModelConfig } from '../types/index.ts';
 
 export interface ModelConfigContextType {
   temperature: number;

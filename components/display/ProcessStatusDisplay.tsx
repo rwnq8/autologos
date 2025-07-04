@@ -3,7 +3,7 @@ import { useProcessContext } from '../../contexts/ProcessContext';
 import { useApplicationContext } from '../../contexts/ApplicationContext';
 import { usePlanContext } from '../../contexts/PlanContext';
 import { useModelConfigContext } from '../../contexts/ModelConfigContext';
-import { SELECTABLE_MODELS, type ProcessState, type StrategistLLMContext } from '../../types'; 
+import { SELECTABLE_MODELS, type ProcessState, type StrategistLLMContext } from '../../types/index.ts'; 
 import * as ModelStrategyService from '../../services/ModelStrategyService';
 import { calculateQualitativeStates } from '../../services/strategistUtils'; 
 

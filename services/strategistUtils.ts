@@ -1,5 +1,5 @@
 
-import type { ProcessState, StrategistLLMContext } from '../types';
+import type { ProcessState, StrategistLLMContext } from '../types/index.ts';
 
 // Constants for qualitative state assessment
 export const MIN_CHARS_SHORT_PRODUCT_THRESHOLD = 2000;

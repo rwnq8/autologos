@@ -1,7 +1,7 @@
 // services/diagnosticsFormatter.ts
 
-import type { IterationLogEntry, ReconstructedProductResult, PromptLeakageDetailValue, ReductionDetailValue } from '../types.ts';
-import { SELECTABLE_MODELS } from '../types.ts';
+import type { IterationLogEntry, ReconstructedProductResult, PromptLeakageDetailValue, ReductionDetailValue } from '../types/index.ts';
+import { SELECTABLE_MODELS } from '../types/index.ts';
 import { formatVersion } from './versionUtils.ts';
 
 const DIAG_PROMPT_COPY_MAX_LENGTH = 100000;

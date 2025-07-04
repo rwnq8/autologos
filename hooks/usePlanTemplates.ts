@@ -1,7 +1,8 @@
 
 
+
 import { useState, useEffect, useCallback } from 'react';
-import type { PlanTemplate, PlanStage } from '../types.ts';
+import type { PlanTemplate, PlanStage } from '../types/index.ts';
 
 const PLAN_TEMPLATES_LOCALSTORAGE_KEY = "autologos_plan_templates_v2";
 

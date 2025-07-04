@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import type { DevLogEntry, SelectableModelName } from '../types.ts';
+import type { DevLogEntry, SelectableModelName } from '../types/index.ts';
 
 const API_KEY: string | undefined = (() => {
   try {

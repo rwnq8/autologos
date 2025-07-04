@@ -1,7 +1,7 @@
+
 import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
-import type { ModelConfig, StaticAiModelDetails, IterateProductResult, ApiStreamCallDetail, LoadedFile, PlanStage, SuggestedParamsResponse, RetryContext, OutlineGenerationResult, NudgeStrategy, SelectableModelName, Version } from "../types.ts";
+import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version } from "../types/index.ts";
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents, CONVERGED_PREFIX } from './promptBuilderService.ts';
-import { SELECTABLE_MODELS } from '../types.ts';
 import { urlBrowseTool } from './toolDefinitions.ts';
 
 let apiKeyWarningLoggedOnce = false;
@@ -35,7 +35,7 @@ if (API_KEY) {
     }
 } else {
     if (!apiKeyWarningLoggedOnce) {
-        console.warn("API_KEY was not found or is not configured. GoogleGenerativeAI client not initialized. Gemini API calls will be disabled.");
+        console.warn("API_KEY was not found or is not configured. GoogleGenAI client not initialized. Gemini API calls will be disabled.");
         apiKeyWarningLoggedOnce = true;
     }
     apiKeyAvailable = false;

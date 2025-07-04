@@ -1,10 +1,6 @@
 
-
-
-
-
 import React, { createContext, useContext } from 'react';
-import type { SelectableModelName, StaticAiModelDetails, ProcessState, AutologosProjectFile, IterationLogEntry } from '../types';
+import type { SelectableModelName, StaticAiModelDetails, ProcessState, AutologosProjectFile, IterationLogEntry } from '../types/index.ts';
 
 export interface ApplicationContextType {
   apiKeyStatus: 'loaded' | 'missing';

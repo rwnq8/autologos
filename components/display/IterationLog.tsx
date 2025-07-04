@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import type { IterationLogEntry, Version } from '../../types.ts'; 
+import type { IterationLogEntry, Version } from '../../types/index.ts'; 
 import { LogEntryItem } from './LogEntryItem.tsx';
 import { useProcessContext } from '../../contexts/ProcessContext.tsx';
 import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter.ts';

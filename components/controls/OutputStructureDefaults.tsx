@@ -1,7 +1,6 @@
 
-
 import React, { useState, useContext } from 'react';
-import type { CommonControlProps } from '../../types.ts';
+import type { CommonControlProps } from '../../types/index.ts';
 import { useProcessContext } from '../../contexts/ProcessContext';
 
 // OutputStructureDefaultsProps removed

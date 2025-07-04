@@ -1,14 +1,14 @@
 // hooks/useProcessState.ts
 
 import { useState, useCallback } from 'react';
-import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate } from '../types.ts';
+import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate, ModelStrategy } from '../types/index.ts';
 import * as geminiService from '../services/geminiService';
 import * as storageService from '../services/storageService';
 import { INITIAL_PROJECT_NAME_STATE } from '../services/utils';
 import { getProductSummary } from '../services/iterationUtils';
 import { CONVERGED_PREFIX } from '../services/promptBuilderService';
 import * as Diff from 'diff';
-import { compareVersions } from '../services/versionUtils';
+import { compareVersions } from '../services/versionUtils.ts';
 
 
 export const createInitialProcessState = (
@@ -78,6 +78,8 @@ export const createInitialProcessState = (
   bootstrapSampleSizePercent: 60,
   bootstrapSubIterations: 2,
   ensembleSubProducts: null,
+  awaitingStrategyDecision: false,
+  pendingStrategySuggestion: null,
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {

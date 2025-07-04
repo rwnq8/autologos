@@ -1,8 +1,9 @@
 
 
 
+
 import { useState, useEffect, useCallback } from 'react';
-import type { ModelConfig, SettingsSuggestionSource, ParameterAdvice, ModelParameterGuidance, SuggestedParamsResponse, StagnationInfo, NudgeStrategy, SelectableModelName } from '../types.ts';
+import type { ModelConfig, SettingsSuggestionSource, ParameterAdvice, ModelParameterGuidance, SuggestedParamsResponse, StagnationInfo, NudgeStrategy, SelectableModelName } from '../types/index.ts';
 import * as geminiService from '../services/geminiService.ts';
 import { FOCUSED_END_DEFAULTS } from '../services/strategyConstants.ts';
 

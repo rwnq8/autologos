@@ -1,5 +1,5 @@
 // services/versionUtils.ts
-import type { IterationLogEntry, Version } from '../types.ts';
+import type { IterationLogEntry, Version } from '../types/index.ts';
 
 /**
  * Formats a Version object into a standard string.

@@ -1,6 +1,6 @@
 // services/iterationUtils.ts
 
-import type { OutputLength, OutputFormat, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, FileProcessingInfo, IsLikelyAiErrorResponseResult } from '../types.ts';
+import type { OutputLength, OutputFormat, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, FileProcessingInfo, IsLikelyAiErrorResponseResult } from '../types/index.ts';
 import { countWords } from './textAnalysisService.ts'; // Assuming countWords is exported
 
 // --- Constants for Content Reduction Checks ---
@@ -309,11 +309,17 @@ export const getProductSummary = (product: string | null): string => {
 // Minimal placeholder for parseAndCleanJsonOutput
 export const parseAndCleanJsonOutput = (text: string): string => {
   try {
-    const match = text.match(/```(json)?([\s\S]*?)```/);
-    const jsonStr = match ? match[2] : text;
+    let jsonStr = text.trim();
+    const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
+    const match = jsonStr.match(fenceRegex);
+    if (match && match[2]) {
+      jsonStr = match[2].trim();
+    }
     const parsed = JSON.parse(jsonStr);
     return JSON.stringify(parsed, null, 2);
   } catch (e) {
+    // It's possible the AI just returns the JSON without fences
+    // if JSON is requested, so we still return the original text on failure.
     return text; // Return original text if parsing fails
   }
 };

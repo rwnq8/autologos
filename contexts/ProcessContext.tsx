@@ -18,8 +18,9 @@ import type {
   PlanTemplate,
   IterationEntryType,
   DevLogEntry,
-  Version
-} from '../types';
+  Version,
+  ModelStrategy
+} from '../types/index.ts';
 
 export type AddLogEntryType = (logData: {
   majorVersion: number;
@@ -65,7 +66,7 @@ export interface ProcessContextType extends Omit<ProcessState,
 > {
   updateProcessState: (updates: Partial<ProcessState>) => void; 
   handleLoadedFilesChange: (files: LoadedFile[], action?: 'add' | 'remove' | 'clear') => void;
-  handleReset: (baseConfig: ModelConfig, templates: PlanTemplate[]) => Promise<void>; 
+  handleReset: () => Promise<void>; 
   handleStartProcess: (options?: { 
     isTargetedRefinement?: boolean; 
     targetedSelection?: string; 
@@ -81,6 +82,8 @@ export interface ProcessContextType extends Omit<ProcessState,
   openTargetedRefinementModal: (selectedText: string) => void;
   toggleEditMode: (forceOff?: boolean) => void; 
   saveManualEdits: () => Promise<void>; 
+  handleAcceptStrategy: () => Promise<void>;
+  handleIgnoreStrategy: () => Promise<void>;
 
   initialPrompt: string;
   currentProduct: string | null;
@@ -112,7 +115,7 @@ export interface ProcessContextType extends Omit<ProcessState,
   savedPlanTemplates: PlanTemplate[]; 
   currentDiffViewType: DiffViewType;
   inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
-  currentModelForIteration?: SelectableModelName;
+  currentModelForIteration: SelectableModelName;
   activeMetaInstructionForNextIter?: string;
   strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
   stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
@@ -123,6 +126,8 @@ export interface ProcessContextType extends Omit<ProcessState,
   addDevLogEntry: (newEntryData: Omit<DevLogEntry, 'id' | 'timestamp' | 'lastModified'>) => void;
   updateDevLogEntry: (updatedEntry: DevLogEntry) => void;
   deleteDevLogEntry: (entryId: string) => void;
+  awaitingStrategyDecision: boolean;
+  pendingStrategySuggestion: ModelStrategy | null;
 }
 
 const ProcessContext = createContext<ProcessContextType | undefined>(undefined);

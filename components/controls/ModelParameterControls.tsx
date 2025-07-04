@@ -1,8 +1,10 @@
-import React, { useState, useContext } from 'react';
-import type { CommonControlProps, ProcessState } from '../../types.ts';
+import React, { useState } from 'react';
+import type { CommonControlProps, ProcessState } from '../../types/index.ts';
 import { useModelConfigContext } from '../../contexts/ModelConfigContext';
 import { usePlanContext } from '../../contexts/PlanContext';
 import { useProcessContext } from '../../contexts/ProcessContext';
+import ChevronDownIcon from '../shared/ChevronDownIcon.tsx';
+import ChevronUpIcon from '../shared/ChevronUpIcon.tsx';
 
 
 const ModelParameterControls: React.FC<CommonControlProps & { children?: React.ReactNode }> = ({
@@ -236,7 +238,7 @@ This setting does NOT apply in Plan Mode.`;
                 aria-controls="advanced-model-settings-details"
             >
                 Advanced Autonomous Strategy Settings
-                <span>{isAdvancedSettingsExpanded ? '▲' : '▼'}</span>
+                <span>{isAdvancedSettingsExpanded ? <ChevronUpIcon/> : <ChevronDownIcon/>}</span>
             </button>
             {isAdvancedSettingsExpanded && (
                 <div id="advanced-model-settings-details" className="mt-2 space-y-4 p-3 bg-slate-100/50 dark:bg-black/10 rounded-md border border-slate-200 dark:border-white/5 animate-fadeIn">

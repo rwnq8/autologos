@@ -1,5 +1,6 @@
 
-import type { AutologosIterativeEngineData } from '../types.ts';
+
+import type { AutologosIterativeEngineData } from '../types/index.ts';
 
 const DB_NAME = 'AutologosIterativeEngineDB';
 const STORE_NAME = 'appStateStore';

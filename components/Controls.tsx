@@ -1,8 +1,9 @@
+
 import React, { useState, useEffect } from 'react';
-import type { CommonControlProps } from '../types.ts'; 
+import type { CommonControlProps } from '../types/index.ts'; 
 
 import InputDataControls from './controls/InputDataControls.tsx';
-import IterativePlanEditor from './controls/IterativePlanEditor.tsx';
+import { IterativePlanEditor } from './controls/IterativePlanEditor.tsx';
 import ModelParameterControls from './controls/ModelParameterControls.tsx';
 import OutputStructureDefaults from './controls/OutputStructureDefaults.tsx';
 import DevLogControls from './controls/DevLogControls.tsx';
@@ -12,9 +13,10 @@ interface ControlsProps {
   isOpen: boolean;
   onClose: () => void;
   initialTab: 'run' | 'plan' | 'devlog';
+  onImportClick: () => void;
 }
 
-const Controls: React.FC<ControlsProps> = ({ commonControlProps, isOpen, onClose, initialTab }) => {
+const Controls: React.FC<ControlsProps> = ({ commonControlProps, isOpen, onClose, initialTab, onImportClick }) => {
   const [activeTab, setActiveTab] = useState(initialTab);
 
   useEffect(() => {
@@ -41,8 +43,8 @@ const Controls: React.FC<ControlsProps> = ({ commonControlProps, isOpen, onClose
       <div className={`fixed inset-y-0 left-0 w-full max-w-lg bg-slate-100 dark:bg-slate-800 shadow-xl z-40 transform transition-transform duration-300 ease-in-out ${isOpen ? 'translate-x-0' : '-translate-x-full'} flex flex-col`}>
         <div className="flex justify-between items-center p-4 border-b border-slate-300 dark:border-slate-600 flex-shrink-0">
           <h2 className="text-lg font-semibold text-primary-600 dark:text-primary-300">Controls</h2>
-          <button onClick={onClose} className="p-1 rounded-full text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700" aria-label="Close controls panel">
-            <span className="w-6 h-6">✕</span>
+          <button onClick={onClose} className="px-3 py-1 rounded-md text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700" aria-label="Close controls panel">
+            Close
           </button>
         </div>
         
@@ -56,7 +58,7 @@ const Controls: React.FC<ControlsProps> = ({ commonControlProps, isOpen, onClose
             {activeTab === 'run' && (
               <div id="run-panel" role="tabpanel" className="p-6 space-y-6 animate-fadeIn">
                 
-                <InputDataControls {...commonControlProps} />
+                <InputDataControls {...commonControlProps} onImportClick={onImportClick} />
                 <hr className="border-slate-300 dark:border-slate-600"/>
                 <ModelParameterControls {...commonControlProps}>
                   <OutputStructureDefaults {...commonControlProps} />

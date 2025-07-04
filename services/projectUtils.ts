@@ -1,5 +1,6 @@
 
-import type { LoadedFile } from '../types.ts';
+
+import type { LoadedFile } from '../types/index.ts';
 
 const STOP_WORDS = new Set([
   "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "he", "she", "it", "they", "them", "their", "theirs", "his", "hers", "its",

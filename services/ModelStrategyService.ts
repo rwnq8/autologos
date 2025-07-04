@@ -1,8 +1,8 @@
-import type { ProcessState, ModelConfig, SelectableModelName, IterationLogEntry, PlanStage, StagnationInfo, ModelStrategy, LoadedFile, AiResponseValidationInfo, StrategistLLMContext } from '../types.ts';
+import type { ProcessState, ModelConfig, SelectableModelName, IterationLogEntry, PlanStage, StagnationInfo, ModelStrategy, LoadedFile, AiResponseValidationInfo, StrategistLLMContext } from '../types/index.ts';
 import { CREATIVE_DEFAULTS, GENERAL_BALANCED_DEFAULTS, DEFAULT_MODEL_NAME } from './geminiService.ts';
 import { CONVERGED_PREFIX } from './promptBuilderService.ts';
 import { STAGNATION_TEMP_NUDGE_LIGHT, STAGNATION_TOPP_NUDGE_LIGHT, STAGNATION_TOPK_NUDGE_FACTOR_LIGHT, STAGNATION_TEMP_NUDGE_HEAVY, STAGNATION_TOPP_NUDGE_HEAVY, STAGNATION_TOPK_NUDGE_FACTOR_HEAVY, DETERMINISTIC_TARGET_ITERATION, FOCUSED_END_DEFAULTS } from './strategyConstants.ts';
-import { SELECTABLE_MODELS } from '../types.ts';
+import { SELECTABLE_MODELS } from '../types/index.ts';
 
 
 export const sanitizeConfig = (config: ModelConfig, rationaleParts: string[]): ModelConfig => {

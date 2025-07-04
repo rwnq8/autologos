@@ -1,7 +1,7 @@
 // hooks/useAutoSave.ts
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName, Version } from '../types.ts';
+import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFile, SettingsSuggestionSource, PlanTemplate, SelectableModelName, Version } from '../types/index.ts';
 import * as storageService from '../services/storageService.ts';
 import { DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';

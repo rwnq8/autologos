@@ -1,10 +1,21 @@
+
+
+
+
+
+
 import React, { useState, useContext } from 'react'; 
-import type { LoadedFile, CommonControlProps } from '../../types.ts';
+import type { LoadedFile, CommonControlProps } from '../../types/index.ts';
 import { useProcessContext } from '../../contexts/ProcessContext.tsx';
 
-const InputDataControls: React.FC<CommonControlProps> = ({
+interface InputDataControlsProps extends CommonControlProps {
+  onImportClick: () => void;
+}
+
+const InputDataControls: React.FC<InputDataControlsProps> = ({
   commonInputClasses, 
   commonButtonClasses,
+  onImportClick,
 }) => {
   const processCtx = useProcessContext();
 
@@ -57,9 +68,17 @@ const InputDataControls: React.FC<CommonControlProps> = ({
         Currently Loaded Input Data ({processCtx.loadedFiles.length})
       </label>
       {processCtx.loadedFiles.length === 0 ? (
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 min-h-[2.5rem] bg-slate-50 dark:bg-black/10 p-2 rounded-md border border-slate-200 dark:border-white/5">
-          No files loaded. Use 'Import / Load Data' to add input.
-        </p>
+        <div className="text-center p-4 bg-slate-50 dark:bg-black/10 rounded-md border-2 border-dashed border-slate-300 dark:border-slate-600">
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
+                No files loaded.
+            </p>
+            <button 
+                onClick={onImportClick} 
+                className={`${commonButtonClasses} bg-primary-500 hover:bg-primary-600 text-white font-semibold`}
+            >
+                Import / Load Data to Add Input
+            </button>
+        </div>
       ) : (
         <div className="mt-1 space-y-1.5 max-h-48 overflow-y-auto bg-slate-50 dark:bg-black/10 p-2 rounded-md border border-slate-200 dark:border-white/5">
           {processCtx.loadedFiles.map((file) => (
@@ -100,20 +119,12 @@ const InputDataControls: React.FC<CommonControlProps> = ({
       {processCtx.loadedFiles.length > 1 && (
         <div className="mt-4 pt-4 border-t border-slate-300/70 dark:border-white/10">
             <h4 className="text-md font-medium text-primary-600 dark:text-primary-300 mb-1">
-                Ensemble Synthesis (via Bootstrapping)
+                Ensemble Synthesis
             </h4>
             <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-                For multi-file inputs, this optional step creates a more stable starting document. It runs multiple AI sub-processes on random samples of your files, then integrates the results. This ensemble method reduces variance and prevents the final output from being overly influenced by any single file, leading to a more robust and representative foundation.
+               This optional step creates a more stable starting document from multiple files. It runs AI sub-processes on random samples of your files, then integrates the results.
+               The 'Generate Ensemble Base' button is now located in the main header for easier access.
             </p>
-            <button
-                onClick={() => processCtx.handleBootstrapSynthesis()}
-                disabled={processCtx.isProcessing}
-                className={`${commonButtonClasses} w-full bg-teal-500/10 hover:bg-teal-500/20 dark:bg-teal-600/30 dark:hover:bg-teal-700/40 text-teal-700 dark:text-teal-200`}
-                title="Run an ensemble pre-processing step to create a robust synthesized document from random samples of the loaded files."
-                aria-label="Generate synthesized base document using ensemble method"
-            >
-                Generate Ensemble-Synthesized Base
-            </button>
         </div>
       )}
     </div>

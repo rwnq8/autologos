@@ -1,5 +1,6 @@
+
 import * as Diff from 'diff';
-import type { IterationLogEntry, ReconstructedProductResult, Version } from '../types.ts';
+import type { IterationLogEntry, ReconstructedProductResult, Version } from '../types/index.ts';
 import { compareVersions, formatVersion } from './versionUtils.ts';
 
 const normalizeNewlines = (str: string): string => {

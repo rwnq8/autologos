@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { IterationLogEntry, ReconstructedProductResult, Version, IterationEntryType } from '../../types.ts';
+import type { IterationLogEntry, ReconstructedProductResult, Version, IterationEntryType } from '../../types/index.ts';
 import * as GeminaiDiff from 'diff';
 import { useProcessContext } from '../../contexts/ProcessContext.tsx';
 import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter.ts'; 

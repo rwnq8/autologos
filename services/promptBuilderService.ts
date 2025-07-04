@@ -1,6 +1,7 @@
 
 
-import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult, Version } from '../types.ts';
+
+import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult, Version } from '../types/index.ts';
 import { formatVersion } from './versionUtils.ts';
 
 export const CONVERGED_PREFIX = "CONVERGED:";

@@ -1,7 +1,7 @@
 
 
 import React, { createContext, useContext } from 'react';
-import type { PlanStage, PlanTemplate, ProcessState } from '../types';
+import type { PlanStage, PlanTemplate, ProcessState } from '../types/index.ts';
 
 export interface PlanContextType {
   isPlanActive: boolean;

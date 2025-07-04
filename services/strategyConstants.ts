@@ -1,4 +1,4 @@
-import type { ModelConfig } from '../types.ts';
+import type { ModelConfig } from '../types/index.ts';
 
 // Nudge values for light adjustments
 export const STAGNATION_TEMP_NUDGE_LIGHT = 0.05;

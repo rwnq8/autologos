@@ -1,12 +1,12 @@
 // hooks/useProjectIO.ts
 
 import { useCallback, useRef, useEffect } from 'react';
-import type { ProcessState, AutologosProjectFile, AutologosIterativeEngineData, ProjectFileHeader, ModelConfig, LoadedFile, PlanTemplate, SettingsSuggestionSource, SelectableModelName, IterationLogEntry, Version } from '../types.ts';
-import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION, SELECTABLE_MODELS } from '../types.ts';
+import type { ProcessState, AutologosProjectFile, AutologosIterativeEngineData, ProjectFileHeader, ModelConfig, LoadedFile, PlanTemplate, SettingsSuggestionSource, SelectableModelName, IterationLogEntry, Version } from '../types/index.ts';
+import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION, SELECTABLE_MODELS } from '../types/index.ts';
 import { generateFileName, DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
 import * as GeminaiService from '../services/geminiService.ts';
-import { formatVersion } from '../services/versionUtils.ts';
+import { formatVersion, compareVersions } from '../services/versionUtils.ts';
 
 
 function uuidv4() {
@@ -147,7 +147,7 @@ export const useProjectIO = (
         correctedInitialPrompt = `Input consists of ${loadedFilesFromData.length} file(s): ${loadedFilesFromData.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
     }
 
-    const lastEntry = engineData.iterationHistory && engineData.iterationHistory.length > 0 ? [...engineData.iterationHistory].sort((a,b) => b.majorVersion - a.majorVersion || b.minorVersion - a.minorVersion)[0] : null;
+    const lastEntry = engineData.iterationHistory && engineData.iterationHistory.length > 0 ? [...engineData.iterationHistory].sort((a,b) => compareVersions(b, a))[0] : null;
     const lastVersion = lastEntry ? { major: lastEntry.majorVersion, minor: lastEntry.minorVersion, patch: lastEntry.patchVersion } : { major: 0, minor: 0 };
     
     const { product: productAtLastIter } = reconstructProduct(lastVersion, engineData.iterationHistory, correctedInitialPrompt);

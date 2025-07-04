@@ -1,5 +1,5 @@
 import React, { useState, useContext, useCallback, useMemo } from 'react';
-import type { DevLogEntry, DevLogEntryType, DevLogEntryStatus, CommonControlProps } from '../../types';
+import type { DevLogEntry, DevLogEntryType, DevLogEntryStatus, CommonControlProps } from '../../types/index.ts';
 import { useProcessContext } from '../../contexts/ProcessContext';
 
 const DevLogControls: React.FC<CommonControlProps> = ({ 
