@@ -123,6 +123,8 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
         minor: logEntry.minorVersion,
         patch: logEntry.patchVersion,
     };
+    
+    const isHalted = logEntry.status?.includes('Halt');
 
   return (
     <div className={`p-3 rounded-md transition-colors duration-200 ${isExpanded ? 'bg-white dark:bg-slate-800 shadow-lg border border-primary-500/30 dark:border-primary-500/50' : 'bg-slate-100/70 dark:bg-black/10 hover:bg-slate-200/70 dark:hover:bg-black/20'}`}>
@@ -149,8 +151,8 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
         {isExpanded && (
             <div className="mt-3 pt-3 border-t border-slate-300/80 dark:border-white/10 space-y-4 animate-fadeIn">
                 <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={() => onRewind(versionForActions)} disabled={isProcessing} className={neutralButtonClasses}>Rewind to this Version</button>
-                    <button onClick={() => onExportIterationMarkdown(versionForActions)} disabled={isProcessing} className={neutralButtonClasses}>Export Markdown</button>
+                    <button onClick={() => onRewind(versionForActions)} disabled={isProcessing || isHalted} className={neutralButtonClasses} title={isHalted ? "Cannot rewind to a halted version" : ""}>Rewind to this Version</button>
+                    <button onClick={() => onExportIterationMarkdown(versionForActions)} disabled={isProcessing || isHalted} className={neutralButtonClasses} title={isHalted ? "Cannot export a halted version" : ""}>Export Markdown</button>
                     <button onClick={handleCopySingleDiagnostic} className={`${neutralButtonClasses} min-w-[120px]`}>
                        {localCopyStatus || '[Copy] Diagnostics'}
                     </button>

@@ -1,6 +1,11 @@
 
+
+
+
+
+
 import React, { useRef, useState, useCallback } from 'react';
-import { generateFileName } from './services/utils.ts';
+import { toYamlStringLiteral, generateFileName } from './services/utils.ts';
 import Controls from './components/Controls.tsx';
 import TargetedRefinementModal from './components/modals/TargetedRefinementModal.tsx';
 import AppHeader from './components/AppHeader.tsx';
@@ -8,7 +13,6 @@ import ErrorBoundary from './components/shared/ErrorBoundary.tsx';
 import ProcessStatusDisplay from './components/display/ProcessStatusDisplay.tsx';
 import ProductOutputDisplay from './components/display/ProductOutputDisplay.tsx';
 import IterationLog from './components/display/IterationLog.tsx';
-import StrategyInsightCard from './components/display/StrategyInsightCard.tsx';
 import { EngineProvider, useEngine } from './contexts/ApplicationContext.tsx';
 import { inferProjectNameFromInput } from './services/projectUtils.ts';
 import { reconstructProduct } from './services/diffService.ts';
@@ -52,14 +56,88 @@ const AppLayout: React.FC = () => {
         const productToSave = engine.process.finalProduct || (engine.process.currentMajorVersion === 0 && engine.process.currentProduct ? engine.process.currentProduct : null);
         if (!productToSave) return;
         
-        const fileName = generateFileName(engine.process.projectName, "product", "md");
-        const blob = new Blob([productToSave], { type: 'text/markdown;charset=utf-8' });
+        // If configAtFinalization is missing (e.g. saving an initial ensemble product), perform a simple save.
+        if (!engine.app.staticAiModelDetails || !engine.process.configAtFinalization) {
+          const fileName = generateFileName(engine.process.projectName, "product", "md");
+          const blob = new Blob([productToSave], { type: 'text/markdown;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url; link.download = fileName;
+          document.body.appendChild(link); link.click();
+          document.body.removeChild(link); URL.revokeObjectURL(url);
+          return;
+        }
+
+        // Rich YAML save for completed processes
+        const generationTimestamp = new Date().toISOString();
+        const initialPromptSummary = toYamlStringLiteral((engine.process.initialPrompt.length > 150 ? engine.process.initialPrompt.substring(0, 147) + "..." : engine.process.initialPrompt).replace(/\n+/g, ' ').trim());
+        let contentWarning = (!productToSave.trim() || productToSave.trim().length < 10) ? `\nWARNING_NOTE: The main product content below appears to be empty or very short...\n` : "";
+        
+        let overallIterationCountForYAML = engine.process.currentMajorVersion;
+        
+        let yamlFrontmatter = `---
+export_type: FINAL_PRODUCT
+generation_timestamp: ${generationTimestamp}
+project_name: ${toYamlStringLiteral(engine.app.projectName || "Untitled Project")}
+`;
+        if (engine.process.isPlanActive && engine.process.planStages.length > 0) {
+            yamlFrontmatter += `autologos_process_plan_active: true\n`;
+            yamlFrontmatter += `autologos_process_plan_stages:\n`;
+            engine.process.planStages.forEach((stage, index) => { 
+                yamlFrontmatter += `  - stage: ${index + 1}\n`;
+                yamlFrontmatter += `    format: ${stage.format}\n`;
+                yamlFrontmatter += `    length: ${stage.length}\n`;
+                yamlFrontmatter += `    complexity: ${stage.complexity}\n`;
+                yamlFrontmatter += `    target_iterations: ${stage.stageIterations}\n`;
+                if (stage.format === 'paragraph') {
+                    yamlFrontmatter += `    paragraph_show_headings: ${stage.outputParagraphShowHeadings ?? engine.process.outputParagraphShowHeadings}\n`;
+                    if (stage.outputParagraphShowHeadings ?? engine.process.outputParagraphShowHeadings) {
+                        yamlFrontmatter += `    paragraph_max_heading_depth: ${stage.outputParagraphMaxHeadingDepth ?? engine.process.outputParagraphMaxHeadingDepth}\n`;
+                        yamlFrontmatter += `    paragraph_numbered_headings: ${stage.outputParagraphNumberedHeadings ?? engine.process.outputParagraphNumberedHeadings}\n`;
+                    }
+                }
+                if (stage.customInstruction) {
+                     yamlFrontmatter += `    custom_instruction: ${toYamlStringLiteral(stage.customInstruction)}\n`;
+                }
+            });
+        } else {
+            yamlFrontmatter += `autologos_process_plan_active: false\n`;
+            yamlFrontmatter += `autologos_process_settings:\n`;
+            yamlFrontmatter += `  mode: global_autonomous\n`; 
+            yamlFrontmatter += `  paragraph_show_headings_preference: ${engine.process.outputParagraphShowHeadings}\n`;
+            if (engine.process.outputParagraphShowHeadings) {
+                yamlFrontmatter += `  paragraph_max_heading_depth_preference: ${engine.process.outputParagraphMaxHeadingDepth}\n`;
+                yamlFrontmatter += `  paragraph_numbered_headings_preference: ${engine.process.outputParagraphNumberedHeadings}\n`;
+            }
+        }
+        yamlFrontmatter += `initial_prompt_summary: ${initialPromptSummary}
+final_iteration_count: ${overallIterationCountForYAML}
+max_iterations_setting: ${engine.process.maxMajorVersions}
+prompt_input_type: ${engine.process.loadedFiles && engine.process.loadedFiles.length > 0 ? 'files' : 'direct_text'}
+`;
+        if (engine.process.loadedFiles && engine.process.loadedFiles.length > 0) {
+          yamlFrontmatter += `prompt_source_files:\n`;
+          engine.process.loadedFiles.forEach(file => { yamlFrontmatter += `  - ${toYamlStringLiteral(file.name)}\n`; });
+        } else {
+          yamlFrontmatter += `prompt_source_details: ${toYamlStringLiteral(engine.process.promptSourceName || 'typed_prompt')}\n`;
+        }
+        yamlFrontmatter += `model_configuration_at_finalization:
+  model_name: '${engine.app.staticAiModelDetails.modelName}'
+  temperature: ${engine.process.configAtFinalization.temperature.toFixed(2)}
+  top_p: ${engine.process.configAtFinalization.topP.toFixed(2)}
+  top_k: ${engine.process.configAtFinalization.topK}
+---
+${contentWarning}
+`;
+        const markdownContent = yamlFrontmatter + productToSave;
+        const fileName = generateFileName(engine.app.projectName, "product", "md");
+        const blob = new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url; link.download = fileName;
         document.body.appendChild(link); link.click();
         document.body.removeChild(link); URL.revokeObjectURL(url);
-    }, [engine.process.finalProduct, engine.process.currentMajorVersion, engine.process.currentProduct, engine.process.projectName]);
+      }, [engine.app, engine.process]);
 
     return (
         <div className="min-h-screen bg-slate-200 dark:bg-slate-900 text-slate-800 dark:text-slate-200 transition-colors duration-300 flex flex-col">
@@ -80,13 +158,6 @@ const AppLayout: React.FC = () => {
 
             <main className="flex-1 overflow-y-auto">
                  <div className="space-y-8 p-6">
-                    {engine.process.awaitingStrategyDecision && engine.process.pendingStrategySuggestion && (
-                        <StrategyInsightCard 
-                            suggestion={engine.process.pendingStrategySuggestion}
-                            onAccept={engine.process.handleAcceptStrategy}
-                            onIgnore={engine.process.handleIgnoreStrategy}
-                        />
-                    )}
                     <ProcessStatusDisplay />
                     <ProductOutputDisplay onSaveFinalProduct={onSaveFinalProduct} />
                     <IterationLog

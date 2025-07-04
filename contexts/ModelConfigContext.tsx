@@ -19,6 +19,7 @@ export interface ModelConfigContextType {
   onMaxIterationsChange: (value: number) => void;
   setUserManuallyAdjustedSettings: (value: boolean) => void;
   getUserSetBaseConfig: () => ModelConfig;
+  resetModelParametersToDefaults: (baseConfig?: ModelConfig) => void;
 }
 
 const ModelConfigContext = createContext<ModelConfigContextType | undefined>(undefined);

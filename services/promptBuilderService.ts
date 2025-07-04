@@ -1,6 +1,8 @@
 
 
 
+
+
 import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult, Version } from '../types/index.ts';
 import { formatVersion } from './versionUtils.ts';
 
@@ -119,6 +121,8 @@ Your output for this version MUST be a de-duplicated synthesis. This synthesized
   
   if (isInitialProductEmptyAndFilesLoaded && majorVersion === 1) {
      coreUserInstructions += `Task: Initial Document Synthesis from Files.\nBased on the full content of all provided files, your SOLE objective is to create a single, comprehensive, coherent, and de-duplicated initial document.`;
+  } else if (isTargetedRefinementMode && targetedSelectionText && instructionsForTargetedSelection) {
+      coreUserInstructions += `Task: Targeted Refinement.\nBased ON THE FULL 'CURRENT STATE OF PRODUCT' for context, your SOLE objective is to rewrite ONLY the following specific text selection based on the provided instructions. You MUST output the entire new product, with only the selected part changed.\n\n---TEXT SELECTION TO REFINE---\n${targetedSelectionText}\n-----------------------------\n\n---INSTRUCTIONS FOR THIS SELECTION---\n${instructionsForTargetedSelection}\n----------------------------------`;
   } else {
       coreUserInstructions += `Your task is to refine the "Current State of Product". Analyze it and implement the most impactful improvements to produce the next version.`;
   }
@@ -155,7 +159,11 @@ export const buildTextualPromptPart = (
         promptParts.push(fileManifestContentForPrompt);
     }
 
-    const prevVersion = { ...currentVersion, major: currentVersion.major - 1, minor: 0 };
+    const prevVersion = { ...currentVersion, major: currentVersion.major, minor: currentVersion.minor > 0 ? currentVersion.minor - 1 : 0 };
+    if (currentVersion.minor === 0 && currentVersion.major > 0) {
+        prevVersion.major = currentVersion.major - 1;
+    }
+
     const productContextTitle = `---CURRENT STATE OF PRODUCT (${formatVersion(prevVersion)})---`;
    
     promptParts.push(productContextTitle);

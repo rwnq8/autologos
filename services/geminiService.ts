@@ -1,4 +1,6 @@
 
+
+
 import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
 import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version } from "../types/index.ts";
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents, CONVERGED_PREFIX } from './promptBuilderService.ts';
@@ -15,6 +17,15 @@ if (!API_KEY) {
   // Per guidelines, initialize directly. The `ai` null check in each function will handle cases where this might fail.
   ai = new GoogleGenAI({ apiKey: API_KEY });
 }
+
+const getSanitizedMimeType = (mimeType: string): string => {
+    // The Gemini API does not support 'application/octet-stream' for inline text content.
+    // As this application treats all files as text, we can safely default it to 'text/plain'.
+    if (mimeType === 'application/octet-stream') {
+        return 'text/plain';
+    }
+    return mimeType;
+};
 
 
 export const DEFAULT_MODEL_NAME: SelectableModelName = 'gemini-2.5-flash-preview-04-17';
@@ -73,7 +84,7 @@ export const generateInitialOutline = async (fileManifest: string, loadedFiles: 
     const { systemInstruction, coreUserInstructions } = getOutlineGenerationPromptComponents(fileManifest);
     
     const requestParts: Part[] = loadedFiles.map(file => ({
-      inlineData: { mimeType: file.mimeType || 'text/plain', data: toBase64(file.content) }
+      inlineData: { mimeType: getSanitizedMimeType(file.mimeType || 'text/plain'), data: toBase64(file.content) }
     }));
     requestParts.push({ text: coreUserInstructions });
 
@@ -186,7 +197,7 @@ export const iterateProduct = async ({
         const initialUserParts: Part[] = [];
         if (isInitialProductEmptyAndFilesLoaded && currentIterationOverall === 1) {
             loadedFiles.forEach(file => {
-                initialUserParts.push({ inlineData: { mimeType: file.mimeType || 'text/plain', data: toBase64(file.content) }});
+                initialUserParts.push({ inlineData: { mimeType: getSanitizedMimeType(file.mimeType || 'text/plain'), data: toBase64(file.content) }});
             });
         }
         initialUserParts.push({ text: fullUserPromptText });

@@ -1,4 +1,3 @@
-
 import React from 'react'; 
 import type { LoadedFile, CommonControlProps } from '../../types/index.ts';
 import { useEngine } from '../../contexts/ApplicationContext.tsx';
@@ -52,7 +51,7 @@ const InputDataControls: React.FC<InputDataControlsProps> = ({
       />
       {processCtx.loadedFiles.length > 0 && (
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Initial prompt is auto-generated from loaded files. Clear files to edit directly.
+              Initial prompt is auto-generated from loaded files. You can add more files from other directories by clicking 'Import' again. Clear all files to edit the prompt directly.
           </p>
       )}
 

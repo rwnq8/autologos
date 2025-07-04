@@ -1,7 +1,9 @@
 
 
+
 import React, { createContext, useContext, useCallback, useState, useEffect, useMemo } from 'react';
 import type { ProcessState, ModelConfig, SettingsSuggestionSource, StaticAiModelDetails, SelectableModelName, AutologosProjectFile, PlanTemplate, IterationLogEntry, Version, PlanStage, LoadedFile } from '../types/index.ts';
+import { SELECTABLE_MODELS } from '../types/index.ts';
 import type { ModelConfigContextType } from './ModelConfigContext.tsx';
 import { useProcessState, createInitialProcessState } from '../hooks/useProcessState.ts';
 import { useModelParameters } from '../hooks/useModelParameters.ts';
@@ -12,7 +14,7 @@ import { useAutoSave } from '../hooks/useAutoSave.ts';
 import * as geminiService from '../services/geminiService.ts';
 import { getAiModelDetails, isApiKeyAvailable } from '../services/geminiService.ts';
 import { inferProjectNameFromInput } from '../services/projectUtils.ts';
-import { generateFileName } from '../services/utils.ts';
+import { generateFileName, toYamlStringLiteral } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
 import { formatVersion } from '../services/versionUtils.ts';
 
@@ -31,8 +33,6 @@ interface EngineContextType {
     handleStartProcess: ReturnType<typeof useIterativeLogic>['handleStartProcess'];
     handleHaltProcess: ReturnType<typeof useIterativeLogic>['handleHaltProcess'];
     handleBootstrapSynthesis: ReturnType<typeof useIterativeLogic>['handleBootstrapSynthesis'];
-    handleAcceptStrategy: ReturnType<typeof useIterativeLogic>['handleAcceptStrategy'];
-    handleIgnoreStrategy: ReturnType<typeof useIterativeLogic>['handleIgnoreStrategy'];
     updateProcessState: ReturnType<typeof useProcessState>['updateProcessState'];
     handleLoadedFilesChange: ReturnType<typeof useProcessState>['handleLoadedFilesChange'];
     handleReset: () => Promise<void>;
@@ -126,7 +126,20 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, [processActions]);
 
-  const autoSave = useAutoSave(processState, modelParams, processActions.updateProcessState, planTemplates.overwriteUserTemplates, createInitialProcessState(processState.apiKeyStatus, processState.selectedModelName), modelParams, modelParams.setUserManuallyAdjustedSettings);
+  const setLoadedModelParams = useCallback((params: {
+    temperature: number;
+    topP: number;
+    topK: number;
+    settingsSuggestionSource: SettingsSuggestionSource;
+    userManuallyAdjustedSettings: boolean;
+  }) => {
+      modelParams.handleTemperatureChange(params.temperature);
+      modelParams.handleTopPChange(params.topP);
+      modelParams.handleTopKChange(params.topK);
+      modelParams.setUserManuallyAdjustedSettings(params.userManuallyAdjustedSettings);
+  }, [modelParams]);
+
+  const autoSave = useAutoSave(processState, modelParams, processActions.updateProcessState, planTemplates.overwriteUserTemplates, createInitialProcessState(processState.apiKeyStatus, processState.selectedModelName), modelParams, setLoadedModelParams);
   
   const projectIO = useProjectIO(
     processState, 
@@ -135,12 +148,7 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     planTemplates.overwriteUserTemplates,
     createInitialProcessState(processState.apiKeyStatus, processState.selectedModelName),
     modelParams,
-    (params) => {
-        modelParams.handleTemperatureChange(params.temperature);
-        modelParams.handleTopPChange(params.topP);
-        modelParams.handleTopKChange(params.topK);
-        modelParams.setUserManuallyAdjustedSettings(params.userManuallyAdjustedSettings);
-    }
+    setLoadedModelParams
   );
 
   const iterativeLogic = useIterativeLogic(processState, processActions.updateProcessState, processActions.addLogEntry, processActions.addDevLogEntry, modelParams.getUserSetBaseConfig, autoSave.performAutoSave, handleRateLimitErrorEncountered);
@@ -198,9 +206,45 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const handleExportIterationMarkdown = (version: Version) => {
+    const logEntry = processState.iterationHistory.find(
+      (e) =>
+        e.majorVersion === version.major &&
+        e.minorVersion === version.minor &&
+        (version.patch === undefined || e.patchVersion === version.patch)
+    );
+
+    if (!logEntry) {
+      processActions.updateProcessState({ statusMessage: `Could not find log entry for version ${formatVersion(version)}` });
+      return;
+    }
+
     const { product } = reconstructProduct(version, processState.iterationHistory, processState.initialPrompt);
-    const fileName = generateFileName(processState.projectName, `product_v${formatVersion(version)}`, "md");
-    const blob = new Blob([product], { type: 'text/markdown;charset=utf-t' });
+    const generationTimestamp = new Date(logEntry.timestamp).toISOString();
+    
+    let yamlFrontmatter = `---
+export_type: ITERATION_SNAPSHOT
+generation_timestamp: ${generationTimestamp}
+project_name: ${toYamlStringLiteral(processState.projectName || "Untitled Project")}
+iteration_version: ${formatVersion(version)}
+iteration_status: ${toYamlStringLiteral(logEntry.status)}
+`;
+
+    if (logEntry.modelConfigUsed) {
+      const modelDisplayName = SELECTABLE_MODELS.find(m => m.name === logEntry.currentModelForIteration)?.displayName || logEntry.currentModelForIteration || "N/A";
+      yamlFrontmatter += `model_configuration_used:
+  model_name: '${modelDisplayName}'
+  temperature: ${logEntry.modelConfigUsed.temperature.toFixed(2)}
+  top_p: ${logEntry.modelConfigUsed.topP.toFixed(2)}
+  top_k: ${logEntry.modelConfigUsed.topK}
+`;
+    } else {
+      yamlFrontmatter += `model_configuration_used: N/A\n`;
+    }
+    yamlFrontmatter += `---\n\n`;
+
+    const markdownContent = yamlFrontmatter + product;
+    const fileName = generateFileName(processState.projectName, `iter_snapshot_${formatVersion(version).replace(/\./g, '_')}`, "md");
+    const blob = new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;

@@ -24,3 +24,16 @@ export const generateFileName = (currentProjectName: string | null, suffix: stri
 
   return `${namePart}_${iterSuffix}${suffix}_${timestamp}.${extension}`;
 }
+
+/**
+ * Safely converts a string into a YAML-compatible string literal.
+ * It uses JSON.stringify which correctly handles quotes, backslashes, newlines, and other control characters.
+ * @param str The string to escape.
+ * @returns A YAML-safe string, including quotes.
+ */
+export const toYamlStringLiteral = (str: string): string => {
+    if (typeof str !== 'string') return '""';
+    // JSON.stringify will add quotes and escape internal quotes, backslashes, and control characters.
+    // This is a robust way to create a YAML-compatible string literal.
+    return JSON.stringify(str);
+};

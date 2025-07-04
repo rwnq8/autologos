@@ -1,12 +1,13 @@
+
 // hooks/useProcessState.ts
 
 import { useState, useCallback } from 'react';
 import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate, ModelStrategy } from '../types/index.ts';
-import * as geminiService from '../services/geminiService';
-import * as storageService from '../services/storageService';
-import { INITIAL_PROJECT_NAME_STATE } from '../services/utils';
-import { getProductSummary } from '../services/iterationUtils';
-import { CONVERGED_PREFIX } from '../services/promptBuilderService';
+import * as geminiService from '../services/geminiService.ts';
+import * as storageService from '../services/storageService.ts';
+import { INITIAL_PROJECT_NAME_STATE } from '../services/utils.ts';
+import { getProductSummary } from '../services/iterationUtils.ts';
+import { CONVERGED_PREFIX } from '../services/promptBuilderService.ts';
 import * as Diff from 'diff';
 import { compareVersions } from '../services/versionUtils.ts';
 
@@ -75,11 +76,10 @@ export const createInitialProcessState = (
   editedProductBuffer: null,
   devLog: [], 
   bootstrapSamples: 2,
-  bootstrapSampleSizePercent: 60,
+  bootstrapSampleSizePercent: 40,
   bootstrapSubIterations: 2,
   ensembleSubProducts: null,
   awaitingStrategyDecision: false,
-  pendingStrategySuggestion: null,
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
@@ -113,71 +113,75 @@ export const useProcessState = () => {
   const handleLoadedFilesChange = useCallback((newlySelectedFiles: LoadedFile[], action: 'add' | 'remove' | 'clear' = 'add') => {
     setState(prev => {
       let updatedLoadedFiles: LoadedFile[];
-      let newInitialPrompt = "";
       let statusMessageUpdate = "";
       let aiInsightUpdate = "";
       let resetProcessFields = false;
 
-      if (action === 'clear') {
-        updatedLoadedFiles = [];
-        resetProcessFields = true;
-        statusMessageUpdate = "All files cleared. Load new input to begin.";
-        aiInsightUpdate = "Input files cleared.";
-        newInitialPrompt = "";
-      } else if (action === 'remove') {
-        const fileToRemoveName = newlySelectedFiles[0]?.name;
-        updatedLoadedFiles = prev.loadedFiles.filter(f => f.name !== fileToRemoveName);
-        if (updatedLoadedFiles.length === 0) {
-            resetProcessFields = true;
-            statusMessageUpdate = "Last file removed. Load new input to begin.";
-            aiInsightUpdate = "Input files cleared.";
-            newInitialPrompt = "";
-        } else {
-            statusMessageUpdate = `File "${fileToRemoveName}" removed.`;
-            aiInsightUpdate = `${updatedLoadedFiles.length} file(s) remain loaded.`;
-        }
-      } else { 
-        const existingFileNames = new Set(prev.loadedFiles.map(f => f.name));
-        const filesToAdd = newlySelectedFiles.filter(nf => !existingFileNames.has(nf.name));
-        updatedLoadedFiles = [...prev.loadedFiles, ...filesToAdd];
+      switch (action) {
+        case 'add': {
+          const existingFileNames = new Set(prev.loadedFiles.map(f => f.name));
+          const newFilesToAdd = newlySelectedFiles.filter(f => !existingFileNames.has(f.name));
 
-        if (filesToAdd.length < newlySelectedFiles.length) {
-            const numDuplicates = newlySelectedFiles.length - filesToAdd.length;
-            statusMessageUpdate = `${filesToAdd.length} new file(s) added. ${numDuplicates} duplicate(s) ignored. `;
-        } else {
-            statusMessageUpdate = `${filesToAdd.length} new file(s) added. `;
+          const numDuplicates = newlySelectedFiles.length - newFilesToAdd.length;
+          const duplicateMessage = numDuplicates > 0 ? ` (${numDuplicates} duplicate(s) were ignored).` : '';
+
+          if (newFilesToAdd.length === 0) {
+              statusMessageUpdate = `No new files added.${duplicateMessage || ' All selected files are already loaded.'}`;
+              aiInsightUpdate = prev.aiProcessInsight;
+              updatedLoadedFiles = prev.loadedFiles;
+              resetProcessFields = false; // no change, so don't reset
+              break;
+          }
+          
+          updatedLoadedFiles = [...prev.loadedFiles, ...newFilesToAdd];
+          resetProcessFields = true; // Any change to input files should reset the process
+          
+          statusMessageUpdate = `${newFilesToAdd.length} file(s) added. Total is now ${updatedLoadedFiles.length}.${duplicateMessage}`;
+          aiInsightUpdate = `Ready to process ${updatedLoadedFiles.length} file(s).`;
+          break;
+        }
+        
+        case 'remove': {
+          const fileToRemoveName = newlySelectedFiles[0]?.name;
+          updatedLoadedFiles = prev.loadedFiles.filter(f => f.name !== fileToRemoveName);
+          resetProcessFields = true; // Always reset if the file list changes.
+          
+          if (updatedLoadedFiles.length === 0) {
+              statusMessageUpdate = "Last file removed. Load new input to begin.";
+              aiInsightUpdate = "Input files cleared.";
+          } else {
+              statusMessageUpdate = `File "${fileToRemoveName}" removed. Total is now ${updatedLoadedFiles.length}. Process has been reset.`;
+              aiInsightUpdate = `${updatedLoadedFiles.length} file(s) remain loaded.`;
+          }
+          break;
         }
 
-        if (updatedLoadedFiles.length === 0) {
-            resetProcessFields = true;
-            statusMessageUpdate += "Load input to begin.";
-            aiInsightUpdate = "Input files cleared.";
-            newInitialPrompt = "";
-        } else {
-             statusMessageUpdate += "Configure model and start or continue process.";
-             aiInsightUpdate = `${updatedLoadedFiles.length} file(s) loaded. Ready for processing.`;
-        }
+        case 'clear':
+        default:
+          updatedLoadedFiles = [];
+          resetProcessFields = true;
+          statusMessageUpdate = "All files cleared. Load new input to begin.";
+          aiInsightUpdate = "Input files cleared.";
+          break;
       }
-
-      if (updatedLoadedFiles.length > 0) {
-        newInitialPrompt = `Input consists of ${updatedLoadedFiles.length} file(s): ${updatedLoadedFiles.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
-      } else {
-        newInitialPrompt = resetProcessFields ? "" : prev.initialPrompt;
-      }
+      
+      const newInitialPrompt = updatedLoadedFiles.length > 0 
+        ? `Input consists of ${updatedLoadedFiles.length} file(s): ${updatedLoadedFiles.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`
+        : "";
 
       const newComplexity = calculateInputComplexity(newInitialPrompt, updatedLoadedFiles);
 
       const updates: Partial<ProcessState> = {
         loadedFiles: updatedLoadedFiles,
         initialPrompt: newInitialPrompt,
-        promptSourceName: updatedLoadedFiles.length > 0 ? (updatedLoadedFiles.length === 1 ? updatedLoadedFiles[0].name : `${updatedLoadedFiles.length} files loaded`) : (newInitialPrompt.trim() ? "direct_text" : null),
+        promptSourceName: updatedLoadedFiles.length > 0 ? (updatedLoadedFiles.length === 1 ? updatedLoadedFiles[0].name : `${updatedLoadedFiles.length} files loaded`) : null,
         statusMessage: statusMessageUpdate,
         aiProcessInsight: aiInsightUpdate,
-        promptChangedByFileLoad: action === 'add' || action === 'remove' || action === 'clear',
+        promptChangedByFileLoad: action === 'add' || action === 'clear' || action === 'remove',
         inputComplexity: newComplexity,
       };
 
-      if (resetProcessFields || (action === 'add' && prev.loadedFiles.length === 0 && updatedLoadedFiles.length > 0) || (action === 'clear' && prev.loadedFiles.length > 0)) {
+      if (resetProcessFields) {
         updates.currentProduct = null;
         updates.iterationHistory = [];
         updates.finalProduct = null;
@@ -205,6 +209,9 @@ export const useProcessState = () => {
         updates.editedProductBuffer = null;
         updates.devLog = []; 
         updates.ensembleSubProducts = null;
+        updates.isTargetedRefinementModalOpen = false;
+        updates.currentTextSelectionForRefinement = null;
+        updates.instructionsForSelectionRefinement = "";
       }
       return { ...prev, ...updates };
     });
@@ -216,39 +223,48 @@ export const useProcessState = () => {
             return prev;
           }
           const newComplexity = calculateInputComplexity(newPromptText, prev.loadedFiles);
-          return {
-              ...prev,
+          const shouldReset = newPromptText.trim() === "" && prev.initialPrompt.trim() !== "";
+
+          const updates: Partial<ProcessState> = {
               initialPrompt: newPromptText,
               inputComplexity: newComplexity,
               promptChangedByFileLoad: true, 
               promptSourceName: newPromptText.trim() ? "direct_text" : null,
-              currentProduct: null,
-              iterationHistory: [],
-              finalProduct: null,
-              currentMajorVersion: 0,
-              currentMinorVersion: 0,
-              stagnationInfo: { 
-                isStagnant: false, 
-                consecutiveStagnantIterations: 0, 
-                consecutiveIdenticalProductIterations: 0, 
-                lastMeaningfulChangeProductLength: undefined, 
-                similarityWithPrevious: undefined, 
-                nudgeStrategyApplied: 'none',
-                consecutiveLowValueIterations: 0,
-                lastProductLengthForStagnation: undefined,
-                consecutiveWordsmithingIterations: 0, 
-              },
-              currentProductBeforeHalt: null,
-              currentVersionBeforeHalt: undefined,
-              configAtFinalization: null,
-              isPlanActive: false,
-              planStages: [],
-              currentPlanStageIndex: null,
-              isEditingCurrentProduct: false, 
-              editedProductBuffer: null,
-              devLog: [], 
-              ensembleSubProducts: null,
           };
+
+          if (shouldReset || (newPromptText.trim() && prev.loadedFiles.length === 0)) {
+            updates.currentProduct = null;
+            updates.iterationHistory = [];
+            updates.finalProduct = null;
+            updates.currentMajorVersion = 0;
+            updates.currentMinorVersion = 0;
+            updates.stagnationInfo = { 
+              isStagnant: false, 
+              consecutiveStagnantIterations: 0, 
+              consecutiveIdenticalProductIterations: 0, 
+              lastMeaningfulChangeProductLength: undefined, 
+              similarityWithPrevious: undefined, 
+              nudgeStrategyApplied: 'none',
+              consecutiveLowValueIterations: 0,
+              lastProductLengthForStagnation: undefined,
+              consecutiveWordsmithingIterations: 0, 
+            };
+            updates.currentProductBeforeHalt = null;
+            updates.currentVersionBeforeHalt = undefined;
+            updates.configAtFinalization = null;
+            updates.isPlanActive = false;
+            updates.planStages = [];
+            updates.currentPlanStageIndex = null;
+            updates.isEditingCurrentProduct = false;
+            updates.editedProductBuffer = null;
+            updates.devLog = [];
+            updates.ensembleSubProducts = null;
+            updates.isTargetedRefinementModalOpen = false;
+            updates.currentTextSelectionForRefinement = null;
+            updates.instructionsForSelectionRefinement = "";
+          }
+          
+          return { ...prev, ...updates };
       });
   }, []);
 

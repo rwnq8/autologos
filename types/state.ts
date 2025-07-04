@@ -1,4 +1,3 @@
-
 // types/state.ts
 
 import type { IterationLogEntry, DevLogEntry, Version } from './log';
@@ -92,6 +91,5 @@ export interface ProcessState extends Omit<AutologosIterativeEngineData, 'iterat
   instructionsForSelectionRefinement?: string;
   isEditingCurrentProduct?: boolean;
   editedProductBuffer?: string | null;
-  awaitingStrategyDecision: boolean;
-  pendingStrategySuggestion: ModelStrategy | null;
+  awaitingStrategyDecision?: boolean;
 }

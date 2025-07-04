@@ -1,4 +1,6 @@
 
+
+
 import React, { useRef, useEffect, useState } from 'react';
 import { useEngine } from '../../contexts/ApplicationContext.tsx';
 import { formatVersion } from '../../services/versionUtils.ts';
@@ -72,6 +74,7 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
             className={`whitespace-pre-wrap break-words text-slate-700 dark:text-slate-200 text-sm ${processCtx.isProcessing ? 'h-full overflow-y-auto' : ''} select-text`}
             aria-multiline="true"
             onMouseUp={(e) => {
+              if (processCtx.isProcessing) return;
               const selection = window.getSelection()?.toString();
               if (selection && selection.length > 10) {
                   processCtx.updateProcessState({ isTargetedRefinementModalOpen: true, currentTextSelectionForRefinement: selection });

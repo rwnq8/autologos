@@ -82,8 +82,6 @@ export interface ProcessContextType extends Omit<ProcessState,
   openTargetedRefinementModal: (selectedText: string) => void;
   toggleEditMode: (forceOff?: boolean) => void; 
   saveManualEdits: () => Promise<void>; 
-  handleAcceptStrategy: () => Promise<void>;
-  handleIgnoreStrategy: () => Promise<void>;
 
   initialPrompt: string;
   currentProduct: string | null;
@@ -117,8 +115,6 @@ export interface ProcessContextType extends Omit<ProcessState,
   inputComplexity: 'SIMPLE' | 'MODERATE' | 'COMPLEX';
   currentModelForIteration: SelectableModelName;
   activeMetaInstructionForNextIter?: string;
-  strategistInfluenceLevel: 'OFF' | 'SUGGEST' | 'ADVISE_PARAMS_ONLY' | 'OVERRIDE_FULL';
-  stagnationNudgeAggressiveness: 'LOW' | 'MEDIUM' | 'HIGH';
   isEditingCurrentProduct?: boolean; 
   editedProductBuffer?: string | null; 
   devLog: DevLogEntry[];
@@ -126,8 +122,6 @@ export interface ProcessContextType extends Omit<ProcessState,
   addDevLogEntry: (newEntryData: Omit<DevLogEntry, 'id' | 'timestamp' | 'lastModified'>) => void;
   updateDevLogEntry: (updatedEntry: DevLogEntry) => void;
   deleteDevLogEntry: (entryId: string) => void;
-  awaitingStrategyDecision: boolean;
-  pendingStrategySuggestion: ModelStrategy | null;
 }
 
 const ProcessContext = createContext<ProcessContextType | undefined>(undefined);
