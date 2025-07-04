@@ -1,17 +1,8 @@
-
-
-
-
-
-
-
-
-
-
 import React, { useRef, useState, useCallback } from 'react';
 import { toYamlStringLiteral, generateFileName } from './services/utils.ts';
 import Controls from './components/Controls.tsx';
 import TargetedRefinementModal from './components/modals/TargetedRefinementModal.tsx';
+import DiffViewerModal from './components/modals/DiffViewerModal.tsx';
 import AppHeader from './components/AppHeader.tsx';
 import ErrorBoundary from './components/shared/ErrorBoundary.tsx';
 import ProcessStatusDisplay from './components/display/ProcessStatusDisplay.tsx';
@@ -57,15 +48,41 @@ const AppLayout: React.FC = () => {
     };
 
     const onSaveFinalProduct = useCallback(() => {
-        const productToSave = engine.process.finalProduct || (engine.process.currentMajorVersion === 0 && engine.process.currentProduct ? engine.process.currentProduct : null);
+        const { isOutlineMode, finalOutline, finalProduct, currentProduct, currentMajorVersion, currentMinorVersion, configAtFinalization, initialPrompt, projectName, projectCodename, loadedFiles, promptSourceName } = engine.process;
+
+        if (isOutlineMode) {
+            const outlineToSave = finalOutline || engine.process.currentOutline;
+            if (!outlineToSave) return;
+            const content = JSON.stringify(outlineToSave, null, 2);
+            const versionString = formatVersion({ major: currentMajorVersion, minor: currentMinorVersion });
+            const fileName = generateFileName("outline", "json", {
+                projectCodename: projectCodename,
+                projectName: projectName,
+                versionString: versionString,
+            });
+            const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url; link.download = fileName;
+            document.body.appendChild(link); link.click();
+            document.body.removeChild(link); URL.revokeObjectURL(url);
+            return;
+        }
+
+        const productToSave = finalProduct || (currentMajorVersion === 0 && currentProduct ? currentProduct : null);
         if (!productToSave) return;
         
-        // If configAtFinalization is missing (e.g. saving an initial ensemble product), perform a simple save.
-        if (!engine.app.staticAiModelDetails || !engine.process.configAtFinalization) {
+        const finalVersionString = formatVersion({
+            major: currentMajorVersion,
+            minor: currentMinorVersion
+        });
+
+        if (!engine.app.staticAiModelDetails || !configAtFinalization) {
           const fileName = generateFileName("product", "md", {
-            projectCodename: engine.process.projectCodename,
-            projectName: engine.process.projectName, 
-            contentForSlug: productToSave
+            projectCodename: projectCodename,
+            projectName: projectName, 
+            contentForSlug: productToSave,
+            versionString: finalVersionString,
           });
           const blob = new Blob([productToSave], { type: 'text/markdown;charset=utf-8' });
           const url = URL.createObjectURL(blob);
@@ -78,16 +95,15 @@ const AppLayout: React.FC = () => {
 
         // Rich YAML save for completed processes
         const generationTimestamp = new Date().toISOString();
-        const initialPromptSummary = toYamlStringLiteral((engine.process.initialPrompt.length > 150 ? engine.process.initialPrompt.substring(0, 147) + "..." : engine.process.initialPrompt).replace(/\n+/g, ' ').trim());
+        const initialPromptSummary = toYamlStringLiteral((initialPrompt.length > 150 ? initialPrompt.substring(0, 147) + "..." : initialPrompt).replace(/\n+/g, ' ').trim());
         let contentWarning = (!productToSave.trim() || productToSave.trim().length < 10) ? `\nWARNING_NOTE: The main product content below appears to be empty or very short...\n` : "";
         
-        let overallIterationCountForYAML = engine.process.currentMajorVersion;
         
         let yamlFrontmatter = `---
 export_type: FINAL_PRODUCT
 generation_timestamp: ${generationTimestamp}
-project_name: ${toYamlStringLiteral(engine.app.projectName || "Untitled Project")}
-project_codename: ${toYamlStringLiteral(engine.process.projectCodename || "none")}
+project_name: ${toYamlStringLiteral(projectName || "Untitled Project")}
+project_codename: ${toYamlStringLiteral(projectCodename || "none")}
 `;
         if (engine.process.isPlanActive && engine.process.planStages.length > 0) {
             yamlFrontmatter += `autologos_process_plan_active: true\n`;
@@ -120,30 +136,30 @@ project_codename: ${toYamlStringLiteral(engine.process.projectCodename || "none"
             }
         }
         yamlFrontmatter += `initial_prompt_summary: ${initialPromptSummary}
-final_iteration_count: ${overallIterationCountForYAML}
+final_version: ${finalVersionString}
 max_iterations_setting: ${engine.process.maxMajorVersions}
-prompt_input_type: ${engine.process.loadedFiles && engine.process.loadedFiles.length > 0 ? 'files' : 'direct_text'}
+prompt_input_type: ${loadedFiles && loadedFiles.length > 0 ? 'files' : 'direct_text'}
 `;
-        if (engine.process.loadedFiles && engine.process.loadedFiles.length > 0) {
+        if (loadedFiles && loadedFiles.length > 0) {
           yamlFrontmatter += `prompt_source_files:\n`;
-          engine.process.loadedFiles.forEach(file => { yamlFrontmatter += `  - ${toYamlStringLiteral(file.name)}\n`; });
+          loadedFiles.forEach(file => { yamlFrontmatter += `  - ${toYamlStringLiteral(file.name)}\n`; });
         } else {
-          yamlFrontmatter += `prompt_source_details: ${toYamlStringLiteral(engine.process.promptSourceName || 'typed_prompt')}\n`;
+          yamlFrontmatter += `prompt_source_details: ${toYamlStringLiteral(promptSourceName || 'typed_prompt')}\n`;
         }
         yamlFrontmatter += `model_configuration_at_finalization:
   model_name: '${engine.app.staticAiModelDetails.modelName}'
-  temperature: ${engine.process.configAtFinalization.temperature.toFixed(2)}
-  top_p: ${engine.process.configAtFinalization.topP.toFixed(2)}
-  top_k: ${engine.process.configAtFinalization.topK}
+  temperature: ${configAtFinalization.temperature.toFixed(2)}
+  top_p: ${configAtFinalization.topP.toFixed(2)}
+  top_k: ${configAtFinalization.topK}
 ---
 ${contentWarning}
 `;
         const markdownContent = yamlFrontmatter + productToSave;
         const fileName = generateFileName("product", "md", {
-          projectCodename: engine.process.projectCodename,
-          projectName: engine.app.projectName,
+          projectCodename: projectCodename,
+          projectName: projectName,
           contentForSlug: productToSave,
-          iterationNum: overallIterationCountForYAML,
+          versionString: finalVersionString,
         });
         const blob = new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
@@ -195,6 +211,12 @@ ${contentWarning}
                 selectedText={engine.process.currentTextSelectionForRefinement || ""}
                 instructions={engine.process.instructionsForSelectionRefinement || ""}
                 onInstructionsChange={(value) => engine.process.updateProcessState({ instructionsForSelectionRefinement: value })}
+            />
+
+            <DiffViewerModal
+                isOpen={engine.process.isDiffViewerOpen}
+                onClose={engine.process.closeDiffViewer}
+                diffContent={engine.process.diffViewerContent}
             />
             
             {engine.autoSave.showRestorePrompt && (

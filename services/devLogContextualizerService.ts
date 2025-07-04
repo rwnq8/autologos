@@ -36,9 +36,8 @@ const formatDevLogForPrompt = (devLog: DevLogEntry[]): string => {
   ).join("\n---\n");
 };
 
-const devLogContextualizerSystemPrompt = `You are an AI assistant acting as a pre-processor for a primary AI developer.
-Your task is to analyze a user's current request for code changes (or an AI's internal refinement task) and a development log.
-Identify up to 3-4 entries from the development log that are MOST RELEVANT to the current request/task.
+const devLogContextualizerSystemPrompt = `System Function: Act as a pre-processor for a primary AI developer.
+Task: Analyze a user's current request for code changes (or an AI's internal refinement task) and a development log. Identify up to 3-4 entries from the development log that are MOST RELEVANT to the current request/task.
 Relevance means the log entry might help the primary AI developer:
 - Avoid repeating a past mistake described in an 'issue' or 'fix' entry.
 - Recall a key 'decision' that impacts the current request (e.g., a chosen architectural pattern, a decision about handling a specific edge case).

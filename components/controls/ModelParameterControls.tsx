@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import type { CommonControlProps, ProcessState, SelectableModelName } from '../../types/index.ts';
 import { useEngine } from '../../contexts/ApplicationContext.tsx';
@@ -43,9 +42,18 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
     );
   };
 
+  const handleOutlineModeChange = (enabled: boolean) => {
+    processCtx.updateProcessState({ isOutlineMode: enabled });
+    if (enabled) {
+        modelConfigCtx.onMaxIterationsChange(5);
+    } else {
+        modelConfigCtx.onMaxIterationsChange(20); // Reset to default when disabled
+    }
+  };
+
   const totalPlanIterationsValue = planCtx.isPlanActive ? planCtx.planStages.reduce((sum, stage) => sum + stage.stageIterations, 0) : 0;
   const isSlidersDisabled = processCtx.isProcessing;
-  const isMaxIterationsControlDisabled = processCtx.isProcessing || planCtx.isPlanActive;
+  const isMaxIterationsControlDisabled = processCtx.isProcessing || planCtx.isPlanActive || processCtx.isOutlineMode;
 
   return (
     <div className="pt-4 border-t border-slate-300/70 dark:border-white/10">
@@ -58,6 +66,24 @@ const ModelParameterControls: React.FC<CommonControlProps & { children?: React.R
       
       {isModelConfigExpanded && (
         <div className="space-y-4 p-3 bg-slate-100/50 dark:bg-black/20 rounded-md border border-slate-200 dark:border-white/10 animate-fadeIn">
+          
+          <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-primary-600 dark:text-primary-400">Process Mode</h4>
+              <label className={commonCheckboxLabelClasses}>
+                <input 
+                    type="checkbox" 
+                    checked={processCtx.isOutlineMode} 
+                    onChange={(e) => handleOutlineModeChange(e.target.checked)} 
+                    disabled={processCtx.isProcessing}
+                    className={commonCheckboxInputClasses + " mr-2"}
+                />
+                Enable Outline Synthesis Mode
+              </label>
+              <p className="text-xs text-slate-500 dark:text-slate-400 ml-6">
+                Extracts and structures information from files into an interactive, hierarchical outline. Sets max iterations to 5.
+              </p>
+          </div>
+
           <div>
             <label htmlFor="model-select" className="block text-xs font-medium text-primary-600 dark:text-primary-400 mb-1">Model Preference</label>
             <select id="model-select" value={processCtx.selectedModelName} onChange={(e) => appCtx.onSelectedModelChange(e.target.value as SelectableModelName)} className={commonSelectClasses} disabled={processCtx.isProcessing}>

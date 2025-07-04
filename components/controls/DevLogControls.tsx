@@ -1,13 +1,14 @@
-import React, { useState, useContext, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import type { DevLogEntry, DevLogEntryType, DevLogEntryStatus, CommonControlProps } from '../../types/index.ts';
-import { useProcessContext } from '../../contexts/ProcessContext';
+import { useEngine } from '../../contexts/ApplicationContext.tsx';
 
 const DevLogControls: React.FC<CommonControlProps> = ({ 
     commonInputClasses, 
     commonSelectClasses, 
     commonButtonClasses,
  }) => {
-  const { devLog = [], addDevLogEntry, updateDevLogEntry, deleteDevLogEntry, isProcessing } = useProcessContext();
+  const { process: processCtx } = useEngine();
+  const { devLog = [], addDevLogEntry, updateDevLogEntry, deleteDevLogEntry, isProcessing } = processCtx;
   
   const [isSectionExpanded, setIsSectionExpanded] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);

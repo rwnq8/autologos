@@ -5,6 +5,7 @@ import type { IterationLogEntry, DevLogEntry, Version } from './log.ts';
 import type { ModelConfig, SelectableModelName, ModelStrategy } from './models.ts';
 import type { PlanStage, PlanTemplate } from './plan.ts';
 import type { SettingsSuggestionSource, DiffViewType } from './ui.ts';
+import type { DocumentChunk, OutlineNode } from './document.ts';
 
 // Originally from project.ts
 export interface LoadedFile {
@@ -12,13 +13,6 @@ export interface LoadedFile {
   mimeType: string;
   content: string;
   size: number;
-}
-
-export interface DocumentChunk {
-  id: string; // Unique identifier (UUID)
-  type: 'heading_1' | 'heading_2' | 'heading_3' | 'heading_4' | 'heading_5' | 'heading_6' | 'paragraph' | 'list' | 'code_block' | 'blockquote' | 'thematic_break';
-  content: string; // The raw markdown content of the chunk
-  lang?: string; // Language for code blocks
 }
 
 
@@ -49,6 +43,7 @@ export interface AutologosIterativeEngineData {
   initialPrompt: string;
   iterationHistory: IterationLogEntry[];
   documentChunks: DocumentChunk[]; // The new structured product
+  currentFocusChunkIndex: number | null; // For context windowing
   maxMajorVersions: number;
   temperature: number;
   topP: number;
@@ -88,11 +83,15 @@ export interface AutologosIterativeEngineData {
   bootstrapSampleSizePercent: number;
   bootstrapSubIterations: number;
   ensembleSubProducts: string[] | null;
+  isOutlineMode?: boolean;
+  currentOutline?: OutlineNode[] | null;
+  finalOutline?: OutlineNode[] | null;
 }
 
 export interface ProcessState extends Omit<AutologosIterativeEngineData, 'iterationHistory' | 'temperature' | 'topP' | 'topK' | 'settingsSuggestionSource' | 'userManuallyAdjustedSettings' > {
   iterationHistory: IterationLogEntry[];
   documentChunks: DocumentChunk[];
+  currentFocusChunkIndex: number | null; // For context windowing
   isProcessing: boolean;
   statusMessage: string;
   apiKeyStatus: 'loaded' | 'missing';
@@ -114,6 +113,11 @@ export interface ProcessState extends Omit<AutologosIterativeEngineData, 'iterat
   isEditingCurrentProduct?: boolean;
   editedProductBuffer?: string | null;
   awaitingStrategyDecision?: boolean;
+  isDiffViewerOpen: boolean;
+  diffViewerContent: { oldText: string, newText: string, version: string } | null;
+  isOutlineMode: boolean;
+  currentOutline: OutlineNode[] | null;
+  finalOutline: OutlineNode[] | null;
 }
 
 

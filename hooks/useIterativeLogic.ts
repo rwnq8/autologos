@@ -1,7 +1,5 @@
-
-
 import { useRef, useState, useCallback, useEffect } from 'react';
-import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType, DevLogEntry, StrategistLLMContext, Version, ModelStrategy } from '../types/index.ts';
+import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType, DevLogEntry, StrategistLLMContext, Version, ModelStrategy, OutlineNode } from '../types/index.ts';
 import { SELECTABLE_MODELS } from '../types/index.ts';
 import * as GeminaiService from '../services/geminiService.ts';
 import { getUserPromptComponents } from '../services/promptBuilderService.ts';
@@ -18,6 +16,8 @@ import { splitToChunks, reconstructFromChunks } from '../services/chunkingServic
 const SELF_CORRECTION_MAX_ATTEMPTS = 2;
 
 const STAGNATION_SIMILARITY_THRESHOLD = 0.95;
+const CONTEXT_WINDOW_SIZE = 20;
+const CONTEXT_WINDOW_OVERLAP = 5;
 
 interface UseIterativeLogicReturn {
   handleStartProcess: (options?: {
@@ -73,14 +73,14 @@ export const useIterativeLogic = (
     isLowValueIterationLogged?: boolean,
     isWordsmithingIterationLogged?: boolean,
     bootstrapRun?: number
-  ) => {
+  ): void => {
     const { processState } = latestStateRef.current;
     const directResponseHead = iterationProductForLog ? iterationProductForLog.substring(0, 500) : "";
     const directResponseTail = iterationProductForLog && iterationProductForLog.length > 500 ? iterationProductForLog.substring(iterationProductForLog.length - 500) : "";
 
     let finalProductForSummary = iterationProductForLog;
     const activePlanStage = processState.isPlanActive && processState.currentPlanStageIndex !== null ? processState.planStages[processState.currentPlanStageIndex] : null;
-    if (activePlanStage && activePlanStage.format === 'json' && finalProductForSummary) {
+    if ((activePlanStage && activePlanStage.format === 'json') || processState.isOutlineMode && finalProductForSummary) {
         finalProductForSummary = parseAndCleanJsonOutput(finalProductForSummary);
     }
 
@@ -212,11 +212,15 @@ export const useIterativeLogic = (
       inputComplexity,
       devLog,
       ensembleSubProducts,
-      documentChunks
+      documentChunks,
+      isOutlineMode,
+      currentOutline,
     } = initialProcessState;
 
+    let currentFocusChunkIndex = initialProcessState.currentFocusChunkIndex ?? 0;
+
     // Ensure product string is reconstructed from chunks if they exist
-    if (documentChunks && documentChunks.length > 0) {
+    if (!isOutlineMode && documentChunks && documentChunks.length > 0) {
       currentProductForIteration = reconstructFromChunks(documentChunks);
     }
 
@@ -236,13 +240,14 @@ export const useIterativeLogic = (
 
     const { isSearchGroundingEnabled, isUrlBrowsingEnabled } = initialProcessState;
 
-    for (let currentIteration = 1; currentIteration <= maxMajorVersions; currentIteration++) {
+    // The for loop provides a hard limit on total iterations in a single run.
+    for (let loopCounter = 0; loopCounter < maxMajorVersions; loopCounter++) {
       if (haltSignalRef.current) {
         handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0}, currentProductForIteration, "Halt signal received. Process stopped.");
         break;
       }
       
-      const previousProductForLog = currentProductForIteration;
+      const previousProductForLog = isOutlineMode ? JSON.stringify(currentOutline, null, 2) : currentProductForIteration;
       let kickstart = false;
 
       let fileProcessingInfoForLog: FileProcessingInfo = {
@@ -307,6 +312,7 @@ export const useIterativeLogic = (
       let validationInfo: AiResponseValidationInfo = { checkName: 'N/A', passed: true, reason: 'Validation not run.' };
       let isCriticalFailure = false;
       let finalProduct = "";
+      let finalOutline: OutlineNode[] | null = null;
 
       let retryContext: RetryContext | undefined = undefined;
 
@@ -320,6 +326,9 @@ export const useIterativeLogic = (
         
         result = await GeminaiService.iterateProduct({
             currentProduct: currentProductForIteration,
+            documentChunks,
+            currentOutline,
+            currentFocusChunkIndex,
             currentVersion: currentVersionForLoop,
             maxIterationsOverall: maxMajorVersions,
             fileManifest: initialPrompt,
@@ -345,15 +354,22 @@ export const useIterativeLogic = (
             targetedSelectionText,
             targetedRefinementInstructions,
             isRadicalRefinementKickstart: kickstart,
+            isOutlineMode
         });
-
+        
         if (result.status === 'ERROR' || result.status === 'HALTED') {
           if (result.isRateLimitError) handleRateLimitErrorEncountered();
           handleProcessHalt(currentVersionForLoop, currentProductForIteration, result.errorMessage || 'Unknown error occurred.', result);
-          return;
+          return; 
         }
 
-        finalProduct = result.product;
+        if (isOutlineMode) {
+          finalOutline = result.outline || null;
+          finalProduct = JSON.stringify(finalOutline, null, 2);
+        } else {
+          finalProduct = result.product;
+        }
+        
         const isConverged = result.suggestedNextStep === 'declare_convergence' || result.status === 'CONVERGED';
 
         const validationResult: IsLikelyAiErrorResponseResult = isLikelyAiErrorResponse(
@@ -364,9 +380,9 @@ export const useIterativeLogic = (
                 entryType: 'ai_iteration', productSummary: "", status: "", timestamp: 0, fileProcessingInfo: fileProcessingInfoForLog,
                 apiStreamDetails: result.apiStreamDetails,
             },
-            undefined, // outline
-            undefined, // length instruction
-            undefined // format instruction
+            undefined, 
+            undefined, 
+            undefined
         );
 
         validationInfo = {
@@ -388,7 +404,7 @@ export const useIterativeLogic = (
 
             retryContext = {
                 previousErrorReason: validationInfo.reason,
-                originalCoreInstructions: getUserPromptComponents(currentVersionForLoop, maxMajorVersions, null, false, 0, false, true, false, !isUsingToolsForRetry).coreUserInstructions,
+                originalCoreInstructions: getUserPromptComponents(currentVersionForLoop, maxMajorVersions, null, false, 0, false, true, false, !isUsingToolsForRetry, isOutlineMode).coreUserInstructions,
             };
             updateProcessState({statusMessage: `Iteration v${majorVersionForIteration}.${minorVersionForIteration}: Validation failed. Retrying...`});
             accumulatedText = "";
@@ -404,7 +420,7 @@ export const useIterativeLogic = (
       const prevLogEntry = iterationHistory.length > 0 ? iterationHistory[iterationHistory.length - 1] : null;
 
       let coherenceDegraded = false;
-      if (prevLogEntry && !isTargetedRefinementMode) {
+      if (prevLogEntry && !isTargetedRefinementMode && !isOutlineMode) {
           const prevLexicalDensity = prevLogEntry.lexicalDensity;
           const prevTTR = prevLogEntry.typeTokenRatio;
           const lexicalDensityDrop = prevLexicalDensity && newLexicalDensity && newLexicalDensity < prevLexicalDensity * 0.95; // 5% drop
@@ -444,13 +460,15 @@ export const useIterativeLogic = (
           newStagnationInfo.consecutiveCoherenceDegradation = 0;
       }
       
+      const newChunks = result?.updatedChunks || (isOutlineMode ? null : documentChunks);
+
       logIterationData(
         currentVersionForLoop,
         isTargetedRefinementMode ? 'targeted_refinement' : 'ai_iteration',
         finalProduct,
-        `Completed Iteration ${currentVersionForLoop.major}.${currentVersionForLoop.minor}`,
+        result?.status || 'UNKNOWN',
         previousProductForLog,
-        result,
+        result || undefined,
         modelStrategy.config,
         fileProcessingInfoForLog,
         validationInfo,
@@ -461,268 +479,161 @@ export const useIterativeLogic = (
         modelStrategy.modelName,
         modelStrategy.activeMetaInstruction,
         isCriticalFailure,
-        targetedSelectionText,
-        targetedRefinementInstructions,
+        isTargetedRefinementMode ? targetedSelectionText : undefined,
+        isTargetedRefinementMode ? targetedRefinementInstructions : undefined,
         similarity,
         isStagnant,
         isEffectivelyIdentical,
         isLowValue,
-        isWordsmithing,
-        undefined
+        isWordsmithing
       );
       
       currentProductForIteration = finalProduct;
-      // CRITICAL: Update the product string AND the new document chunks
-      const newChunks = splitToChunks(finalProduct);
+      currentOutline = finalOutline;
+      
+      if (!isOutlineMode) {
+          documentChunks = newChunks; // Update local variable for next loop
+          let newFocusIndex = currentFocusChunkIndex + (CONTEXT_WINDOW_SIZE - CONTEXT_WINDOW_OVERLAP);
+          if (documentChunks && newFocusIndex >= documentChunks.length && documentChunks.length > 0) {
+              newFocusIndex = 0; // Loop back to start
+          }
+          currentFocusChunkIndex = newFocusIndex;
+      }
+      
       updateProcessState({
-        currentProduct: finalProduct,
-        documentChunks: newChunks,
-        stagnationInfo: newStagnationInfo,
-        streamBuffer: null,
+          currentProduct: finalProduct,
+          currentOutline: finalOutline,
+          documentChunks: documentChunks,
+          currentFocusChunkIndex: currentFocusChunkIndex,
+          stagnationInfo: newStagnationInfo,
+          streamBuffer: null,
       });
-      
-      if (result.status === 'CONVERGED' || result.status === 'HALTED' || result.status === 'ERROR' || isCriticalFailure) {
-        updateProcessState({
-          isProcessing: false,
-          finalProduct: currentProductForIteration,
-          statusMessage: `Process ended: ${isCriticalFailure ? 'Critical validation failure' : result.status}.`,
-          configAtFinalization: modelStrategy.config,
-          streamBuffer: null,
-        });
-        isProcessingRef.current = false;
-        break;
-      }
-      
-      if (majorVersionForIteration >= maxMajorVersions) {
-        updateProcessState({
-          isProcessing: false,
-          finalProduct: currentProductForIteration,
-          statusMessage: 'Process ended: Reached max iterations.',
-          configAtFinalization: modelStrategy.config,
-          streamBuffer: null,
-        });
-        isProcessingRef.current = false;
+
+      performAutoSave();
+
+      const isConverged = result?.suggestedNextStep === 'declare_convergence' || result?.status === 'CONVERGED';
+
+      if (isConverged || isCriticalFailure) {
+        handleProcessHalt(currentVersionForLoop, finalProduct, isCriticalFailure ? validationInfo.reason : 'AI declared convergence.', result);
+        updateProcessState({ finalProduct: finalProduct, finalOutline: finalOutline, configAtFinalization: modelStrategy.config });
         break;
       }
 
-      await performAutoSave();
-
-      if (isTargetedRefinementMode) {
-        updateProcessState({
-            isProcessing: false,
-            statusMessage: `Targeted refinement to v${majorVersionForIteration}.${minorVersionForIteration} complete.`,
-            instructionsForSelectionRefinement: "",
-            currentTextSelectionForRefinement: null,
-            streamBuffer: null,
-        });
-        isProcessingRef.current = false;
-        break; // Exit the loop after one targeted refinement
+      if (!isTargetedRefinementMode) {
+        minorVersionForIteration++;
+      } else {
+        handleProcessHalt(currentVersionForLoop, finalProduct, 'Targeted refinement completed.');
+        break;
       }
-      
-      majorVersionForIteration++;
+
+      if (minorVersionForIteration >= maxMajorVersions) {
+          handleProcessHalt(currentVersionForLoop, finalProduct, 'Maximum number of iterations reached.');
+          updateProcessState({ finalProduct: finalProduct, finalOutline: finalOutline, configAtFinalization: modelStrategy.config });
+          break;
+      }
     }
-  }, [updateProcessState, logIterationData, handleProcessHalt, addDevLogEntry, performAutoSave, handleRateLimitErrorEncountered, latestStateRef]);
-  
-  const handleHaltProcess = () => {
-    haltSignalRef.current = true;
-  };
+    
+    isProcessingRef.current = false;
+  }, [latestStateRef, updateProcessState, addLogEntryFromHook, addDevLogEntry, handleProcessHalt, performAutoSave, handleRateLimitErrorEncountered, logIterationData]);
 
-  const handleBootstrapSynthesis = async () => {
-    const { loadedFiles, bootstrapSamples, bootstrapSampleSizePercent, bootstrapSubIterations } = latestStateRef.current.processState;
-    if (loadedFiles.length < 2) {
-      updateProcessState({ statusMessage: "Need at least 2 files for ensemble synthesis." });
+  const handleHaltProcess = useCallback(() => {
+    haltSignalRef.current = true;
+  }, []);
+
+  const handleBootstrapSynthesis = useCallback(async () => {
+    const { processState: initialProcessState, getUserSetBaseConfig: getInitialUserConfig } = latestStateRef.current;
+    if (initialProcessState.isProcessing || initialProcessState.loadedFiles.length < 2) {
+      updateProcessState({ statusMessage: "Ensemble Synthesis requires at least 2 loaded files."});
       return;
     }
 
-    if (!latestStateRef.current.processState.projectCodename) {
-      updateProcessState({
-        statusMessage: 'Generating project codename...',
-        aiProcessInsight: 'Analyzing input to create a unique codename for this ensemble run.',
-      });
-      const codename = await GeminaiService.generateProjectCodename(
-        latestStateRef.current.processState.initialPrompt,
-        loadedFiles
-      );
-      updateProcessState({ projectCodename: codename });
+    if (!initialProcessState.projectCodename) {
+        updateProcessState({ statusMessage: 'Generating project codename...'});
+        const codename = await GeminaiService.generateProjectCodename(initialProcessState.initialPrompt, initialProcessState.loadedFiles);
+        updateProcessState({ projectCodename: codename });
     }
-    
+
     isProcessingRef.current = true;
     haltSignalRef.current = false;
     updateProcessState({
         isProcessing: true,
-        statusMessage: 'Starting ensemble synthesis...',
-        aiProcessInsight: 'Preparing file samples for sub-processes.',
-        currentProduct: null,
-        documentChunks: [],
-        iterationHistory: [],
+        statusMessage: `Starting Ensemble Synthesis with ${initialProcessState.bootstrapSamples} samples...`,
+        aiProcessInsight: 'Generating diverse outlines from file samples.',
+        iterationHistory: [], // Clear history for the new synthesis
         currentMajorVersion: 0,
         currentMinorVersion: 0,
-        finalProduct: null,
-        streamBuffer: null,
     });
     
-    const samplesToRun = loadedFiles.length > 50 ? bootstrapSamples + 2 : (loadedFiles.length > 30 ? bootstrapSamples + 1 : bootstrapSamples);
+    const { loadedFiles, bootstrapSamples, bootstrapSampleSizePercent, selectedModelName, isOutlineMode } = initialProcessState;
+    const sampleSizePercent = isOutlineMode ? 100 : bootstrapSampleSizePercent;
+    const sampleSize = Math.max(1, Math.floor(loadedFiles.length * (sampleSizePercent / 100)));
     const subProducts: string[] = [];
-    const baseModelConfig = latestStateRef.current.getUserSetBaseConfig();
-    
-    for (let i = 0; i < samplesToRun; i++) {
-        if (haltSignalRef.current) break;
-        
-        // Stratified random sampling
-        const filesByMimeType = loadedFiles.reduce((acc, file) => {
-            const mimeType = file.mimeType || 'unknown';
-            if (!acc[mimeType]) acc[mimeType] = [];
-            acc[mimeType].push(file);
-            return acc;
-        }, {} as Record<string, LoadedFile[]>);
+    const subOutlines: OutlineNode[][] = [];
 
-        let sampleFiles: LoadedFile[] = [];
-        const sampleSize = Math.floor(loadedFiles.length * (bootstrapSampleSizePercent / 100));
-
-        Object.values(filesByMimeType).forEach(stratum => {
-            const proportion = stratum.length / loadedFiles.length;
-            const countToSample = Math.ceil(proportion * sampleSize); // Use ceil to ensure small strata are represented
-            const shuffled = [...stratum].sort(() => 0.5 - Math.random());
-            sampleFiles.push(...shuffled.slice(0, countToSample));
-        });
-        
-        sampleFiles = [...new Set(sampleFiles)]; // Ensure uniqueness if ceil pushes it over
-        if (sampleFiles.length > sampleSize) {
-            sampleFiles = sampleFiles.slice(0, sampleSize);
+    for (let i = 0; i < bootstrapSamples; i++) {
+        if (haltSignalRef.current) {
+            handleProcessHalt({major:0, minor:0, patch:i}, null, "Halt signal received during ensemble synthesis.");
+            return;
         }
 
-        const sampleManifest = `Ensemble Sample ${i+1}/${samplesToRun}: ${sampleFiles.map(f => f.name).join(', ')}.`;
-        updateProcessState({ statusMessage: `Running sub-process for sample ${i + 1}/${samplesToRun}...`});
+        updateProcessState({ statusMessage: `Ensemble Synthesis: Processing sample ${i + 1} of ${bootstrapSamples}...` });
+
+        const shuffled = [...loadedFiles].sort(() => 0.5 - Math.random());
+        const sampleFiles = shuffled.slice(0, sampleSize);
+        const sampleFileManifest = `Input consists of ${sampleFiles.length} file(s): ${sampleFiles.map(f => `${f.name} (${f.mimeType}, ${(f.size / 1024).toFixed(1)}KB)`).join('; ')}.`;
         
-        let subProduct = "";
-        for (let j = 0; j < bootstrapSubIterations; j++) {
-            if (haltSignalRef.current) break;
-            
-            const bootstrapVersion: Version = { major: 0, minor: i, patch: j };
-            const result = await GeminaiService.iterateProduct({
-                currentProduct: subProduct,
-                currentVersion: bootstrapVersion,
-                maxIterationsOverall: bootstrapSubIterations,
-                fileManifest: sampleManifest,
-                loadedFiles: sampleFiles,
-                activePlanStage: null,
-                outputParagraphShowHeadings: false,
-                outputParagraphMaxHeadingDepth: 2,
-                outputParagraphNumberedHeadings: false,
-                modelConfigToUse: baseModelConfig,
-                isGlobalMode: true,
-                isSearchGroundingEnabled: false,
-                isUrlBrowsingEnabled: false,
-                modelToUse: 'gemini-2.5-flash-preview-04-17',
-                onStreamChunk: () => {}, // No live streaming for sub-runs
-                isHaltSignalled: () => haltSignalRef.current,
-            });
-
-            subProduct = result.product;
-            
-            logIterationData(
-                { major: 0, minor: i, patch: j },
-                'bootstrap_sub_iteration',
-                subProduct,
-                `Sample ${i + 1}, Sub-run ${j + 1}`,
-                j > 0 ? subProducts[subProducts.length-1] : "", // Use previous state if available
-                result,
-                baseModelConfig,
-                { filesSentToApiIteration: j, numberOfFilesActuallySent: sampleFiles.length, totalFilesSizeBytesSent: sampleFiles.reduce((s,f)=>s+f.size,0), fileManifestProvidedCharacterCount: sampleManifest.length, loadedFilesForIterationContext: sampleFiles },
-                undefined,
-                result.product.length,
-                result.product.length,
-                1,
-                "Ensemble Sub-process run",
-                'gemini-2.5-flash-preview-04-17',
-                undefined,
-                !!result.errorMessage,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                i+1
-            );
-        }
-        if (subProduct) subProducts.push(subProduct);
-    }
-    
-    if (subProducts.length > 0) {
-        updateProcessState({ statusMessage: "Integrating ensemble results...", ensembleSubProducts: subProducts });
-        let integratedProductBuffer = "";
-
-        const integrationVersion: Version = { major: 0, minor: samplesToRun, patch: 0 };
-        const integrationResult = await GeminaiService.iterateProduct({
-            currentProduct: "",
-            currentVersion: integrationVersion,
-            maxIterationsOverall: 1,
-            fileManifest: "Multiple ensemble sub-products generated.",
-            loadedFiles: [], // Files aren't sent for integration, only sub-products
-            ensembleSubProducts: subProducts,
-            activePlanStage: null,
-            outputParagraphShowHeadings: false,
-            outputParagraphMaxHeadingDepth: 2,
-            outputParagraphNumberedHeadings: false,
-            modelConfigToUse: { ...baseModelConfig, temperature: 0.2 }, // Use lower temp for integration
-            isGlobalMode: true,
-            isSearchGroundingEnabled: false,
-            isUrlBrowsingEnabled: false,
-            modelToUse: 'gemini-2.5-pro', // Use a more powerful model for integration
-            onStreamChunk: (chunk) => {
-                integratedProductBuffer += chunk;
-                updateProcessState({ streamBuffer: integratedProductBuffer });
-            },
-            isHaltSignalled: () => haltSignalRef.current,
-        });
-        
-        const finalIntegratedProduct = integrationResult.product;
-        const finalIntegratedChunks = splitToChunks(finalIntegratedProduct);
-
-        logIterationData(
-            { major: 0, minor: samplesToRun, patch: 0 },
-            'ensemble_integration',
-            finalIntegratedProduct,
-            `Ensemble Integration Complete`,
-            "",
-            integrationResult,
-            { ...baseModelConfig, temperature: 0.2 },
-            { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: "Multiple ensemble sub-products generated.".length, loadedFilesForIterationContext: [] },
-            undefined,
-            finalIntegratedProduct.length,
-            finalIntegratedProduct.length,
-            1,
-            "Ensemble Integration",
-            'gemini-2.5-pro',
-            undefined,
-            !!integrationResult.errorMessage,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined
+        const result = await GeminaiService.generateInitialOutline(
+            sampleFileManifest, 
+            sampleFiles, 
+            getInitialUserConfig(), 
+            selectedModelName,
+            isOutlineMode
         );
-        updateProcessState({
-            currentProduct: finalIntegratedProduct,
-            documentChunks: finalIntegratedChunks,
-            finalProduct: finalIntegratedProduct, // Treat this as a final base product for now
-            statusMessage: "Ensemble synthesis complete. You can now save this base product or start a refinement process.",
-            aiProcessInsight: "Generated a robust base product from multiple file samples.",
-            streamBuffer: null,
-        });
-    } else {
-         updateProcessState({ statusMessage: "Ensemble synthesis finished, but no sub-products were generated." });
+
+        if (result.errorMessage) {
+            handleProcessHalt({major:0, minor:0, patch:i}, null, `Error in ensemble sample ${i+1}: ${result.errorMessage}`);
+            return;
+        }
+        
+        let productForLog: string;
+        if (isOutlineMode && result.outlineNodes) {
+            subOutlines.push(result.outlineNodes);
+            productForLog = JSON.stringify(result.outlineNodes, null, 2);
+        } else {
+            subProducts.push(result.outline);
+            productForLog = result.outline;
+        }
+        
+        logIterationData(
+            { major: 0, minor: 0, patch: i },
+            'ensemble_sub_iteration',
+            productForLog,
+            `Ensemble Sample ${i+1} Processed`,
+            null, // No previous product
+            undefined, // No iterateProduct result
+            getInitialUserConfig(),
+            { filesSentToApiIteration: sampleFiles.length, numberOfFilesActuallySent: sampleFiles.length, totalFilesSizeBytesSent: sampleFiles.reduce((s, f) => s + f.size, 0), fileManifestProvidedCharacterCount: sampleFileManifest.length, loadedFilesForIterationContext: sampleFiles },
+            undefined, // No validation info
+            productForLog.length
+        );
     }
+    
+    updateProcessState({
+        ensembleSubProducts: isOutlineMode ? subOutlines.map(o => JSON.stringify(o, null, 2)) : subProducts,
+        statusMessage: "All samples processed. Integrating results into final base document...",
+        aiProcessInsight: "Synthesizing a coherent document from diverse outlines."
+    });
+
+    // Final Integration Step using handleStartProcess
+    await handleStartProcess();
     
     isProcessingRef.current = false;
-    updateProcessState({ isProcessing: false });
+
+  }, [latestStateRef, updateProcessState, logIterationData, handleProcessHalt, handleStartProcess]);
+
+  return {
+    handleStartProcess,
+    handleHaltProcess,
+    handleBootstrapSynthesis,
   };
-
-
-  return { handleStartProcess, handleHaltProcess, handleBootstrapSynthesis };
 };

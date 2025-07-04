@@ -1,7 +1,7 @@
 // hooks/useProcessState.ts
 
 import { useState, useCallback } from 'react';
-import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate, ModelStrategy } from '../types/index.ts';
+import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate, ModelStrategy, OutlineNode } from '../types/index.ts';
 import * as geminiService from '../services/geminiService.ts';
 import * as storageService from '../services/storageService.ts';
 import { INITIAL_PROJECT_NAME_STATE } from '../services/utils.ts';
@@ -22,9 +22,10 @@ export const createInitialProcessState = (
   currentProduct: null,
   iterationHistory: [],
   documentChunks: [], // Initialize new chunking structure
+  currentFocusChunkIndex: null, // For context windowing
   currentMajorVersion: 0,
   currentMinorVersion: 0,
-  maxMajorVersions: 40,
+  maxMajorVersions: 20,
   isProcessing: false,
   finalProduct: null,
   statusMessage: "Load input file(s) or type prompt, then configure model settings to begin.",
@@ -86,6 +87,11 @@ export const createInitialProcessState = (
   ensembleSubProducts: null,
   awaitingStrategyDecision: false,
   projectCodename: null,
+  isDiffViewerOpen: false,
+  diffViewerContent: null,
+  isOutlineMode: false,
+  currentOutline: null,
+  finalOutline: null,
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
@@ -156,7 +162,7 @@ export const useProcessState = () => {
               statusMessageUpdate = "Last file removed. Load new input to begin.";
               aiInsightUpdate = "Input files cleared.";
           } else {
-              statusMessageUpdate = `File "${fileToRemoveName}" removed. Total is now ${updatedLoadedFiles.length}. Process has been reset.`;
+              statusMessageUpdate = `File "${fileToRemoveName}" removed. Total is now ${updatedLoadedFiles.length}.`;
               aiInsightUpdate = `${updatedLoadedFiles.length} file(s) remain loaded.`;
           }
           break;
@@ -192,9 +198,9 @@ export const useProcessState = () => {
         updates.finalProduct = null;
         updates.iterationHistory = [];
         updates.documentChunks = [];
-        updates.currentMajorVersion = 0;
-        updates.currentMinorVersion = 0;
         updates.projectCodename = null; // Also reset codename on input change
+        updates.currentOutline = null;
+        updates.finalOutline = null;
       }
       
       return { ...prev, ...updates };

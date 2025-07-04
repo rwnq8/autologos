@@ -1,5 +1,3 @@
-
-
 import React, { createContext, useContext, useCallback, useState, useEffect, useMemo } from 'react';
 import type { ProcessState, ModelConfig, SettingsSuggestionSource, StaticAiModelDetails, SelectableModelName, AutologosProjectFile, PlanTemplate, IterationLogEntry, Version, PlanStage, LoadedFile, DocumentChunk } from '../types/index.ts';
 import { SELECTABLE_MODELS } from '../types/index.ts';
@@ -43,6 +41,9 @@ interface EngineContextType {
     addDevLogEntry: ReturnType<typeof useProcessState>['addDevLogEntry'];
     updateDevLogEntry: ReturnType<typeof useProcessState>['updateDevLogEntry'];
     deleteDevLogEntry: ReturnType<typeof useProcessState>['deleteDevLogEntry'];
+    saveManualEdits: () => Promise<void>;
+    openDiffViewer: (version: Version) => void;
+    closeDiffViewer: () => void;
   };
   modelConfig: ModelConfigContextType;
   plan: ReturnType<typeof usePlanTemplates> & {
@@ -126,20 +127,15 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, [processActions]);
 
-  const setLoadedModelParams = useCallback((params: {
-    temperature: number;
-    topP: number;
-    topK: number;
-    settingsSuggestionSource: SettingsSuggestionSource;
-    userManuallyAdjustedSettings: boolean;
-  }) => {
-      modelParams.handleTemperatureChange(params.temperature);
-      modelParams.handleTopPChange(params.topP);
-      modelParams.handleTopKChange(params.topK);
-      modelParams.setUserManuallyAdjustedSettings(params.userManuallyAdjustedSettings);
-  }, [modelParams]);
-
-  const autoSave = useAutoSave(processState, modelParams, processActions.updateProcessState, planTemplates.overwriteUserTemplates, createInitialProcessState(processState.apiKeyStatus, processState.selectedModelName), modelParams, setLoadedModelParams);
+  const autoSave = useAutoSave(
+    processState, 
+    modelParams, 
+    processActions.updateProcessState, 
+    planTemplates.overwriteUserTemplates, 
+    createInitialProcessState(processState.apiKeyStatus, processState.selectedModelName), 
+    modelParams, 
+    () => modelParams.resetModelParametersToDefaults()
+  );
   
   const projectIO = useProjectIO(
     processState, 
@@ -148,7 +144,7 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     planTemplates.overwriteUserTemplates,
     createInitialProcessState(processState.apiKeyStatus, processState.selectedModelName),
     modelParams,
-    setLoadedModelParams
+    () => modelParams.resetModelParametersToDefaults()
   );
 
   const iterativeLogic = useIterativeLogic(processState, processActions.updateProcessState, processActions.addLogEntry, processActions.addDevLogEntry, modelParams.getUserSetBaseConfig, autoSave.performAutoSave, handleRateLimitErrorEncountered);
@@ -246,12 +242,14 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const { product } = reconstructProduct(version, processState.iterationHistory, processState.initialPrompt);
     const generationTimestamp = new Date(logEntry.timestamp).toISOString();
+    const versionString = formatVersion(version);
     
     let yamlFrontmatter = `---
 export_type: ITERATION_SNAPSHOT
 generation_timestamp: ${generationTimestamp}
 project_name: ${toYamlStringLiteral(processState.projectName || "Untitled Project")}
-iteration_version: ${formatVersion(version)}
+project_codename: ${toYamlStringLiteral(processState.projectCodename || "none")}
+iteration_version: ${versionString}
 iteration_status: ${toYamlStringLiteral(logEntry.status)}
 `;
 
@@ -273,7 +271,7 @@ iteration_status: ${toYamlStringLiteral(logEntry.status)}
       projectCodename: processState.projectCodename,
       projectName: processState.projectName,
       contentForSlug: product,
-      iterationNum: version.major,
+      versionString: versionString,
     });
     const blob = new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -285,6 +283,67 @@ iteration_status: ${toYamlStringLiteral(logEntry.status)}
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
+  
+  const saveManualEdits = useCallback(async () => {
+    const { editedProductBuffer, currentProduct, currentMajorVersion, currentMinorVersion } = processState;
+    if (editedProductBuffer === null || editedProductBuffer === currentProduct) {
+        processActions.updateProcessState({ isEditingCurrentProduct: false }); // Just cancel if no changes
+        return;
+    }
+    const newMinorVersion = currentMinorVersion + 1;
+    const newVersion = { major: currentMajorVersion, minor: newMinorVersion };
+    
+    processActions.addLogEntry({
+        majorVersion: newVersion.major,
+        minorVersion: newVersion.minor,
+        entryType: 'manual_edit',
+        currentFullProduct: editedProductBuffer,
+        previousFullProduct: currentProduct,
+        status: 'Manual Edit Applied',
+        versionRationale: 'User manually edited the product content.',
+        fileProcessingInfo: { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0 },
+    });
+    
+    processActions.updateProcessState({
+        currentProduct: editedProductBuffer,
+        documentChunks: splitToChunks(editedProductBuffer),
+        currentMinorVersion: newMinorVersion,
+        isEditingCurrentProduct: false,
+        editedProductBuffer: null,
+        statusMessage: `Saved manual edit as version ${formatVersion(newVersion)}`,
+    });
+    
+  }, [processState, processActions]);
+
+  const openDiffViewer = useCallback((version: Version) => {
+    const history = processState.iterationHistory;
+    const basePrompt = processState.initialPrompt;
+    
+    const { product: newText } = reconstructProduct(version, history, basePrompt);
+
+    const currentEntryIndex = history.findIndex(e => e.majorVersion === version.major && e.minorVersion === version.minor && (version.patch === undefined || e.patchVersion === version.patch));
+    
+    let oldText = "";
+    if (currentEntryIndex > 0) {
+        const previousEntry = history[currentEntryIndex - 1];
+        const prevVersion = { major: previousEntry.majorVersion, minor: previousEntry.minorVersion, patch: previousEntry.patchVersion };
+        const { product } = reconstructProduct(prevVersion, history, basePrompt);
+        oldText = product;
+    } else if (currentEntryIndex === 0) {
+        // The first entry is compared against an empty string or the initial prompt
+        oldText = "";
+    }
+
+    processActions.updateProcessState({
+        isDiffViewerOpen: true,
+        diffViewerContent: { oldText, newText, version: formatVersion(version) }
+    });
+  }, [processState.iterationHistory, processState.initialPrompt, processActions]);
+
+  const closeDiffViewer = useCallback(() => {
+    processActions.updateProcessState({ isDiffViewerOpen: false, diffViewerContent: null });
+  }, [processActions]);
+
 
   const engineValue: EngineContextType = {
     app: {
@@ -309,6 +368,9 @@ iteration_status: ${toYamlStringLiteral(logEntry.status)}
       addDevLogEntry: processActions.addDevLogEntry,
       updateDevLogEntry: processActions.updateDevLogEntry,
       deleteDevLogEntry: processActions.deleteDevLogEntry,
+      saveManualEdits,
+      openDiffViewer,
+      closeDiffViewer,
     },
     modelConfig: {
       ...modelParams,

@@ -31,7 +31,7 @@ export const generateFileName = (
   extension: string,
   options: {
     projectCodename?: string | null;
-    iterationNum?: number;
+    versionString?: string;
     contentForSlug?: string | null;
     projectName?: string | null;
   } = {}
@@ -43,8 +43,8 @@ export const generateFileName = (
 
   parts.push(suffix);
 
-  if (options.iterationNum !== undefined) {
-    parts.push(`v${options.iterationNum}`);
+  if (options.versionString) {
+    parts.push(options.versionString.replace(/^v/, '')); // Add version string like '1.20'
   }
 
   const slug = createSlugFromText(options.contentForSlug, options.projectName);
@@ -64,13 +64,24 @@ export const generateFileName = (
 
 /**
  * Safely converts a string into a YAML-compatible string literal.
- * It uses JSON.stringify which correctly handles quotes, backslashes, newlines, and other control characters.
- * @param str The string to escape.
- * @returns A YAML-safe string, including quotes.
+ * It uses JSON.stringify for single-line strings to handle quotes and escapes correctly.
+ * For multi-line strings, it uses the YAML literal block style for readability.
+ * @param str The string to convert.
+ * @returns A YAML-safe string.
  */
 export const toYamlStringLiteral = (str: string): string => {
     if (typeof str !== 'string') return '""';
-    // JSON.stringify will add quotes and escape internal quotes, backslashes, and control characters.
-    // This is a robust way to create a YAML-compatible string literal.
+    
+    const needsEscaping = /[:{}\[\]\-,&*\s#?|<>@%`!]/.test(str) || str.startsWith('"') || str.startsWith('\'');
+    const hasNewlines = str.includes('\n');
+
+    if (hasNewlines) {
+        // Use literal block scalar for multi-line strings
+        const indentedStr = str.replace(/\n/g, '\n  ');
+        return `|\n  ${indentedStr}`;
+    }
+
+    // For single-line strings, JSON.stringify is the most robust way to handle
+    // all special characters, quotes, and control characters correctly.
     return JSON.stringify(str);
 };

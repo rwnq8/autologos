@@ -1,10 +1,11 @@
 
 
 import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
-import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version, StructuredIterationResponse } from "../types/index.ts";
+import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version, StructuredIterationResponse, DocumentChunk, OutlineNode } from "../types/index.ts";
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents } from './promptBuilderService.ts';
 import { urlBrowseTool } from './toolDefinitions.ts';
 import { formatVersion } from './versionUtils.ts';
+import { classifyChunkType, reconstructFromChunks } from './chunkingService.ts';
 
 const API_KEY = process.env.API_KEY;
 
@@ -80,22 +81,28 @@ const toBase64 = (str: string): string => {
 export const generateProjectCodename = async (initialPrompt: string, loadedFiles: LoadedFile[]): Promise<string> => {
   if (!ai) return `fallback-${Math.random().toString(36).substring(2, 8)}`;
 
-  const systemInstruction = `You are a creative naming specialist. Your task is to analyze the provided text content and generate a unique, memorable, 2-3 word project codename. The codename MUST be in lower-kebab-case (e.g., 'cosmic-whale-odyssey', 'apollo-archive-retrieval'). Do not use generic words like 'project', 'file', 'document'. Be creative and thematic based on the content. Respond with ONLY the codename and nothing else.`;
+  const systemInstruction = `Function: Analyze the input text. Generate a unique, memorable, 2-3 word project codename.
+Output Requirements:
+1. The codename MUST be in lower-kebab-case (e.g., 'cosmic-whale-odyssey', 'apollo-archive-retrieval').
+2. The response MUST contain ONLY the codename, with no other text, explanation, or markdown.
+3. Do not use generic words like 'project', 'file', 'document'. Be creative and thematic based on the content.`;
 
-  let fullContent = `--- PROMPT ---\n${initialPrompt}\n\n`;
+  // Use the actual file content for analysis, not the manifest string from initialPrompt.
+  let contentForAnalysis = "";
   if (loadedFiles.length > 0) {
-    const filesContent = loadedFiles
-      .map(file => `--- FILE: ${file.name} ---\n${file.content.substring(0, 20000)}`) // Truncate individual file contents for safety
-      .join('\n\n');
-    fullContent += filesContent;
+      contentForAnalysis = loadedFiles
+          .map(f => f.content.substring(0, 20000)) // Truncate individual file contents for safety
+          .join('\n\n');
+  } else {
+      contentForAnalysis = initialPrompt;
   }
-
+  
   const promptForCodename = `Analyze the following content and generate a codename as per the system instructions.`;
   
   try {
     const result = await ai.models.generateContent({
       model: 'gemini-2.5-flash-preview-04-17', // Fast and cheap for this task
-      contents: promptForCodename + '\n\n' + fullContent,
+      contents: promptForCodename + '\n\n' + contentForAnalysis,
       config: {
         systemInstruction: systemInstruction,
         temperature: 0.8, // Be creative
@@ -118,11 +125,11 @@ export const generateProjectCodename = async (initialPrompt: string, loadedFiles
 };
 
 
-export const generateInitialOutline = async (fileManifest: string, loadedFiles: LoadedFile[], modelConfig: ModelConfig, modelToUse: SelectableModelName, devLogContextString?: string): Promise<OutlineGenerationResult> => {
-  if (!ai) return { outline: "", identifiedRedundancies: "", errorMessage: "Gemini API client not initialized." };
+export const generateInitialOutline = async (fileManifest: string, loadedFiles: LoadedFile[], modelConfig: ModelConfig, modelToUse: SelectableModelName, isOutlineMode: boolean, devLogContextString?: string): Promise<OutlineGenerationResult> => {
+  if (!ai) return { outline: "", outlineNodes: [], identifiedRedundancies: "", errorMessage: "Gemini API client not initialized." };
   
   try {
-    const { systemInstruction, coreUserInstructions } = getOutlineGenerationPromptComponents(fileManifest);
+    const { systemInstruction, coreUserInstructions } = getOutlineGenerationPromptComponents(fileManifest, isOutlineMode, loadedFiles);
     
     const requestParts: Part[] = loadedFiles.map(file => ({
       inlineData: { mimeType: getSanitizedMimeType(file.mimeType || 'text/plain'), data: toBase64(file.content) }
@@ -130,14 +137,19 @@ export const generateInitialOutline = async (fileManifest: string, loadedFiles: 
     requestParts.push({ text: coreUserInstructions });
 
     const { ...apiConfig } = modelConfig;
+    
+    const configForRequest: any = {
+        ...apiConfig,
+        systemInstruction,
+    };
+    if (isOutlineMode) {
+        configForRequest.responseMimeType = "application/json";
+    }
 
     const result: GenerateContentResponse = await ai.models.generateContent({
         model: modelToUse,
         contents: [{ role: "user", parts: requestParts }],
-        config: {
-            ...apiConfig,
-            systemInstruction,
-        }
+        config: configForRequest
     });
 
     const responseText = result.text;
@@ -152,28 +164,50 @@ export const generateInitialOutline = async (fileManifest: string, loadedFiles: 
         isContinuation: false
     }];
 
-    let outline = "";
-    let identifiedRedundancies = "";
-
-    const outlineMatch = responseText.match(/Outline:([\s\S]*?)Redundancies:/i);
-    const redundanciesMatch = responseText.match(/Redundancies:([\s\S]*)/i);
-
-    if (outlineMatch && outlineMatch[1]) {
-        outline = outlineMatch[1].trim();
-    } else {
-        const redIndex = responseText.toLowerCase().indexOf("redundancies:");
-        if (redIndex !== -1) {
-            outline = responseText.substring(0, redIndex).replace(/^outline:/i, "").trim();
-        } else {
-            outline = responseText.trim();
+    if (isOutlineMode) {
+        try {
+            let jsonStr = responseText.trim();
+            const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
+            const match = jsonStr.match(fenceRegex);
+            if (match && match[2]) {
+                jsonStr = match[2].trim();
+            }
+            const parsedResponse = JSON.parse(jsonStr);
+            return {
+                outline: JSON.stringify(parsedResponse.outline, null, 2), // Stringified for text view
+                outlineNodes: parsedResponse.outline,
+                identifiedRedundancies: "N/A in Outline Mode",
+                apiDetails: apiStreamDetails
+            };
+        } catch (e: any) {
+            const errorMessage = `CRITICAL: AI returned malformed JSON for outline, preventing processing. Error: ${e.message}. Raw output head: ${responseText.substring(0, 300)}`;
+            console.error(errorMessage, {rawOutput: responseText});
+            return { outline: "", outlineNodes: [], identifiedRedundancies: "", errorMessage, apiDetails: [] };
         }
-    }
+    } else {
+        // Text-based outline parsing
+        let outline = "";
+        let identifiedRedundancies = "";
+        const outlineMatch = responseText.match(/Outline:([\s\S]*?)Redundancies:/i);
+        const redundanciesMatch = responseText.match(/Redundancies:([\s\S]*)/i);
 
-    if (redundanciesMatch && redundanciesMatch[1]) {
-        identifiedRedundancies = redundanciesMatch[1].trim();
-    }
+        if (outlineMatch && outlineMatch[1]) {
+            outline = outlineMatch[1].trim();
+        } else {
+            const redIndex = responseText.toLowerCase().indexOf("redundancies:");
+            if (redIndex !== -1) {
+                outline = responseText.substring(0, redIndex).replace(/^outline:/i, "").trim();
+            } else {
+                outline = responseText.trim();
+            }
+        }
 
-    return { outline, identifiedRedundancies, apiDetails: apiStreamDetails };
+        if (redundanciesMatch && redundanciesMatch[1]) {
+            identifiedRedundancies = redundanciesMatch[1].trim();
+        }
+
+        return { outline, identifiedRedundancies, apiDetails: apiStreamDetails };
+    }
   } catch (error: any) {
       console.error('Error during Gemini API call for outline generation:', error);
       let errorMessage = `An unknown API error occurred during outline generation. Name: ${error.name || 'N/A'}, Message: ${error.message || 'No message'}.`;
@@ -183,14 +217,14 @@ export const generateInitialOutline = async (fileManifest: string, loadedFiles: 
 
 
 export const iterateProduct = async ({
-    currentProduct, currentVersion, maxIterationsOverall, fileManifest, loadedFiles,
+    currentProduct, documentChunks, currentOutline, currentFocusChunkIndex, currentVersion, maxIterationsOverall, fileManifest, loadedFiles,
     activePlanStage, outputParagraphShowHeadings, outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings,
     modelConfigToUse, isGlobalMode, isSearchGroundingEnabled, isUrlBrowsingEnabled, modelToUse, onStreamChunk, isHaltSignalled,
     retryContext, stagnationNudgeStrategy, initialOutlineForIter1, activeMetaInstruction,
     ensembleSubProducts, devLogContextString, isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
-    isRadicalRefinementKickstart
+    isRadicalRefinementKickstart, isOutlineMode
 }: {
-    currentProduct: string; currentVersion: Version; maxIterationsOverall: number; fileManifest: string;
+    currentProduct: string; documentChunks: DocumentChunk[] | null; currentOutline: OutlineNode[] | null; currentFocusChunkIndex: number | null; currentVersion: Version; maxIterationsOverall: number; fileManifest: string;
     loadedFiles: LoadedFile[]; activePlanStage: PlanStage | null; outputParagraphShowHeadings: boolean;
     outputParagraphMaxHeadingDepth: number; outputParagraphNumberedHeadings: boolean;
     modelConfigToUse: ModelConfig; isGlobalMode: boolean; isSearchGroundingEnabled: boolean; isUrlBrowsingEnabled: boolean; modelToUse: SelectableModelName;
@@ -200,7 +234,7 @@ export const iterateProduct = async ({
     ensembleSubProducts?: string[] | null;
     devLogContextString?: string;
     isTargetedRefinementMode?: boolean; targetedSelectionText?: string; targetedRefinementInstructions?: string;
-    isRadicalRefinementKickstart?: boolean;
+    isRadicalRefinementKickstart?: boolean; isOutlineMode: boolean;
 }): Promise<IterateProductResult> => {
      if (!ai) return { product: currentProduct, status: 'ERROR', errorMessage: "Gemini API client not initialized." };
     
@@ -216,6 +250,7 @@ export const iterateProduct = async ({
             outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings, isGlobalMode,
             isInitialProductEmptyAndFilesLoaded,
             !isUsingTools, // isJsonMode: only true if NOT using tools
+            isOutlineMode,
             retryContext, stagnationNudgeStrategy, initialOutlineForIter1, loadedFiles, activeMetaInstruction,
             isSegmentedSynthesisMode, undefined, undefined,
             isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
@@ -227,19 +262,25 @@ export const iterateProduct = async ({
         const { ...apiConfig } = modelConfigToUse;
         
         const fullUserPromptText = buildTextualPromptPart(
-            currentProduct,
+            isOutlineMode ? currentOutline : documentChunks,
+            currentFocusChunkIndex ?? 0,
             loadedFiles,
             coreUserInstructions,
             currentVersion,
             initialOutlineForIter1,
             fileManifest, // Pass the summary manifest string here
-            isSegmentedSynthesisMode,
+            isOutlineMode,
             isTargetedRefinementMode,
             ensembleSubProducts
         );
 
         const initialUserParts: Part[] = [];
-        if (isInitialProductEmptyAndFilesLoaded && currentVersion.major === 1 && currentVersion.minor === 0 && (currentVersion.patch === undefined || currentVersion.patch === 0)) {
+        const isStandardInitialSynthesis = isInitialProductEmptyAndFilesLoaded &&
+                                           currentVersion.major === 1 &&
+                                           currentVersion.minor === 0 &&
+                                           (!ensembleSubProducts || ensembleSubProducts.length === 0);
+
+        if (isStandardInitialSynthesis) {
             loadedFiles.forEach(file => {
                 initialUserParts.push({ inlineData: { mimeType: getSanitizedMimeType(file.mimeType || 'text/plain'), data: toBase64(file.content) }});
             });
@@ -262,7 +303,6 @@ export const iterateProduct = async ({
             ...(tools.length > 0 && { tools }),
         };
 
-        // CRITICAL: Only set responseMimeType if tools are NOT being used.
         if (!isUsingTools) {
             configForRequest.responseMimeType = "application/json";
         }
@@ -308,7 +348,6 @@ export const iterateProduct = async ({
                         await new Promise(resolve => setTimeout(resolve, delay));
                         onStreamChunk(`\n[SYSTEM: Retrying API call, attempt ${attempt + 1}...]\n`);
                     } else {
-                        // Not a rate limit error, or max retries reached. Re-throw to be caught by the main function's catch block.
                         throw error;
                     }
                 }
@@ -366,13 +405,11 @@ export const iterateProduct = async ({
                         browseContent = await proxyResponse.text();
                         if (proxyResponse.ok) {
                             browseSuccess = true;
-                            // Truncate for safety to prevent huge context windows
                             if (browseContent.length > 50000) {
                               browseContent = browseContent.substring(0, 50000) + "\n\n[Content truncated by system]";
                             }
                         } else {
                              browseSuccess = false;
-                             // The body of the error response from the SW is the error message
                         }
                     } catch (e: any) {
                         browseSuccess = false;
@@ -419,9 +456,7 @@ export const iterateProduct = async ({
             }
         }
         
-        // Handle response based on whether tools were used (which dictates if we expect JSON or text)
         if (isUsingTools) {
-            // In tool mode, the response is plain text.
             const lastDetailWithMetadata = [...apiStreamDetails].reverse().find(d => d.groundingMetadata);
             return {
                 product: accumulatedText,
@@ -437,7 +472,6 @@ export const iterateProduct = async ({
                 groundingMetadata: lastDetailWithMetadata?.groundingMetadata
             };
         } else {
-            // In non-tool mode, we expect JSON.
             let parsedResponse: StructuredIterationResponse;
             try {
                 let jsonStr = accumulatedText.trim();
@@ -450,35 +484,54 @@ export const iterateProduct = async ({
             } catch (e) {
                 const errorMessage = `CRITICAL: AI returned malformed JSON, preventing further processing. Error: ${(e as Error).message}. Raw output head: ${accumulatedText.substring(0, 300)}`;
                 console.error(errorMessage, {rawOutput: accumulatedText});
-                return {
-                    product: currentProduct,
-                    status: 'ERROR',
-                    errorMessage,
-                    apiStreamDetails,
-                };
+                return { product: currentProduct, status: 'ERROR', errorMessage, apiStreamDetails, };
             }
             
             const isConverged = parsedResponse.suggestedNextStep === 'declare_convergence';
-            const finalProduct = parsedResponse.newProductContent || "";
             const status = isConverged ? 'CONVERGED' : 'COMPLETED';
-
             const lastDetailWithMetadata = [...apiStreamDetails].reverse().find(d => d.groundingMetadata);
 
-            return {
-                product: finalProduct,
-                versionRationale: parsedResponse.versionRationale,
-                selfCritique: parsedResponse.selfCritique,
-                suggestedNextStep: parsedResponse.suggestedNextStep,
-                status,
-                apiStreamDetails,
-                isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',
-                promptSystemInstructionSent: systemInstruction,
-                promptCoreUserInstructionsSent: coreUserInstructions,
-                promptFullUserPromptSent: fullUserPromptText,
-                groundingMetadata: lastDetailWithMetadata?.groundingMetadata
-            };
-        }
+            if (isOutlineMode) {
+                const newOutline = parsedResponse.outline || null;
+                return {
+                    product: newOutline ? JSON.stringify(newOutline, null, 2) : "[]",
+                    outline: newOutline,
+                    versionRationale: parsedResponse.versionRationale,
+                    selfCritique: parsedResponse.selfCritique,
+                    suggestedNextStep: parsedResponse.suggestedNextStep,
+                    status, apiStreamDetails, isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',
+                    promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptText,
+                    groundingMetadata: lastDetailWithMetadata?.groundingMetadata
+                };
+            } else {
+                let finalProduct = currentProduct;
+                let updatedChunks = documentChunks;
 
+                if (Array.isArray(parsedResponse.windowChunks) && parsedResponse.windowChunks.length > 0) {
+                    const modificationsMap = new Map(parsedResponse.windowChunks.map(m => [m.chunkId, m.content]));
+                    updatedChunks = (documentChunks || []).map(originalChunk => {
+                        const newContent = modificationsMap.get(originalChunk.id);
+                        if (newContent !== undefined) {
+                            const newType = classifyChunkType(newContent);
+                            return { ...originalChunk, content: newContent, type: newType };
+                        } else {
+                            return originalChunk;
+                        }
+                    });
+                    finalProduct = reconstructFromChunks(updatedChunks);
+                } else {
+                    finalProduct = currentProduct;
+                    updatedChunks = documentChunks;
+                }
+                return {
+                    product: finalProduct, updatedChunks: updatedChunks, versionRationale: parsedResponse.versionRationale,
+                    selfCritique: parsedResponse.selfCritique, suggestedNextStep: parsedResponse.suggestedNextStep, status,
+                    apiStreamDetails, isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',
+                    promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptText,
+                    groundingMetadata: lastDetailWithMetadata?.groundingMetadata
+                };
+            }
+        }
     } catch (error: any) {
         console.error(`Error during Gemini API call for Iteration ${formatVersion(currentVersion)}`, error);
         let errorMessage = `An unknown API error occurred. Name: ${error.name || 'N/A'}, Message: ${error.message || 'No message'}.`;
@@ -494,11 +547,6 @@ export const iterateProduct = async ({
             errorMessage = `The selected model (${modelToUse}) does not support function calling (URL Browsing tool). Please disable the tool or select a different model.`;
         }
 
-        return {
-            product: currentProduct,
-            status: 'ERROR',
-            errorMessage,
-            isRateLimitError: isRateLimitErrorFlag,
-        };
+        return { product: currentProduct, status: 'ERROR', errorMessage, isRateLimitError: isRateLimitErrorFlag };
     }
 }

@@ -1,4 +1,3 @@
-
 import * as Diff from 'diff';
 import type { IterationLogEntry, ReconstructedProductResult, Version } from '../types/index.ts';
 import { compareVersions, formatVersion } from './versionUtils.ts';
@@ -77,11 +76,8 @@ export const reconstructProduct = (
     try {
       const patchObjects = Diff.parsePatch(logEntry.productDiff!);
       if (patchObjects.length === 0 && logEntry.productDiff?.trim()) {
-          console.warn(`reconstructProduct: Patch for Version ${formatVersion(logEntry)} was non-empty but parsed to zero hunks. Treating as no-op.`);
+          // This check prevents benign empty patches from halting reconstruction, but we no longer log it to the console.
           continue;
-      }
-      if (patchObjects.length > 1) {
-        console.warn(`reconstructProduct: Patch for Version ${formatVersion(logEntry)} parsed into ${patchObjects.length} objects. Applying sequentially.`);
       }
 
       let patchedResult: string | false = currentText;

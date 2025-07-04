@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { DocumentChunk } from '../types/index.ts';
 
-const classifyChunkType = (content: string): DocumentChunk['type'] => {
+export const classifyChunkType = (content: string): DocumentChunk['type'] => {
     const trimmed = content.trim();
     if (trimmed.startsWith('# ')) return 'heading_1';
     if (trimmed.startsWith('## ')) return 'heading_2';

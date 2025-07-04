@@ -26,7 +26,7 @@ export const useAutoSave = (
   overwriteUserTemplates: (templates: PlanTemplate[]) => void,
   initialProcessStateValues: ProcessState,
   initialModelParamValues: ModelParams,
-  setLoadedModelParams: (params: ModelParams) => void
+  resetModelParameters: () => void
 ) => {
   const [autoSaveStatus, setAutoSaveStatus] = useState<AutoSaveStatus>('idle');
   const [showRestorePrompt, setShowRestorePrompt] = useState(false);
@@ -73,6 +73,7 @@ export const useAutoSave = (
         initialPrompt: currentState.initialPrompt,
         iterationHistory: leanHistory,
         documentChunks: currentState.documentChunks,
+        currentFocusChunkIndex: currentState.currentFocusChunkIndex,
         maxMajorVersions: currentState.maxMajorVersions,
         temperature: currentModelParams.temperature,
         topP: currentModelParams.topP,
@@ -162,6 +163,7 @@ export const useAutoSave = (
           initialPrompt: correctedInitialPrompt, 
           loadedFiles: loadedFilesFromData,
           documentChunks: documentChunks,
+          currentFocusChunkIndex: engineData.currentFocusChunkIndex ?? null,
           apiKeyStatus: initialProcessStateValues.apiKeyStatus, 
           isProcessing: false, 
           statusMessage: "Session restored from auto-save.",
@@ -192,13 +194,8 @@ export const useAutoSave = (
         };
         updateProcessState(restoredProcessState);
 
-        setLoadedModelParams({
-          temperature: engineData.temperature ?? initialModelParamValues.temperature,
-          topP: engineData.topP ?? initialModelParamValues.topP,
-          topK: engineData.topK ?? initialModelParamValues.topK,
-          settingsSuggestionSource: engineData.settingsSuggestionSource ?? initialModelParamValues.settingsSuggestionSource,
-          userManuallyAdjustedSettings: engineData.userManuallyAdjustedSettings ?? initialModelParamValues.userManuallyAdjustedSettings,
-        });
+        resetModelParameters();
+        
         updateProcessState({statusMessage: `Project "${restoredProcessState.projectName || 'Restored Project'}" loaded.`});
 
         setAutoSaveStatus('loaded');
@@ -213,7 +210,7 @@ export const useAutoSave = (
     }
     setShowRestorePrompt(false);
     setRestorableStateInfo(null);
-  }, [updateProcessState, overwriteUserTemplates, initialProcessStateValues, initialModelParamValues, setLoadedModelParams]);
+  }, [updateProcessState, overwriteUserTemplates, initialProcessStateValues, initialModelParamValues, resetModelParameters]);
 
   const handleClearAutoSaveAndDismiss = useCallback(async () => {
     setAutoSaveStatus('clearing');

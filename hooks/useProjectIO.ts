@@ -32,7 +32,7 @@ export const useProjectIO = (
   overwriteUserTemplates: (templates: PlanTemplate[]) => void,
   initialProcessStateValues: ProcessState,
   initialModelParamValues: ModelParams,
-  setLoadedModelParams: (params: ModelParams) => void
+  resetModelParameters: () => void
 ) => {
   const latestDataRef = useRef({ processState, modelParams });
   useEffect(() => {
@@ -65,6 +65,7 @@ export const useProjectIO = (
       initialPrompt: currentState.initialPrompt,
       iterationHistory: currentState.iterationHistory,
       documentChunks: currentState.documentChunks,
+      currentFocusChunkIndex: currentState.currentFocusChunkIndex,
       maxMajorVersions: currentState.maxMajorVersions,
       temperature: currentModelParams.temperature,
       topP: currentModelParams.topP,
@@ -113,11 +114,13 @@ export const useProjectIO = (
       }
     };
 
+    const versionString = formatVersion({ major: currentState.currentMajorVersion, minor: currentState.currentMinorVersion });
+
     const fileName = generateFileName("project", "autologos.json", {
       projectCodename: currentState.projectCodename,
       projectName: currentState.projectName,
       contentForSlug: currentState.finalProduct || currentState.currentProduct,
-      iterationNum: currentState.currentMajorVersion
+      versionString: versionString,
     });
     const blob = new Blob([JSON.stringify(projectFile, null, 2)], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -160,62 +163,48 @@ export const useProjectIO = (
     
     const { product: productAtLastIter } = reconstructProduct(lastVersion, engineData.iterationHistory, correctedInitialPrompt);
 
-    // Backward compatibility for chunking
     const documentChunks = engineData.documentChunks && engineData.documentChunks.length > 0
         ? engineData.documentChunks
         : splitToChunks(engineData.currentProductBeforeHalt || productAtLastIter || "");
 
     const importedProcessStateBase: Partial<ProcessState> = {
-      ...engineData,
+      // Keepers from engineData
       initialPrompt: correctedInitialPrompt,
-      loadedFiles: loadedFilesFromData,    
+      loadedFiles: loadedFilesFromData,
+      iterationHistory: engineData.iterationHistory || [],
+      devLog: engineData.devLog || [],
       documentChunks: documentChunks,
+      currentFocusChunkIndex: engineData.currentFocusChunkIndex ?? null,
       projectId: projectFile.header.projectId,
       projectName: projectFile.header.projectName || DEFAULT_PROJECT_NAME_FALLBACK,
       projectObjective: projectFile.header.projectObjective || null,
-      devLog: engineData.devLog || [],
-      ensembleSubProducts: engineData.ensembleSubProducts || null,
       projectCodename: engineData.projectCodename || null,
+      isPlanActive: engineData.isPlanActive ?? false,
+      planStages: engineData.planStages || [],
+      savedPlanTemplates: engineData.savedPlanTemplates || [],
+      finalProduct: engineData.finalProduct,
+      currentProduct: engineData.currentProductBeforeHalt || productAtLastIter,
+      currentProductBeforeHalt: engineData.currentProductBeforeHalt,
+      currentVersionBeforeHalt: engineData.currentVersionBeforeHalt,
+      currentMajorVersion: engineData.currentVersionBeforeHalt?.major ?? lastVersion.major,
+      currentMinorVersion: engineData.currentVersionBeforeHalt?.minor ?? lastVersion.minor,
+      ensembleSubProducts: engineData.ensembleSubProducts || null,
     };
 
     const fullNewState: ProcessState = {
       ...initialProcessStateValues,
       ...importedProcessStateBase,
-      apiKeyStatus: initialProcessStateValues.apiKeyStatus,
-      isProcessing: false,
-      statusMessage: `Project "${projectFile.header.projectName || 'Imported Project'}" imported successfully.`,
-      currentProduct: engineData.currentProductBeforeHalt || productAtLastIter,
-      currentMajorVersion: engineData.currentVersionBeforeHalt?.major ?? lastVersion.major,
-      currentMinorVersion: engineData.currentVersionBeforeHalt?.minor ?? lastVersion.minor,
-      currentStageIteration: 0,
-      selectedModelName: engineData.selectedModelName || initialProcessStateValues.selectedModelName,
-      planStages: engineData.planStages || [],
-      savedPlanTemplates: engineData.savedPlanTemplates || [], 
-      iterationHistory: engineData.iterationHistory || [],
-      outputParagraphShowHeadings: engineData.outputParagraphShowHeadings ?? initialProcessStateValues.outputParagraphShowHeadings,
-      outputParagraphMaxHeadingDepth: engineData.outputParagraphMaxHeadingDepth ?? initialProcessStateValues.outputParagraphMaxHeadingDepth,
-      outputParagraphNumberedHeadings: engineData.outputParagraphNumberedHeadings ?? initialProcessStateValues.outputParagraphNumberedHeadings,
-      isPlanActive: engineData.isPlanActive ?? false,
-      currentDiffViewType: engineData.currentDiffViewType || 'words',
+      statusMessage: `Project "${importedProcessStateBase.projectName || 'Imported Project'}" imported. Model params reset.`,
       aiProcessInsight: "Project loaded. Review state and resume or start new process.",
-      stagnationNudgeEnabled: engineData.stagnationNudgeEnabled ?? initialProcessStateValues.stagnationNudgeEnabled,
-      isSearchGroundingEnabled: engineData.isSearchGroundingEnabled ?? initialProcessStateValues.isSearchGroundingEnabled,
-      isUrlBrowsingEnabled: engineData.isUrlBrowsingEnabled ?? initialProcessStateValues.isUrlBrowsingEnabled,
-      strategistInfluenceLevel: engineData.strategistInfluenceLevel ?? initialProcessStateValues.strategistInfluenceLevel, 
-      stagnationNudgeAggressiveness: engineData.stagnationNudgeAggressiveness ?? initialProcessStateValues.stagnationNudgeAggressiveness, 
     };
-    updateProcessState(fullNewState);
 
-    setLoadedModelParams({
-      temperature: engineData.temperature ?? initialModelParamValues.temperature,
-      topP: engineData.topP ?? initialModelParamValues.topP,
-      topK: engineData.topK ?? initialModelParamValues.topK,
-      settingsSuggestionSource: engineData.settingsSuggestionSource ?? initialModelParamValues.settingsSuggestionSource,
-      userManuallyAdjustedSettings: engineData.userManuallyAdjustedSettings ?? initialModelParamValues.userManuallyAdjustedSettings,
-    });
+    updateProcessState(fullNewState);
+    
+    resetModelParameters();
+    
     updateProcessState({statusMessage: `Project "${fullNewState.projectName}" imported successfully.`});
 
-  }, [updateProcessState, overwriteUserTemplates, initialProcessStateValues, initialModelParamValues, setLoadedModelParams]);
+  }, [updateProcessState, overwriteUserTemplates, initialProcessStateValues, resetModelParameters]);
 
   const handleImportIterationLogData = useCallback((
     logData: IterationLogEntry[],

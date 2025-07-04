@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import ReactDiffViewer from 'react-diff-viewer';
 import type { IterationLogEntry, ReconstructedProductResult, Version, IterationEntryType } from '../../types/index.ts';
 import * as GeminaiDiff from 'diff';
 import { useEngine } from '../../contexts/ApplicationContext.tsx';
@@ -101,6 +102,19 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
     setTimeout(() => setLocalCopyStatus(undefined), 2000);
   };
 
+  const handleCreateIssueFromCritique = () => {
+    if (!logEntry.selfCritique) return;
+    process.addDevLogEntry({
+        type: 'issue',
+        status: 'open',
+        summary: `AI Critique from ${versionString}: ${logEntry.selfCritique}`,
+        details: `This issue was automatically generated from an AI self-critique during the iterative process for version ${versionString}.`,
+        relatedIteration: versionString,
+        tags: ['ai-critique', 'needs-review'],
+    });
+    alert(`Issue created in Dev Log from critique for version ${versionString}.`);
+  };
+
   const getReadabilityInterpretation = (score: number | undefined): { text: string; color: string } => {
         if (score === undefined) return { text: "N/A", color: "text-slate-500" };
         if (score >= 90) return { text: "Very Easy", color: "text-green-700 dark:text-green-300" };
@@ -152,6 +166,7 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
                 <div className="flex items-center gap-2 flex-wrap">
                     <button onClick={() => onRewind(versionForActions)} disabled={isProcessing || isHalted} className={neutralButtonClasses} title={isHalted ? "Cannot rewind to a halted version" : ""}>Rewind to this Version</button>
                     <button onClick={() => onExportIterationMarkdown(versionForActions)} disabled={isProcessing || isHalted} className={neutralButtonClasses} title={isHalted ? "Cannot export a halted version" : ""}>Export Markdown</button>
+                    <button onClick={() => process.openDiffViewer(versionForActions)} disabled={isHalted} className={neutralButtonClasses}>View Visual Diff</button>
                     <button onClick={handleCopySingleDiagnostic} className={`${neutralButtonClasses} min-w-[120px]`}>
                        {localCopyStatus || '[Copy] Diagnostics'}
                     </button>
@@ -170,12 +185,28 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
                         {logEntry.selfCritique && (
                              <details className="space-y-1">
                                 <summary className="text-sm font-medium cursor-pointer text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-200">AI Self-Critique</summary>
-                                <div className="p-2 bg-yellow-50 dark:bg-yellow-900/30 rounded-md text-xs text-yellow-800 dark:text-yellow-200 italic">
-                                    {logEntry.selfCritique}
+                                <div className="group p-2 bg-yellow-50 dark:bg-yellow-900/30 rounded-md text-xs text-yellow-800 dark:text-yellow-200 italic flex justify-between items-start">
+                                    <span>{logEntry.selfCritique}</span>
+                                    <button onClick={handleCreateIssueFromCritique} className="ml-2 text-xs font-mono px-1 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity bg-yellow-200/50 dark:bg-yellow-700/50 text-yellow-700 dark:text-yellow-100 hover:bg-yellow-300/50 dark:hover:bg-yellow-600/50">[+ Create Issue]</button>
                                 </div>
                             </details>
                         )}
                     </div>
+                )}
+
+                {logEntry.groundingMetadata?.groundingChunks?.length > 0 && (
+                     <details className="space-y-1">
+                        <summary className="text-sm font-medium cursor-pointer text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-200">Grounding Sources (from Google Search)</summary>
+                        <ul className="p-2 bg-slate-100 dark:bg-slate-700/50 rounded-md text-xs list-disc list-inside space-y-1">
+                            {logEntry.groundingMetadata.groundingChunks.map((chunk: any, index: number) => (
+                                <li key={index} className="text-slate-700 dark:text-slate-300">
+                                    <a href={chunk.web?.uri} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">
+                                        {chunk.web?.title || chunk.web?.uri}
+                                    </a>
+                                </li>
+                            ))}
+                        </ul>
+                    </details>
                 )}
                 
                 {logEntry.productDiff && logEntry.productDiff.trim() && (

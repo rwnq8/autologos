@@ -82,14 +82,18 @@ const ProcessStatusDisplay: React.FC = () => {
       progressPercentValue = totalPlanIterations > 0 ? (overallCompletedIterations / totalPlanIterations) * 100 : 0;
       progressText = `Stage ${processCtx.currentPlanStageIndex + 1}/${planCtx.planStages.length} (Iter. ${processCtx.currentStageIteration +1 }/${currentStage.stageIterations}) | Overall ${Math.round(progressPercentValue)}%`;
     } else {
-      const iterationBeingProcessedGlobal = processCtx.currentMajorVersion + 1;
+      const iterationBeingProcessedGlobal = processCtx.currentMinorVersion + 1;
       progressPercentValue = modelConfigCtx.maxIterations > 0 ? (iterationBeingProcessedGlobal / modelConfigCtx.maxIterations) * 100 : 0;
-      progressText = `Global Iter. ${Math.max(1, processCtx.currentMajorVersion)} / ${modelConfigCtx.maxIterations}`;
+      progressText = `Global Iter. ${iterationBeingProcessedGlobal} / ${modelConfigCtx.maxIterations}`;
     }
   } else {
     if (!planCtx.isPlanActive) {
-        progressPercentValue = modelConfigCtx.maxIterations > 0 ? (processCtx.currentMajorVersion / modelConfigCtx.maxIterations) * 100 : 0;
-        progressText = `Global Iter. ${processCtx.currentMajorVersion} / ${modelConfigCtx.maxIterations} (Completed)`;
+        let completedIterations = processCtx.currentMinorVersion;
+        if (processCtx.finalProduct) { // Converged or max iterations reached
+            completedIterations = processCtx.currentMinorVersion + 1;
+        }
+        progressPercentValue = modelConfigCtx.maxIterations > 0 ? (completedIterations / modelConfigCtx.maxIterations) * 100 : 0;
+        progressText = `Global Iter. ${completedIterations} / ${modelConfigCtx.maxIterations} (Completed)`;
     } else if (planCtx.isPlanActive && planCtx.planStages.length > 0 && processCtx.currentPlanStageIndex != null) {
         const totalPlanIterations = planCtx.planStages.reduce((sum, stage) => sum + stage.stageIterations, 0);
         progressPercentValue = totalPlanIterations > 0 ? ( (processCtx.currentMajorVersion) / totalPlanIterations) * 100 : 0;
