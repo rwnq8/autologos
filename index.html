@@ -18,6 +18,22 @@
     animation: autologosGradientAnimation 30s ease infinite;
   }
 
+  @keyframes pulse-once {
+    0% {
+      background-color: rgba(74, 222, 128, 0.0); /* green-400 transparent */
+    }
+    50% {
+      background-color: rgba(74, 222, 128, 0.25); /* green-400 with opacity */
+    }
+    100% {
+      background-color: rgba(74, 222, 128, 0.0);
+    }
+  }
+  .animate-pulse-once {
+      animation: pulse-once 1.5s ease-out;
+  }
+
+
   .sr-only {
     position: absolute;
     width: 1px;

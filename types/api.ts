@@ -17,15 +17,19 @@ export interface ApiStreamCallDetail {
   groundingMetadata?: any;
 }
 
+export interface ChunkOperation {
+  op: 'update' | 'insert_after' | 'delete' | 'merge_up' | 'split';
+  chunkId: string; // The ID of the primary chunk to operate on.
+  content?: string; // The new content for 'update' or 'insert_after'.
+  sourceFileNames?: string[]; // Source files for 'update' or 'insert_after'.
+  changeRationale: string; // Rationale for the operation.
+  splitPoint?: string; // For 'split', a unique snippet of text where the split should occur.
+}
+
 export interface StructuredIterationResponse {
   versionRationale: string;
-  // For text refinement mode
-  windowChunks?: {
-    chunkId: string;
-    content: string;
-    sourceFileNames: string[];
-    changeRationale: string | null;
-  }[];
+  // For text refinement mode, now returns operations
+  operations?: ChunkOperation[];
   // For initial synthesis text mode
   newProductContent?: string;
   // For outline refinement mode
@@ -37,6 +41,7 @@ export interface StructuredIterationResponse {
 
 export interface IterateProductResult {
   product: string;
+  chunkOperations?: ChunkOperation[];
   updatedChunks?: DocumentChunk[];
   outlineId?: string | null;
   outline?: OutlineNode[] | null;

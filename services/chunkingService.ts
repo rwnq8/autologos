@@ -18,6 +18,28 @@ export const classifyChunkType = (content: string): DocumentChunk['type'] => {
 };
 
 /**
+ * Creates a new DocumentChunk object with a unique ID.
+ * @param content The markdown content for the new chunk.
+ * @param sourceFileNames Optional array of source file names.
+ * @param changeRationale Optional rationale for the chunk's creation.
+ * @returns A new DocumentChunk object.
+ */
+export const createChunk = (content: string, sourceFileNames: string[] = [], changeRationale?: string): DocumentChunk => {
+    const type = classifyChunkType(content);
+    const langMatch = type === 'code_block' ? content.match(/^```(\w*)/) : null;
+    return {
+        id: uuidv4(),
+        type,
+        content: content.trim(),
+        ...(langMatch && langMatch[1] && { lang: langMatch[1] }),
+        sourceFileNames,
+        changeRationale,
+        lastOperation: 'added' // Mark it as new
+    };
+};
+
+
+/**
  * Splits a markdown string into an array of uniquely identified DocumentChunk objects.
  * This function uses a simple strategy of splitting by double newlines, which is a common
  * paragraph separator in markdown.

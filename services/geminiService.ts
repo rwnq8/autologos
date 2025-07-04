@@ -1,8 +1,9 @@
 
 
 
+
 import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
-import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version, StructuredIterationResponse, DocumentChunk, OutlineNode, DevLogEntry } from "../types/index.ts";
+import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version, StructuredIterationResponse, DocumentChunk, OutlineNode, DevLogEntry, ChunkOperation } from "../types/index.ts";
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents } from './promptBuilderService.ts';
 import { urlBrowseTool } from './toolDefinitions.ts';
 import { formatVersion } from './versionUtils.ts';
@@ -275,8 +276,6 @@ export const iterateProduct = async ({
             ensembleSubProducts
         );
 
-        const { ...apiConfig } = modelConfigToUse;
-        
         const fullUserPromptText = buildTextualPromptPart(
             isOutlineMode ? currentOutline : documentChunks,
             currentFocusChunkIndex ?? 0,
@@ -300,23 +299,26 @@ export const iterateProduct = async ({
             });
         }
 
-
         const initialUserParts: Part[] = [];
         const isStandardInitialSynthesis = isInitialProductEmptyAndFilesLoaded &&
                                            currentVersion.major === 1 &&
                                            currentVersion.minor === 0 &&
                                            (!ensembleSubProducts || ensembleSubProducts.length === 0);
+
+        // Always add the textual prompt part first for better model focus and to avoid potential API parsing issues.
+        initialUserParts.push({ text: fullUserPromptText });
         
         if (isStandardInitialSynthesis) {
             const isEnsembleIntegration = !!ensembleSubProducts && ensembleSubProducts.length > 0;
             if (!isEnsembleIntegration) {
                 loadedFiles.forEach(file => {
-                    initialUserParts.push({ inlineData: { mimeType: getSanitizedMimeType(file.mimeType || 'text/plain'), data: toBase64(file.content) }});
+                    // Guard against sending empty files, which could cause API errors.
+                    if (file.content && file.content.trim()) {
+                        initialUserParts.push({ inlineData: { mimeType: getSanitizedMimeType(file.mimeType || 'text/plain'), data: toBase64(file.content) }});
+                    }
                 });
             }
         }
-
-        initialUserParts.push({ text: fullUserPromptText });
 
         const conversationHistory: Content[] = [{ role: 'user', parts: initialUserParts }];
         
@@ -556,42 +558,23 @@ export const iterateProduct = async ({
                     promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptText,
                     groundingMetadata: lastDetailWithMetadata?.groundingMetadata
                 };
-            } else { // Text refinement JSON mode
-                let finalProduct: string;
-                let updatedChunks: DocumentChunk[];
-
-                if (Array.isArray(parsedResponse.windowChunks) && parsedResponse.windowChunks.length > 0) {
-                    const modificationsMap = new Map(parsedResponse.windowChunks.map(m => [m.chunkId, { content: m.content, sourceFileNames: m.sourceFileNames, changeRationale: m.changeRationale }]));
-                    
-                    updatedChunks = (documentChunks || []).map(originalChunk => {
-                        if (modificationsMap.has(originalChunk.id)) {
-                            // This chunk was in the active window and returned by the AI
-                            const modification = modificationsMap.get(originalChunk.id)!;
-                            const newType = classifyChunkType(modification.content);
-                            return { 
-                                ...originalChunk, 
-                                content: modification.content, 
-                                type: newType,
-                                sourceFileNames: modification.sourceFileNames || originalChunk.sourceFileNames,
-                                changeRationale: modification.changeRationale || undefined 
-                            };
-                        } else {
-                            // This chunk was NOT in the window, clear its change rationale for this turn
-                            return { ...originalChunk, changeRationale: undefined };
-                        }
-                    });
-                    finalProduct = reconstructFromChunks(updatedChunks);
-                } else {
-                    // No chunks returned, so no changes were made. Clear all rationales.
-                    finalProduct = currentProduct;
-                    updatedChunks = (documentChunks || []).map(chunk => ({ ...chunk, changeRationale: undefined }));
+            } else { // Text refinement JSON mode (operation-based)
+                 if (!Array.isArray(parsedResponse.operations)) {
+                     throw new Error("AI response in JSON mode is missing the required 'operations' array.");
                 }
                 
                 return {
-                    product: finalProduct, updatedChunks: updatedChunks, versionRationale: parsedResponse.versionRationale,
-                    selfCritique: parsedResponse.selfCritique, suggestedNextStep: parsedResponse.suggestedNextStep, status,
-                    apiStreamDetails, isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',
-                    promptSystemInstructionSent: systemInstruction, promptCoreUserInstructionsSent: coreUserInstructions, promptFullUserPromptSent: fullUserPromptText,
+                    product: "", // This will be reconstructed by the caller
+                    chunkOperations: parsedResponse.operations,
+                    versionRationale: parsedResponse.versionRationale,
+                    selfCritique: parsedResponse.selfCritique,
+                    suggestedNextStep: parsedResponse.suggestedNextStep,
+                    status,
+                    apiStreamDetails,
+                    isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',
+                    promptSystemInstructionSent: systemInstruction,
+                    promptCoreUserInstructionsSent: coreUserInstructions,
+                    promptFullUserPromptSent: fullUserPromptText,
                     groundingMetadata: lastDetailWithMetadata?.groundingMetadata
                 };
             }

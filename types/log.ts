@@ -1,3 +1,4 @@
+
 // types/log.ts
 
 import type { ApiStreamCallDetail, AiResponseValidationInfo, OutlineGenerationResult } from './api';
@@ -84,6 +85,7 @@ export interface DevLogEntry {
   details?: string;
   status: DevLogEntryStatus;
   relatedIteration?: string; // Storing the formatted version string 'v1.2'
+  parentEntryId?: string; // ID of the parent entry (e.g., an 'issue' for a 'fix')
   tags?: string[];
   resolution?: string;
 }

@@ -5,7 +5,7 @@ import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFil
 import * as storageService from '../services/storageService.ts';
 import { DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
-import { splitToChunks } from '../services/chunkingService.ts';
+import { splitToChunks, reconstructFromChunks } from '../services/chunkingService.ts';
 import { compareVersions } from '../services/versionUtils.ts';
 
 type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'loaded' | 'not_found' | 'found_autosave' | 'cleared' | 'loading' | 'clearing';

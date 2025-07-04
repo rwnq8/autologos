@@ -27,12 +27,18 @@ export const DocumentChunkDisplay: React.FC<{ chunk: DocumentChunk }> = ({ chunk
         </span>
     ) : null;
 
+    const isNew = chunk.lastOperation === 'added';
+    const isModified = chunk.lastOperation === 'modified';
+
     const wrapperProps = {
-        className: "group relative py-1",
+        className: `group relative py-1 transition-all duration-500 rounded-md
+            ${isNew ? 'animate-pulse-once' : ''} 
+            ${isModified ? 'bg-blue-500/10' : ''}`,
         title: sourceTooltip,
         id: `chunk-${chunk.id}`,
         'data-chunk-id': chunk.id
     };
+
 
     switch (chunk.type) {
         case 'heading_1':

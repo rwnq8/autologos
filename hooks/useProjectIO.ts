@@ -7,7 +7,7 @@ import { generateFileName, DEFAULT_PROJECT_NAME_FALLBACK } from '../services/uti
 import { reconstructProduct } from '../services/diffService.ts';
 import * as GeminaiService from '../services/geminiService.ts';
 import { formatVersion, compareVersions } from '../services/versionUtils.ts';
-import { splitToChunks } from '../services/chunkingService.ts';
+import { splitToChunks, reconstructFromChunks } from '../services/chunkingService.ts';
 
 
 function uuidv4() {
@@ -125,7 +125,7 @@ export const useProjectIO = (
     const fileName = generateFileName("project", "autologos.json", {
       projectCodename: currentState.projectCodename,
       projectName: currentState.projectName,
-      contentForSlug: currentState.finalProduct || currentState.currentProduct,
+      contentForSlug: currentState.finalProduct || reconstructFromChunks(currentState.documentChunks),
       versionString: versionString,
       outlineId: currentState.outlineId,
     });

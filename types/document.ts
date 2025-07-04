@@ -6,6 +6,7 @@ export interface DocumentChunk {
   lang?: string; // Language for code blocks
   sourceFileNames?: string[]; // Files this chunk was derived from
   changeRationale?: string; // AI's reason for the last change to this chunk
+  lastOperation?: 'added' | 'modified'; // For UI feedback on the last iteration
 }
 
 export interface OutlineNode {

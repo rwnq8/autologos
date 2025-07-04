@@ -1,7 +1,7 @@
 // hooks/useProcessState.ts
 
 import { useState, useCallback } from 'react';
-import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate, ModelStrategy, OutlineNode } from '../types/index.ts';
+import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate, ModelStrategy, OutlineNode, DocumentChunk } from '../types/index.ts';
 import * as geminiService from '../services/geminiService.ts';
 import * as storageService from '../services/storageService.ts';
 import { INITIAL_PROJECT_NAME_STATE } from '../services/utils.ts';

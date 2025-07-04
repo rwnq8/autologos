@@ -1,5 +1,4 @@
-
-import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult, Version, DocumentChunk, OutlineNode } from '../types/index.ts';
+import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult, Version, DocumentChunk, OutlineNode, ChunkOperation } from '../types/index.ts';
 import { formatVersion } from './versionUtils.ts';
 import { reconstructFromChunks } from './chunkingService.ts';
 
@@ -11,37 +10,39 @@ const JSON_TEXT_RESPONSE_SCHEMA = `
 Your response MUST be a single, valid JSON object that adheres to the following TypeScript interface.
 Do NOT add any conversational filler, markdown fences (like \`\`\`json\`), or other text outside of the JSON object itself.
 
-interface ChunkModification {
-  chunkId: string; // The ID of the chunk from the input prompt.
-  content: string; // The new (or original, if unchanged) content of the chunk.
+interface ChunkOperation {
+  // The operation to perform.
+  op: 'update' | 'insert_after' | 'delete' | 'merge_up' | 'split';
+
+  // The ID of the chunk from the ACTIVE CONTEXT WINDOW to operate on.
+  chunkId: string;
+
+  // The new markdown content for the chunk. REQUIRED for 'update' and 'insert_after'.
+  content?: string;
   
-  // An array of source file names that informed this chunk's content.
-  // This should be maintained and updated if you synthesize information from multiple sources.
-  // If the chunk is unchanged or its sources are unknown, this can be an empty array.
-  sourceFileNames: string[];
+  // A unique snippet of text from the target chunk's content where a 'split' operation should occur. REQUIRED for 'split'.
+  splitPoint?: string;
   
-  // If you modified this chunk, provide a brief, one-sentence rationale for the change.
-  // Example: "Corrected a factual inaccuracy." or "Rephrased for better flow."
-  // If the chunk is unchanged, this field MUST be null.
-  changeRationale: string | null;
+  // An array of source file names that informed this chunk's content. REQUIRED for 'update' and 'insert_after'.
+  sourceFileNames?: string[];
+  
+  // A brief, one-sentence rationale for this specific operation.
+  changeRationale: string;
 }
 
 interface Response {
-  // Your concise rationale for the overall changes made in this version compared to the previous one. Focus on the 'why' and what was improved.
+  // Your concise rationale for the overall changes made in this version compared to the previous one.
   versionRationale: string;
 
-  // An array of all the chunks that were in the ACTIVE CONTEXT WINDOW. You MUST return an object for every chunk from the window.
-  // For chunks you refined, provide the new content and a 'changeRationale'. For unchanged chunks, return them with their original content and a null 'changeRationale'.
-  // Preserve the original order and chunkIds.
-  windowChunks: ChunkModification[];
+  // An array of operations to apply to the document.
+  // You can perform multiple operations. Process them in the order you provide.
+  // IMPORTANT: All chunkIds MUST refer to chunks within the provided ACTIVE CONTEXT WINDOW.
+  operations: ChunkOperation[];
 
-  // A brief, honest critique of the changes you just made. What are its remaining weaknesses or areas for future improvement?
+  // A brief, honest critique of the changes you just made.
   selfCritique: string;
-
-  // Based on your self-critique, what is the best next step for the overall process?
-  // 'refine_further': If the product is good but can still be substantially improved.
-  // 'expand_section': If a specific part of the product needs more detail.
-  // 'declare_convergence': If the product is complete, well-supported, and further changes would be trivial or detrimental.
+  
+  // Suggested next step.
   suggestedNextStep: 'refine_further' | 'expand_section' | 'declare_convergence';
 }`;
 
@@ -231,11 +232,13 @@ Prohibited Output: Meta-references to the content (e.g., "the product," "the doc
         } else {
             // JSON Text refinement mode
             systemInstructionParts.push(
-                `CONTEXT WINDOWING (JSON TEXT MODE): For large documents, you will be provided with a "Context Window". This includes a high-level 'DOCUMENT OVERVIEW' of all structural chunks, and the full text for chunks within the 'ACTIVE CONTEXT WINDOW'. Your task is to refine the content within this active window, maintaining coherence with the full document structure. Your primary output is the \`windowChunks\` array in the JSON response.
-- This array MUST contain an object for EVERY chunk that was provided in the \`ACTIVE CONTEXT WINDOW\` of the prompt.
-- For chunks you have refined, provide the new content, updated \`sourceFileNames\`, and a new \`changeRationale\`.
-- For chunks you have not changed, you MUST return them with their original content and sourceFileNames, and a null \`changeRationale\`.
-- Preserve the original order and chunkIds. Do not add or remove chunks from the window. The host application will merge these changes.`
+                `CONTEXT WINDOWING & OPERATIONS (JSON TEXT MODE): You are a document editor. You will be provided with a "Context Window" of the document, containing a high-level 'DOCUMENT OVERVIEW' and a detailed 'ACTIVE CONTEXT WINDOW'. Your task is to refine the content by returning a list of operations.
+- **Allowed Operations**: You can use 'update', 'insert_after', 'delete', 'merge_up', and 'split'.
+- **'merge_up'**: Merges the specified chunk with the one immediately preceding it. The preceding chunk's content will be appended with the specified chunk's content, and the specified chunk will be deleted.
+- **'split'**: Splits a single chunk into two. You must provide a 'splitPoint' - a unique text snippet from the original chunk's content where the split should occur.
+- **Scope**: ALL chunkIds in your operations MUST refer to chunks within the 'ACTIVE CONTEXT WINDOW' provided in the prompt. Do not operate on chunks outside this window.
+- **Structural Changes**: You can now add new paragraphs (insert_after), combine paragraphs (merge_up), split long paragraphs (split), or remove them entirely (delete).
+- **Rationale**: Every single operation requires a 'changeRationale'.`
             );
             systemInstructionParts.push(`GENERAL RULES & OUTPUT FORMAT (JSON TEXT MODE):
 - **Output Structure**: ${JSON_TEXT_RESPONSE_SCHEMA}
@@ -340,7 +343,7 @@ export const buildTextualPromptPart = (
             const activeWindowChunks = documentChunks.slice(focusIndex, focusIndex + CONTEXT_WINDOW_SIZE);
 
             const activeWindowContent = `---ACTIVE CONTEXT WINDOW (Focus Index: ${focusIndex}, Chunks ${focusIndex + 1} to ${focusIndex + activeWindowChunks.length})---\n` +
-                activeWindowChunks.map(chunk => `// --- Chunk ID: ${chunk.id} ---\n${chunk.content}`).join('\n\n');
+                activeWindowChunks.map(chunk => `// --- Chunk ID: ${chunk.id} ---\n// Source Files: ${(chunk.sourceFileNames || []).join(', ') || 'N/A'}\n${chunk.content}`).join('\n\n');
             
             contentForPrompt = `${documentOverview}\n\n${activeWindowContent}`;
         } else {

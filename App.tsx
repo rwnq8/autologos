@@ -1,5 +1,6 @@
 
 
+
 import React, { useRef, useState, useCallback } from 'react';
 import { toYamlStringLiteral, generateFileName } from './services/utils.ts';
 import Controls from './components/Controls.tsx';
@@ -15,6 +16,7 @@ import { EngineProvider, useEngine } from './contexts/ApplicationContext.tsx';
 import { inferProjectNameFromInput } from './services/projectUtils.ts';
 import { reconstructProduct } from './services/diffService.ts';
 import { formatVersion } from './services/versionUtils.ts';
+import { reconstructFromChunks } from './services/chunkingService.ts';
 import ChevronDownIcon from './components/shared/ChevronDownIcon.tsx';
 
 
@@ -52,7 +54,7 @@ const AppLayout: React.FC = () => {
     };
 
     const onSaveFinalProduct = useCallback(() => {
-        const { isOutlineMode, outlineId, finalOutline, finalProduct, currentProduct, currentMajorVersion, currentMinorVersion, configAtFinalization, initialPrompt, projectName, projectCodename, loadedFiles, promptSourceName } = engine.process;
+        const { isOutlineMode, outlineId, finalOutline, finalProduct, documentChunks, currentMajorVersion, currentMinorVersion, configAtFinalization, initialPrompt, projectName, projectCodename, loadedFiles, promptSourceName } = engine.process;
 
         if (isOutlineMode) {
             const outlineToSave = finalOutline || engine.process.currentOutline;
@@ -74,7 +76,7 @@ const AppLayout: React.FC = () => {
             return;
         }
 
-        const productToSave = finalProduct || currentProduct;
+        const productToSave = finalProduct || reconstructFromChunks(documentChunks);
         if (!productToSave) return;
         
         const finalVersionString = formatVersion({

@@ -1,6 +1,7 @@
 
+
 import { useRef, useState, useCallback, useEffect } from 'react';
-import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType, DevLogEntry, StrategistLLMContext, Version, ModelStrategy, OutlineNode, DocumentChunk } from '../types/index.ts';
+import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType, DevLogEntry, StrategistLLMContext, Version, ModelStrategy, OutlineNode, DocumentChunk, ChunkOperation } from '../types/index.ts';
 import { SELECTABLE_MODELS } from '../types/index.ts';
 import * as GeminaiService from '../services/geminiService.ts';
 import { getUserPromptComponents } from '../services/promptBuilderService.ts';
@@ -11,12 +12,11 @@ import { calculateFleschReadingEase, calculateJaccardSimilarity, calculateLexica
 import type { AddLogEntryParams } from './useProcessState.ts';
 import { getRelevantDevLogContext } from '../services/devLogContextualizerService.ts';
 import { reconstructProduct } from '../services/diffService.ts';
-import { splitToChunks, reconstructFromChunks } from '../services/chunkingService.ts';
+import { splitToChunks, reconstructFromChunks, classifyChunkType, createChunk } from '../services/chunkingService.ts';
 
 
 const SELF_CORRECTION_MAX_ATTEMPTS = 2;
 
-const STAGNATION_SIMILARITY_THRESHOLD = 0.95;
 const CONTEXT_WINDOW_SIZE = 20;
 const CONTEXT_WINDOW_OVERLAP = 5;
 
@@ -28,8 +28,85 @@ interface UseIterativeLogicReturn {
     userRawPromptForContextualizer?: string;
   }) => Promise<void>;
   handleHaltProcess: () => void;
-  handleBootstrapSynthesis: () => Promise<void>;
 }
+
+const applyChunkOperations = (
+    originalChunks: DocumentChunk[], 
+    operations: ChunkOperation[]
+): { product: string, updatedChunks: DocumentChunk[] } => {
+    
+    let newChunks: DocumentChunk[] = originalChunks.map(chunk => ({...chunk, lastOperation: undefined, changeRationale: undefined }));
+    
+    for (const op of operations) {
+        const targetIndex = newChunks.findIndex(c => c.id === op.chunkId);
+        
+        if (targetIndex === -1) {
+            console.warn(`Operation for unknown chunkId '${op.chunkId}' ignored.`);
+            continue;
+        }
+
+        switch (op.op) {
+            case 'update':
+                if (op.content !== undefined && op.changeRationale) {
+                    const originalChunk = newChunks[targetIndex];
+                    newChunks[targetIndex] = {
+                        ...originalChunk,
+                        content: op.content,
+                        type: classifyChunkType(op.content),
+                        sourceFileNames: op.sourceFileNames || originalChunk.sourceFileNames,
+                        changeRationale: op.changeRationale,
+                        lastOperation: 'modified'
+                    };
+                }
+                break;
+            case 'insert_after':
+                if (op.content && op.changeRationale) {
+                    const newChunk = createChunk(op.content, op.sourceFileNames, op.changeRationale);
+                    newChunks.splice(targetIndex + 1, 0, newChunk);
+                }
+                break;
+            case 'delete':
+                newChunks.splice(targetIndex, 1);
+                break;
+            case 'merge_up':
+                if (targetIndex > 0) {
+                    const prevChunk = newChunks[targetIndex - 1];
+                    const currentChunk = newChunks[targetIndex];
+                    const mergedContent = `${prevChunk.content}\n\n${currentChunk.content}`;
+                    newChunks[targetIndex - 1] = {
+                        ...prevChunk,
+                        content: mergedContent,
+                        type: classifyChunkType(mergedContent),
+                        changeRationale: op.changeRationale,
+                        lastOperation: 'modified'
+                    };
+                    newChunks.splice(targetIndex, 1);
+                }
+                break;
+            case 'split':
+                 if (op.splitPoint && op.content === undefined) { // content is not used for split
+                    const chunkToSplit = newChunks[targetIndex];
+                    const splitIndex = chunkToSplit.content.indexOf(op.splitPoint);
+                    if (splitIndex !== -1) {
+                        const contentA = chunkToSplit.content.substring(0, splitIndex);
+                        const contentB = chunkToSplit.content.substring(splitIndex);
+
+                        if (contentA.trim() && contentB.trim()) {
+                            const chunkA = createChunk(contentA, chunkToSplit.sourceFileNames, `Part 1 of split: ${op.changeRationale}`);
+                            const chunkB = createChunk(contentB, chunkToSplit.sourceFileNames, `Part 2 of split: ${op.changeRationale}`);
+                            newChunks.splice(targetIndex, 1, chunkA, chunkB);
+                        }
+                    }
+                }
+                break;
+        }
+    }
+    
+    return {
+        product: reconstructFromChunks(newChunks),
+        updatedChunks: newChunks
+    };
+};
 
 export const useIterativeLogic = (
   processState: ProcessState,
@@ -102,490 +179,286 @@ export const useIterativeLogic = (
       aiValidationInfo: aiValidationInfo,
       directAiResponseHead: directResponseHead,
       directAiResponseTail: directResponseTail,
-      directAiResponseLengthChars: directAiResponseLengthChars_param ?? iterationProductForLog?.length,
-      processedProductHead: iterationProductForLog ? iterationProductForLog.substring(0, 500) : "",
-      processedProductTail: iterationProductForLog && iterationProductForLog.length > 500 ? iterationProductForLog.substring(iterationProductForLog.length - 500) : "",
-      processedProductLengthChars: iterationProductForLog?.length,
-      attemptCount,
-      strategyRationale,
-      currentModelForIteration,
-      activeMetaInstruction,
-      isCriticalFailure,
-      isTargetedRefinement: entryType === 'targeted_refinement',
-      targetedSelection,
-      targetedRefinementInstructions,
-      similarityWithPreviousLogged,
-      isStagnantIterationLogged,
-      isEffectivelyIdenticalLogged,
-      isLowValueIterationLogged,
-      isWordsmithingIterationLogged,
-      bootstrapRun,
+      directAiResponseLengthChars: directAiResponseLengthChars_param,
+      processedProductLengthChars: processedProductLengthChars_param,
+      attemptCount: attemptCount,
+      strategyRationale: strategyRationale,
+      currentModelForIteration: currentModelForIteration,
+      activeMetaInstruction: activeMetaInstruction,
+      isCriticalFailure: isCriticalFailure,
+      targetedSelection: targetedSelection,
+      targetedRefinementInstructions: targetedRefinementInstructions,
+      similarityWithPreviousLogged: similarityWithPreviousLogged,
+      isStagnantIterationLogged: isStagnantIterationLogged,
+      isEffectivelyIdenticalLogged: isEffectivelyIdenticalLogged,
+      isLowValueIterationLogged: isLowValueIterationLogged,
+      isWordsmithingIterationLogged: isWordsmithingIterationLogged,
+      bootstrapRun: bootstrapRun
     });
   }, [addLogEntryFromHook]);
 
-  const handleProcessHalt = useCallback((
-    currentVersionForHalt: Version, 
-    lastGoodProduct: string | null, 
-    haltMessage: string, 
-    apiResult?: IterateProductResult
-  ) => {
-    // This function now only manages the state update for a halt.
-    // The isProcessingRef and haltSignalRef are managed by the lifecycle of handleStartProcess.
-    currentStreamBufferRef.current = "";
-    const finalHaltMessage = `Halted at v${currentVersionForHalt.major}.${currentVersionForHalt.minor}. ${haltMessage}`;
-    updateProcessState({
-      isProcessing: false,
-      statusMessage: finalHaltMessage,
-      aiProcessInsight: apiResult?.errorMessage || 'User initiated halt.',
-      currentProduct: lastGoodProduct, // Revert to the last known good product
-      streamBuffer: null,
-      currentProductBeforeHalt: lastGoodProduct,
-      currentVersionBeforeHalt: currentVersionForHalt,
-    });
+  const handleHaltProcess = useCallback(() => {
+    haltSignalRef.current = true;
+    updateProcessState({ statusMessage: 'Halt signal received. Finishing current step...' });
   }, [updateProcessState]);
-
-  const handleStartProcess = useCallback(async (options?: { isTargetedRefinement?: boolean; targetedSelection?: string; targetedInstructions?: string, userRawPromptForContextualizer?: string }) => {
-    if (isProcessingRef.current) {
-        console.warn("Process is already running. Start command ignored.");
-        return;
-    }
-
+  
+  const handleStartProcess = useCallback(async (options: {
+    isTargetedRefinement?: boolean;
+    targetedSelection?: string;
+    targetedInstructions?: string;
+    userRawPromptForContextualizer?: string;
+  } = {}) => {
+    if (isProcessingRef.current) return;
+    
     isProcessingRef.current = true;
     haltSignalRef.current = false;
-    currentStreamBufferRef.current = "";
+    
+    let {
+        processState: localProcessState,
+        getUserSetBaseConfig: getLocalUserSetBaseConfig
+    } = latestStateRef.current;
+    
+    let {
+        initialPrompt, currentProduct, documentChunks, currentOutline, currentMajorVersion, currentMinorVersion, maxMajorVersions, iterationHistory,
+        loadedFiles, isPlanActive, planStages, currentPlanStageIndex, currentStageIteration,
+        selectedModelName, isSearchGroundingEnabled, isUrlBrowsingEnabled, stagnationNudgeEnabled,
+        stagnationNudgeAggressiveness, strategistInfluenceLevel, devLog, isOutlineMode
+    } = localProcessState;
+
+    const isInitialRun = currentMajorVersion === 0 && currentMinorVersion === 0;
+
+    if (isInitialRun && !documentChunks?.length && currentProduct) {
+        documentChunks = splitToChunks(currentProduct);
+    }
+    
+    let currentVersion: Version = { major: currentMajorVersion, minor: currentMinorVersion };
+    
+    if (isInitialRun) {
+        currentVersion = { major: 1, minor: 0 };
+        currentProduct = null;
+        documentChunks = [];
+        iterationHistory = [];
+        const codename = await GeminaiService.generateProjectCodename(initialPrompt, loadedFiles);
+        
+        updateProcessState({ 
+            projectCodename: codename, 
+            projectName: localProcessState.projectName || codename,
+            currentProduct, 
+            documentChunks,
+            iterationHistory, 
+            currentMajorVersion: 1, 
+            currentMinorVersion: 0 
+        });
+    } else {
+        currentVersion = { major: currentMajorVersion, minor: currentMinorVersion + 1 };
+        updateProcessState({ currentMinorVersion: currentMinorVersion + 1 });
+    }
 
     try {
-        const { processState: initialProcessState, getUserSetBaseConfig: getInitialUserConfig } = latestStateRef.current;
-    
-        if (!initialProcessState.projectCodename) {
-          updateProcessState({
-            statusMessage: 'Generating project codename...',
-            aiProcessInsight: 'Analyzing input to create a unique codename for this run.',
-          });
-          const codename = await GeminaiService.generateProjectCodename(
-            initialProcessState.initialPrompt,
-            initialProcessState.loadedFiles
-          );
-          updateProcessState({ projectCodename: codename });
-        }
-    
         updateProcessState({
-          isProcessing: true,
-          statusMessage: 'Starting process...',
-          streamBuffer: null,
-          aiProcessInsight: 'Initializing...',
-          finalProduct: null,
-          configAtFinalization: null,
-          currentProductBeforeHalt: null,
-          currentVersionBeforeHalt: undefined,
-          isApiRateLimited: false,
-          rateLimitCooldownActiveSeconds: 0,
-          awaitingStrategyDecision: false,
+            isProcessing: true,
+            statusMessage: `Starting iterative process... v${currentVersion.major}.${currentVersion.minor}`,
+            finalProduct: null,
+            configAtFinalization: null,
         });
-    
-        const isTargetedRefinementMode = options?.isTargetedRefinement ?? false;
-        const targetedSelectionText = options?.targetedSelection;
-        const targetedRefinementInstructions = options?.targetedInstructions;
-        const userRawPromptForContextualizer = options?.userRawPromptForContextualizer;
 
-        // Use mutable variables for state that evolves within the loop to avoid stale closures.
-        let majorVersionForIteration = initialProcessState.currentMajorVersion;
-        let minorVersionForIteration = initialProcessState.currentMinorVersion;
-        let documentChunksForIteration = initialProcessState.documentChunks;
-        let currentOutlineForIteration = initialProcessState.currentOutline;
-        let outlineIdForIteration = initialProcessState.outlineId;
-        let stagnationInfo = initialProcessState.stagnationInfo;
-        
-        let {
-            maxMajorVersions, initialPrompt, loadedFiles, isPlanActive, planStages,
-            currentPlanStageIndex, currentStageIteration, iterationHistory,
-            outputParagraphNumberedHeadings, outputParagraphShowHeadings,
-            outputParagraphMaxHeadingDepth, selectedModelName, stagnationNudgeEnabled,
-            strategistInfluenceLevel, stagnationNudgeAggressiveness, inputComplexity,
-            devLog, ensembleSubProducts, isOutlineMode, isSearchGroundingEnabled, isUrlBrowsingEnabled
-        } = initialProcessState;
+        let attempt = 0;
+        let selfCorrectionAttempt = 0;
+        let lastApiResult: IterateProductResult | undefined = undefined;
+        let retryContext: RetryContext | undefined = undefined;
+        let isRadicalRefinementKickstart = false;
 
-        if (initialProcessState.ensembleSubProducts && !isTargetedRefinementMode) {
-            addDevLogEntry({ type: 'note', status: 'in_progress', summary: 'Starting main process: Ensemble Integration' });
-        } else if (isTargetedRefinementMode) {
-            addDevLogEntry({ type: 'note', status: 'in_progress', summary: 'Starting main process: Targeted Refinement' });
-        } else {
-            addDevLogEntry({ type: 'note', status: 'in_progress', summary: 'Starting main process: Standard Iteration' });
-        }
-    
-        if (isTargetedRefinementMode && !targetedSelectionText) {
-          const productAtHalt = reconstructFromChunks(documentChunksForIteration);
-          handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0}, productAtHalt, "Targeted refinement started without a text selection.");
-          return;
-        }
-        
-        // Increment version for the new run
-        if (!isTargetedRefinementMode) {
-            majorVersionForIteration += 1;
-            minorVersionForIteration = 0;
-        } else {
-            minorVersionForIteration += 1;
-        }
-    
-        let currentFocusChunkIndex = initialProcessState.currentFocusChunkIndex ?? 0;
-    
-        // The for loop provides a hard limit on total iterations in a single run.
-        for (let loopCounter = 0; loopCounter < maxMajorVersions; loopCounter++) {
-          if (haltSignalRef.current) {
-            const productAtHalt = reconstructFromChunks(documentChunksForIteration);
-            handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0}, productAtHalt, "Halt signal received. Process stopped.");
-            break;
-          }
-          
-          const productForThisIteration = reconstructFromChunks(documentChunksForIteration);
-          const previousProductForLog = isOutlineMode ? JSON.stringify(currentOutlineForIteration, null, 2) : productForThisIteration;
-          let kickstart = false;
-    
-          let fileProcessingInfoForLog: FileProcessingInfo = {
-            filesSentToApiIteration: null,
-            numberOfFilesActuallySent: 0,
-            totalFilesSizeBytesSent: 0,
-            fileManifestProvidedCharacterCount: initialPrompt.length,
-            loadedFilesForIterationContext: loadedFiles
-          };
-          if (majorVersionForIteration === 1 && loadedFiles.length > 0) {
-            fileProcessingInfoForLog.filesSentToApiIteration = 1;
-            fileProcessingInfoForLog.numberOfFilesActuallySent = loadedFiles.length;
-            fileProcessingInfoForLog.totalFilesSizeBytesSent = loadedFiles.reduce((sum, f) => sum + f.size, 0);
-          }
-          
-          const currentVersionForLoop: Version = {major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0};
-          
-          updateProcessState({
-            currentMajorVersion: majorVersionForIteration,
-            currentMinorVersion: minorVersionForIteration,
-            statusMessage: `Preparing for Iteration v${majorVersionForIteration}.${minorVersionForIteration}...`,
-          });
-    
-          const userSetBaseConfig = getInitialUserConfig();
-    
-          if (stagnationInfo.consecutiveWordsmithingIterations >= 2) {
-            kickstart = true;
-            stagnationInfo.consecutiveWordsmithingIterations = 0;
-          }
-    
-          const { productDevelopmentState, stagnationSeverity, recentIterationPerformance } = calculateQualitativeStates(productForThisIteration, stagnationInfo, inputComplexity, stagnationNudgeAggressiveness, false);
-          const devLogContext = await getRelevantDevLogContext(devLog || [], userRawPromptForContextualizer || `Current task: Refine document from v${majorVersionForIteration - 1} to v${majorVersionForIteration}. Stagnation state is ${stagnationSeverity}. Product state is ${productDevelopmentState}.`);
-          
-          const modelStrategy = await ModelStrategyService.reevaluateStrategy({
-              ...initialProcessState,
-              currentMajorVersion: majorVersionForIteration,
-              currentProduct: productForThisIteration,
-              stagnationInfo,
-              lastNValidationSummariesString: "", 
-              productDevelopmentState, stagnationSeverity, recentIterationPerformance,
-              isRadicalRefinementKickstartAttempt: kickstart
-            }, userSetBaseConfig);
-          
-          updateProcessState({
-            aiProcessInsight: modelStrategy.rationale,
-            currentModelForIteration: modelStrategy.modelName,
-            currentAppliedModelConfig: modelStrategy.config,
-            activeMetaInstructionForNextIter: modelStrategy.activeMetaInstruction,
-          });
-    
-          let accumulatedText = "";
-          const handleStreamChunk = (chunkText: string) => {
-            if (!haltSignalRef.current) {
-              accumulatedText += chunkText;
-              currentStreamBufferRef.current = accumulatedText;
-              // Update the transient stream buffer for UI feedback
-              updateProcessState({ streamBuffer: currentStreamBufferRef.current });
-            }
-          };
-    
-          currentStreamBufferRef.current = "";
-          updateProcessState({ streamBuffer: "" }); // Clear buffer at start of attempt
-          let attempt = 0;
-          let result: IterateProductResult | null = null;
-          let validationInfo: AiResponseValidationInfo = { checkName: 'N/A', passed: true, reason: 'Validation not run.' };
-          let isCriticalFailure = false;
-          let finalProduct = "";
-          let finalOutline: OutlineNode[] | null = null;
-          let finalOutlineId: string | null = null;
-          let updatedChunksFromApi: DocumentChunk[] | undefined = undefined;
-    
-    
-          let retryContext: RetryContext | undefined = undefined;
-    
-          while (attempt < SELF_CORRECTION_MAX_ATTEMPTS) {
+        while (currentVersion.major <= maxMajorVersions) {
             if (haltSignalRef.current) {
-              const productAtHalt = reconstructFromChunks(documentChunksForIteration);
-              handleProcessHalt(currentVersionForLoop, productAtHalt, 'Halt signal received. Process stopped.');
-              return; // Should break out of the main loop too
+                updateProcessState({
+                    statusMessage: `Process halted by user at v${currentVersion.major}.${currentVersion.minor}.`,
+                    currentProductBeforeHalt: currentProduct,
+                    currentVersionBeforeHalt: currentVersion,
+                });
+                break;
             }
-    
-            updateProcessState({ statusMessage: `Iteration v${majorVersionForIteration}.${minorVersionForIteration}: Running... (Attempt ${attempt + 1})`});
+
+            const {
+                processState: loopProcessState,
+                getUserSetBaseConfig: loopGetUserSetConfig
+            } = latestStateRef.current;
+            const userSetConfig = loopGetUserSetConfig();
+
+            const isFirstIterationOfProcess = currentVersion.major === 1 && currentVersion.minor === 0;
+
+            const relevantDevLogContext = await getRelevantDevLogContext(devLog || [], options.userRawPromptForContextualizer || initialPrompt);
+
+            const isBootstrappedBase = !!loopProcessState.ensembleSubProducts && loopProcessState.ensembleSubProducts.length > 0 && isFirstIterationOfProcess;
+            const qualitativeStates = calculateQualitativeStates(
+                loopProcessState.currentProduct,
+                loopProcessState.stagnationInfo,
+                loopProcessState.inputComplexity,
+                loopProcessState.stagnationNudgeAggressiveness,
+                isBootstrappedBase
+            );
+
+            const strategy = await ModelStrategyService.reevaluateStrategy({ 
+                ...loopProcessState, 
+                ...qualitativeStates 
+            }, userSetConfig);
             
-            result = await GeminaiService.iterateProduct({
-                currentProduct: productForThisIteration,
-                documentChunks: documentChunksForIteration,
-                currentOutline: currentOutlineForIteration,
-                currentFocusChunkIndex,
-                currentVersion: currentVersionForLoop,
+            updateProcessState({
+                statusMessage: `v${currentVersion.major}.${currentVersion.minor}: Running... (Attempt ${attempt + 1})`,
+                aiProcessInsight: strategy.rationale,
+                currentModelForIteration: strategy.modelName,
+                currentAppliedModelConfig: strategy.config,
+                activeMetaInstructionForNextIter: strategy.activeMetaInstruction
+            });
+            
+            const apiResult = await GeminaiService.iterateProduct({
+                currentProduct: currentProduct || "",
+                documentChunks,
+                currentOutline,
+                currentFocusChunkIndex: loopProcessState.currentFocusChunkIndex,
+                currentVersion,
                 maxIterationsOverall: maxMajorVersions,
                 fileManifest: initialPrompt,
                 loadedFiles,
-                activePlanStage: null, 
-                outputParagraphShowHeadings,
-                outputParagraphMaxHeadingDepth,
-                outputParagraphNumberedHeadings,
-                modelConfigToUse: modelStrategy.config,
+                activePlanStage: null, // Simplified for now
+                outputParagraphShowHeadings: loopProcessState.outputParagraphShowHeadings,
+                outputParagraphMaxHeadingDepth: loopProcessState.outputParagraphMaxHeadingDepth,
+                outputParagraphNumberedHeadings: loopProcessState.outputParagraphNumberedHeadings,
+                modelConfigToUse: strategy.config,
                 isGlobalMode: !isPlanActive,
                 isSearchGroundingEnabled,
                 isUrlBrowsingEnabled,
-                modelToUse: modelStrategy.modelName,
-                onStreamChunk: handleStreamChunk,
+                modelToUse: strategy.modelName,
+                onStreamChunk: (chunk) => {
+                    currentStreamBufferRef.current += chunk;
+                    updateProcessState({ streamBuffer: currentStreamBufferRef.current });
+                },
                 isHaltSignalled: () => haltSignalRef.current,
                 retryContext,
-                stagnationNudgeStrategy: stagnationInfo.nudgeStrategyApplied,
-                initialOutlineForIter1: iterationHistory.find(e => e.entryType === 'initial_state')?.outlineForIter1,
-                activeMetaInstruction: modelStrategy.activeMetaInstruction,
-                ensembleSubProducts,
-                devLogContextString: devLogContext,
-                isTargetedRefinementMode,
-                targetedSelectionText,
-                targetedRefinementInstructions,
-                isRadicalRefinementKickstart: kickstart,
+                devLogContextString: relevantDevLogContext,
+                isTargetedRefinementMode: options.isTargetedRefinement,
+                targetedSelectionText: options.targetedSelection,
+                targetedRefinementInstructions: options.targetedInstructions,
+                isRadicalRefinementKickstart,
                 isOutlineMode,
                 addDevLogEntry,
             });
             
-            if (result.status === 'ERROR' || result.status === 'HALTED') {
-              if (result.isRateLimitError) handleRateLimitErrorEncountered();
-              const productAtHalt = reconstructFromChunks(documentChunksForIteration);
-              handleProcessHalt(currentVersionForLoop, productAtHalt, result.errorMessage || 'Unknown error occurred.', result);
-              return; 
-            }
-    
-            // The result.product is always the full text content from the API
-            finalProduct = result.product; 
+            currentStreamBufferRef.current = "";
+            updateProcessState({ streamBuffer: null });
 
-            if (isOutlineMode) {
-              finalOutline = result.outline || null;
-              finalOutlineId = result.outlineId || null;
-            } else {
-              updatedChunksFromApi = result.updatedChunks;
-            }
-            
-            const isConverged = result.suggestedNextStep === 'declare_convergence' || result.status === 'CONVERGED';
-    
-            const validationResult: IsLikelyAiErrorResponseResult = isLikelyAiErrorResponse(
-                finalProduct,
-                previousProductForLog || "",
-                {
-                    majorVersion: majorVersionForIteration, minorVersion: minorVersionForIteration, patchVersion: 0,
-                    entryType: 'ai_iteration', productSummary: "", status: "", timestamp: 0, fileProcessingInfo: fileProcessingInfoForLog,
-                    apiStreamDetails: result.apiStreamDetails,
-                },
-                undefined, 
-                undefined, 
-                undefined
-            );
-    
-            validationInfo = {
-                checkName: "isLikelyAiErrorResponse",
-                passed: !validationResult.isError,
-                reason: validationResult.reason,
-                details: validationResult.checkDetails,
-                isCriticalFailure: validationResult.isCriticalFailure,
-            };
-            isCriticalFailure = validationResult.isCriticalFailure || false;
-            
-            if (validationInfo.passed && !isConverged) {
-                break; 
-            } else if (!isCriticalFailure && attempt < SELF_CORRECTION_MAX_ATTEMPTS - 1 && !isConverged) {
-                attempt++;
-                
-                const modelDataForRetry = SELECTABLE_MODELS.find(m => m.name === modelStrategy.modelName);
-                const isUsingToolsForRetry = isOutlineMode ? false : (isSearchGroundingEnabled || (isUrlBrowsingEnabled && !!modelDataForRetry?.supportsFunctionCalling));
-    
-                retryContext = {
-                    previousErrorReason: validationInfo.reason,
-                    originalCoreInstructions: getUserPromptComponents(currentVersionForLoop, maxMajorVersions, null, false, 0, false, true, false, !isUsingToolsForRetry, isOutlineMode).coreUserInstructions,
-                };
-                updateProcessState({statusMessage: `Iteration v${majorVersionForIteration}.${minorVersionForIteration}: Validation failed. Retrying...`});
-                accumulatedText = "";
-                currentStreamBufferRef.current = "";
-                updateProcessState({ streamBuffer: "" }); // Clear buffer for retry
-            } else {
+            if (apiResult.status === 'ERROR' || !apiResult.product && !apiResult.chunkOperations && !apiResult.outline) {
+                logIterationData(currentVersion, 'ai_iteration', currentProduct, `Error on v${currentVersion.major}.${currentVersion.minor}: ${apiResult.errorMessage}`, currentProduct, apiResult, strategy.config);
+                updateProcessState({ statusMessage: `Error: ${apiResult.errorMessage}` });
+                if (apiResult.isRateLimitError) handleRateLimitErrorEncountered();
                 break;
             }
-          }
-          
-          let productForLogging = finalProduct;
-          if (isOutlineMode) {
-             productForLogging = parseAndCleanJsonOutput(finalProduct);
-          }
+            
+            const previousProduct = currentProduct;
+            let newProduct: string;
+            let newChunks: DocumentChunk[] | null = documentChunks;
 
-          const newLexicalDensity = calculateLexicalDensity(productForLogging);
-          const newTTR = calculateSimpleTTR(productForLogging);
-          const prevLogEntry = iterationHistory.length > 0 ? iterationHistory[iterationHistory.length - 1] : null;
-    
-          let coherenceDegraded = false;
-          if (prevLogEntry && !isTargetedRefinementMode && !isOutlineMode) {
-              const prevLexicalDensity = prevLogEntry.lexicalDensity;
-              const prevTTR = prevLogEntry.typeTokenRatio;
-              const lexicalDensityDrop = prevLexicalDensity && newLexicalDensity && newLexicalDensity < prevLexicalDensity * 0.95; // 5% drop
-              const ttrDrop = prevTTR && newTTR && newTTR < prevTTR * 0.95; // 5% drop
-              if (lexicalDensityDrop || ttrDrop) {
-                  coherenceDegraded = true;
-              }
-          }
-    
-          const similarity = calculateJaccardSimilarity(previousProductForLog, productForLogging);
-          const isStagnant = similarity > STAGNATION_SIMILARITY_THRESHOLD;
-          const isEffectivelyIdentical = similarity > 0.99;
-          const isLowValue = isStagnant && !isEffectivelyIdentical;
-          const isWordsmithing = similarity > 0.97 && similarity < 0.995 && !isLowValue && !isEffectivelyIdentical;
-    
-          let newStagnationInfo: StagnationInfo = { ...stagnationInfo };
-          if (isEffectivelyIdentical) {
-            newStagnationInfo.consecutiveIdenticalProductIterations++;
-            newStagnationInfo.consecutiveStagnantIterations++;
-            newStagnationInfo.consecutiveWordsmithingIterations = 0;
-          } else if (isWordsmithing) {
-            newStagnationInfo.consecutiveWordsmithingIterations++;
-            newStagnationInfo.consecutiveStagnantIterations++;
-            newStagnationInfo.consecutiveIdenticalProductIterations = 0;
-          } else if (isLowValue) {
-            newStagnationInfo.consecutiveLowValueIterations++;
-            newStagnationInfo.consecutiveStagnantIterations++;
-            newStagnationInfo.consecutiveIdenticalProductIterations = 0;
-            newStagnationInfo.consecutiveWordsmithingIterations = 0;
-          } else {
-            newStagnationInfo = { ...stagnationInfo, isStagnant: false, consecutiveStagnantIterations: 0, consecutiveIdenticalProductIterations: 0, consecutiveLowValueIterations: 0, consecutiveWordsmithingIterations: 0, consecutiveCoherenceDegradation: 0 };
-          }
-    
-          if (coherenceDegraded) {
-              newStagnationInfo.consecutiveCoherenceDegradation = (newStagnationInfo.consecutiveCoherenceDegradation || 0) + 1;
-          } else {
-              newStagnationInfo.consecutiveCoherenceDegradation = 0;
-          }
-          newStagnationInfo.isStagnant = isStagnant;
-          newStagnationInfo.similarityWithPrevious = similarity;
-    
-          if (!isStagnant) {
-            newStagnationInfo.lastMeaningfulChangeProductLength = productForLogging.length;
-          }
-          if (newStagnationInfo.isStagnant && !newStagnationInfo.lastProductLengthForStagnation) {
-            newStagnationInfo.lastProductLengthForStagnation = productForLogging.length;
-          }
-    
-          let statusMessage = validationInfo.passed ? 'Completed' : 'Completed with Validation Failure';
-          if (isCriticalFailure) statusMessage = 'CRITICAL FAILURE';
-          if (result?.status === 'CONVERGED') statusMessage = 'Converged';
-          
-          logIterationData(
-            currentVersionForLoop, 
-            isTargetedRefinementMode ? 'targeted_refinement' : 'ai_iteration',
-            productForLogging,
-            statusMessage,
-            previousProductForLog,
-            result ?? undefined,
-            modelStrategy.config,
-            fileProcessingInfoForLog,
-            validationInfo,
-            finalProduct.length,
-            productForLogging.length,
-            attempt + 1,
-            modelStrategy.rationale,
-            modelStrategy.modelName,
-            modelStrategy.activeMetaInstruction,
-            isCriticalFailure,
-            targetedSelectionText,
-            targetedRefinementInstructions,
-            similarity,
-            isStagnant,
-            isEffectivelyIdentical,
-            isLowValue,
-            isWordsmithing
-          );
-
-          // Update loop-scoped state for the next iteration.
-          stagnationInfo = newStagnationInfo;
-          if (isOutlineMode) {
-            currentOutlineForIteration = finalOutline;
-            outlineIdForIteration = finalOutlineId || outlineIdForIteration;
-            documentChunksForIteration = null;
-          } else if (updatedChunksFromApi) {
-            // Use chunks from JSON refinement mode
-            documentChunksForIteration = updatedChunksFromApi;
-          } else {
-            // Re-chunk from product for text-only modes (including initial synthesis)
-            documentChunksForIteration = splitToChunks(finalProduct);
-          }
-    
-          updateProcessState({
-            currentProduct: reconstructFromChunks(documentChunksForIteration),
-            currentOutline: currentOutlineForIteration,
-            outlineId: outlineIdForIteration,
-            documentChunks: documentChunksForIteration,
-            stagnationInfo: stagnationInfo,
-            streamBuffer: null,
-          });
-    
-          await performAutoSave();
-    
-          const isConverged = result?.suggestedNextStep === 'declare_convergence' || result?.status === 'CONVERGED';
-    
-          if (isConverged || majorVersionForIteration >= maxMajorVersions || isCriticalFailure) {
-            updateProcessState({
-              isProcessing: false,
-              finalProduct: isOutlineMode ? productForLogging : reconstructFromChunks(documentChunksForIteration),
-              finalOutline: isOutlineMode ? currentOutlineForIteration : null,
-              documentChunks: documentChunksForIteration,
-              configAtFinalization: modelStrategy.config,
-              statusMessage: isCriticalFailure ? `Halted due to critical failure: ${validationInfo.reason}` : (isConverged ? 'Process converged.' : 'Max iterations reached.'),
-              aiProcessInsight: isConverged ? `AI declared convergence. Reason: ${result?.versionRationale}` : 'Process finished.',
-            });
-            break;
-          }
-    
-          if (!isTargetedRefinementMode) {
-            minorVersionForIteration += 1;
-          }
-          
-          if (!isOutlineMode && documentChunksForIteration && documentChunksForIteration.length > 0) {
-            const windowNeedsToSlide = (currentFocusChunkIndex + CONTEXT_WINDOW_SIZE - CONTEXT_WINDOW_OVERLAP < documentChunksForIteration.length);
-            if (windowNeedsToSlide) {
-                currentFocusChunkIndex = currentFocusChunkIndex + CONTEXT_WINDOW_SIZE - CONTEXT_WINDOW_OVERLAP;
+            if (apiResult.chunkOperations) {
+                const { product, updatedChunks } = applyChunkOperations(documentChunks || [], apiResult.chunkOperations);
+                newProduct = product;
+                newChunks = updatedChunks;
+            } else if (apiResult.outline) {
+                newProduct = JSON.stringify(apiResult.outline, null, 2); // For logging/diffing
+                updateProcessState({ currentOutline: apiResult.outline, outlineId: apiResult.outlineId });
             } else {
-                currentFocusChunkIndex = 0; // Loop back to the start
+                // Text-based response (e.g., from search grounding)
+                let textResponse = apiResult.product;
+                // Sanitize markdown fences from text-based responses
+                const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
+                const match = textResponse.match(fenceRegex);
+                if (match && match[2]) {
+                    textResponse = match[2].trim();
+                }
+                newProduct = textResponse;
+                newChunks = splitToChunks(newProduct);
             }
-            updateProcessState({ currentFocusChunkIndex });
-          }
+
+            const validationResult = isLikelyAiErrorResponse(newProduct, previousProduct || "", { ...apiResult } as any);
+
+            const aiValidationInfo: AiResponseValidationInfo = {
+                checkName: validationResult.checkDetails?.type || 'general_validation',
+                passed: !validationResult.isError,
+                isCriticalFailure: validationResult.isCriticalFailure,
+                reason: validationResult.reason,
+                details: validationResult.checkDetails,
+            };
+            
+            logIterationData(currentVersion, 'ai_iteration', newProduct, apiResult.status, previousProduct, apiResult, strategy.config, undefined, aiValidationInfo);
+
+            if (validationResult.isError) {
+                updateProcessState({ statusMessage: `v${currentVersion.major}.${currentVersion.minor}: Validation failed. ${validationResult.reason}` });
+                if (validationResult.isCriticalFailure) {
+                    updateProcessState({ statusMessage: `Critical Failure: ${validationResult.reason}. Process halted.` });
+                    break;
+                }
+                // Handle non-critical retry
+                selfCorrectionAttempt++;
+                if (selfCorrectionAttempt < SELF_CORRECTION_MAX_ATTEMPTS) {
+                    retryContext = {
+                        previousErrorReason: validationResult.reason,
+                        originalCoreInstructions: getUserPromptComponents(currentVersion, maxMajorVersions, null, false, 0, false, !isPlanActive, isFirstIterationOfProcess, true, isOutlineMode).coreUserInstructions
+                    };
+                    updateProcessState({ statusMessage: `Validation failed. Attempting self-correction (${selfCorrectionAttempt}/${SELF_CORRECTION_MAX_ATTEMPTS}).` });
+                    continue; // Skip version increment and loop again
+                } else {
+                    updateProcessState({ statusMessage: `Self-correction failed after ${selfCorrectionAttempt} attempts. Process halted.` });
+                    break;
+                }
+            }
+            
+            // Success path
+            selfCorrectionAttempt = 0;
+            retryContext = undefined;
+            currentProduct = newProduct;
+            documentChunks = newChunks;
+
+            updateProcessState({
+                currentProduct,
+                documentChunks,
+                currentMajorVersion: currentVersion.major,
+                currentMinorVersion: currentVersion.minor,
+                statusMessage: `Completed v${currentVersion.major}.${currentVersion.minor}.`,
+            });
+            
+            await performAutoSave();
+
+            if (apiResult.status === 'CONVERGED') {
+                updateProcessState({ finalProduct: currentProduct, configAtFinalization: strategy.config });
+                break;
+            }
+
+            currentVersion.minor++;
+            if (currentVersion.minor >= maxMajorVersions) { // Simplified logic for now
+                 currentVersion.major++;
+                 currentVersion.minor = 0;
+            }
         }
     } finally {
         isProcessingRef.current = false;
+        updateProcessState({
+            isProcessing: false,
+            currentProductBeforeHalt: null,
+            currentVersionBeforeHalt: undefined
+        });
+        await performAutoSave();
     }
   }, [
-    latestStateRef, updateProcessState, addDevLogEntry, handleProcessHalt, logIterationData, 
-    handleRateLimitErrorEncountered, performAutoSave
+      processState.initialPrompt, processState.currentProduct, processState.documentChunks, processState.currentOutline,
+      processState.currentMajorVersion, processState.currentMinorVersion, processState.maxMajorVersions,
+      processState.iterationHistory, processState.loadedFiles, processState.isPlanActive, processState.planStages,
+      processState.currentPlanStageIndex, processState.currentStageIteration, processState.selectedModelName,
+      processState.isSearchGroundingEnabled, processState.isUrlBrowsingEnabled, processState.stagnationNudgeEnabled,
+      processState.stagnationNudgeAggressiveness, processState.strategistInfluenceLevel, processState.devLog,
+      processState.isOutlineMode,
+      updateProcessState, logIterationData, performAutoSave, addDevLogEntry, handleRateLimitErrorEncountered
   ]);
 
-  const handleHaltProcess = () => {
-      haltSignalRef.current = true;
-  };
-
-  const handleBootstrapSynthesis = useCallback(async () => {
-    // This is a complex feature that is out of scope for the current bug fix.
-    // The implementation remains as it was.
-    const { processState, getUserSetBaseConfig } = latestStateRef.current;
-    if (processState.isProcessing) {
-      console.warn("Process is already running. Bootstrap command ignored.");
-      return;
-    }
-  }, [latestStateRef]);
-  
   return {
     handleStartProcess,
     handleHaltProcess,
-    handleBootstrapSynthesis,
   };
 };
