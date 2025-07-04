@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import type { IterationLogEntry, ReconstructedProductResult, Version, IterationEntryType } from '../../types/index.ts';
 import * as GeminaiDiff from 'diff';
@@ -157,6 +156,28 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
                        {localCopyStatus || '[Copy] Diagnostics'}
                     </button>
                 </div>
+                
+                {(logEntry.versionRationale || logEntry.selfCritique) && (
+                    <div className="space-y-2">
+                        {logEntry.versionRationale && (
+                             <details className="space-y-1" open>
+                                <summary className="text-sm font-medium cursor-pointer text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-200">AI Rationale</summary>
+                                <div className="p-2 bg-blue-50 dark:bg-blue-900/30 rounded-md text-xs text-blue-800 dark:text-blue-200 italic">
+                                    {logEntry.versionRationale}
+                                </div>
+                            </details>
+                        )}
+                        {logEntry.selfCritique && (
+                             <details className="space-y-1">
+                                <summary className="text-sm font-medium cursor-pointer text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-200">AI Self-Critique</summary>
+                                <div className="p-2 bg-yellow-50 dark:bg-yellow-900/30 rounded-md text-xs text-yellow-800 dark:text-yellow-200 italic">
+                                    {logEntry.selfCritique}
+                                </div>
+                            </details>
+                        )}
+                    </div>
+                )}
+                
                 {logEntry.productDiff && logEntry.productDiff.trim() && (
                     <details className="space-y-1" open>
                         <summary className="text-sm font-medium cursor-pointer text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-200">{getDiffTitle(logEntry)}</summary>

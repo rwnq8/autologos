@@ -1,7 +1,10 @@
+
+
 import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
-import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version } from "../types/index.ts";
-import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents, CONVERGED_PREFIX } from './promptBuilderService.ts';
+import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version, StructuredIterationResponse } from "../types/index.ts";
+import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents } from './promptBuilderService.ts';
 import { urlBrowseTool } from './toolDefinitions.ts';
+import { formatVersion } from './versionUtils.ts';
 
 const API_KEY = process.env.API_KEY;
 
@@ -180,14 +183,14 @@ export const generateInitialOutline = async (fileManifest: string, loadedFiles: 
 
 
 export const iterateProduct = async ({
-    currentProduct, currentIterationOverall, maxIterationsOverall, fileManifest, loadedFiles,
+    currentProduct, currentVersion, maxIterationsOverall, fileManifest, loadedFiles,
     activePlanStage, outputParagraphShowHeadings, outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings,
     modelConfigToUse, isGlobalMode, isSearchGroundingEnabled, isUrlBrowsingEnabled, modelToUse, onStreamChunk, isHaltSignalled,
     retryContext, stagnationNudgeStrategy, initialOutlineForIter1, activeMetaInstruction,
     ensembleSubProducts, devLogContextString, isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
     isRadicalRefinementKickstart
 }: {
-    currentProduct: string; currentIterationOverall: number; maxIterationsOverall: number; fileManifest: string;
+    currentProduct: string; currentVersion: Version; maxIterationsOverall: number; fileManifest: string;
     loadedFiles: LoadedFile[]; activePlanStage: PlanStage | null; outputParagraphShowHeadings: boolean;
     outputParagraphMaxHeadingDepth: number; outputParagraphNumberedHeadings: boolean;
     modelConfigToUse: ModelConfig; isGlobalMode: boolean; isSearchGroundingEnabled: boolean; isUrlBrowsingEnabled: boolean; modelToUse: SelectableModelName;
@@ -201,15 +204,18 @@ export const iterateProduct = async ({
 }): Promise<IterateProductResult> => {
      if (!ai) return { product: currentProduct, status: 'ERROR', errorMessage: "Gemini API client not initialized." };
     
+    const modelData = SELECTABLE_MODELS.find(m => m.name === modelToUse);
+    const isUsingTools = isSearchGroundingEnabled || (isUrlBrowsingEnabled && !!modelData?.supportsFunctionCalling);
+    
     const isInitialProductEmptyAndFilesLoaded = (currentProduct === null || currentProduct.trim() === "") && loadedFiles.length > 0;
     const isSegmentedSynthesisMode = false;
-    const currentVersion: Version = { major: currentIterationOverall, minor: 0 }; // Assume minor is 0 for this context
-
+    
     try {
         const { systemInstruction, coreUserInstructions } = getUserPromptComponents(
             currentVersion, maxIterationsOverall, activePlanStage, outputParagraphShowHeadings,
             outputParagraphMaxHeadingDepth, outputParagraphNumberedHeadings, isGlobalMode,
             isInitialProductEmptyAndFilesLoaded,
+            !isUsingTools, // isJsonMode: only true if NOT using tools
             retryContext, stagnationNudgeStrategy, initialOutlineForIter1, loadedFiles, activeMetaInstruction,
             isSegmentedSynthesisMode, undefined, undefined,
             isTargetedRefinementMode, targetedSelectionText, targetedRefinementInstructions,
@@ -233,7 +239,7 @@ export const iterateProduct = async ({
         );
 
         const initialUserParts: Part[] = [];
-        if (isInitialProductEmptyAndFilesLoaded && currentIterationOverall === 1) {
+        if (isInitialProductEmptyAndFilesLoaded && currentVersion.major === 1 && currentVersion.minor === 0 && (currentVersion.patch === undefined || currentVersion.patch === 0)) {
             loadedFiles.forEach(file => {
                 initialUserParts.push({ inlineData: { mimeType: getSanitizedMimeType(file.mimeType || 'text/plain'), data: toBase64(file.content) }});
             });
@@ -242,22 +248,23 @@ export const iterateProduct = async ({
 
         const conversationHistory: Content[] = [{ role: 'user', parts: initialUserParts }];
         
-        const modelData = SELECTABLE_MODELS.find(m => m.name === modelToUse);
-        let configForRequest: any;
-
+        const tools: any[] = [];
         if (isSearchGroundingEnabled) {
-            const tools: any[] = [{ googleSearch: {} }];
-            configForRequest = { tools };
-        } else {
-            const tools: any[] = [];
-            if (isUrlBrowsingEnabled && modelData?.supportsFunctionCalling) {
-                tools.push({ functionDeclarations: [urlBrowseTool] });
-            }
-            configForRequest = {
-                ...apiConfig,
-                systemInstruction,
-                ...(tools.length > 0 && { tools }),
-            };
+            tools.push({ googleSearch: {} });
+        }
+        if (isUrlBrowsingEnabled && modelData?.supportsFunctionCalling) {
+            tools.push({ functionDeclarations: [urlBrowseTool] });
+        }
+
+        const configForRequest: any = {
+            ...apiConfig,
+            systemInstruction,
+            ...(tools.length > 0 && { tools }),
+        };
+
+        // CRITICAL: Only set responseMimeType if tools are NOT being used.
+        if (!isUsingTools) {
+            configForRequest.responseMimeType = "application/json";
         }
 
         let accumulatedText = "";
@@ -412,35 +419,75 @@ export const iterateProduct = async ({
             }
         }
         
-        let trimmedProduct = accumulatedText.trim();
-        // Clean the CONVERGED prefix from the final product before returning
-        if (trimmedProduct.startsWith(CONVERGED_PREFIX)) {
-            trimmedProduct = trimmedProduct.substring(CONVERGED_PREFIX.length).trim();
+        // Handle response based on whether tools were used (which dictates if we expect JSON or text)
+        if (isUsingTools) {
+            // In tool mode, the response is plain text.
+            const lastDetailWithMetadata = [...apiStreamDetails].reverse().find(d => d.groundingMetadata);
+            return {
+                product: accumulatedText,
+                status: 'COMPLETED',
+                versionRationale: "(Not available when using tools like Google Search, as the API does not support structured JSON output in this mode.)",
+                selfCritique: "(Not available when using tools, as the API does not support structured JSON output in this mode.)",
+                suggestedNextStep: 'refine_further', // Default assumption in text mode
+                apiStreamDetails,
+                isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',
+                promptSystemInstructionSent: systemInstruction,
+                promptCoreUserInstructionsSent: coreUserInstructions,
+                promptFullUserPromptSent: fullUserPromptText,
+                groundingMetadata: lastDetailWithMetadata?.groundingMetadata
+            };
+        } else {
+            // In non-tool mode, we expect JSON.
+            let parsedResponse: StructuredIterationResponse;
+            try {
+                let jsonStr = accumulatedText.trim();
+                const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
+                const match = jsonStr.match(fenceRegex);
+                if (match && match[2]) {
+                  jsonStr = match[2].trim();
+                }
+                parsedResponse = JSON.parse(jsonStr);
+            } catch (e) {
+                const errorMessage = `CRITICAL: AI returned malformed JSON, preventing further processing. Error: ${(e as Error).message}. Raw output head: ${accumulatedText.substring(0, 300)}`;
+                console.error(errorMessage, {rawOutput: accumulatedText});
+                return {
+                    product: currentProduct,
+                    status: 'ERROR',
+                    errorMessage,
+                    apiStreamDetails,
+                };
+            }
+            
+            const isConverged = parsedResponse.suggestedNextStep === 'declare_convergence';
+            const finalProduct = parsedResponse.newProductContent || "";
+            const status = isConverged ? 'CONVERGED' : 'COMPLETED';
+
+            const lastDetailWithMetadata = [...apiStreamDetails].reverse().find(d => d.groundingMetadata);
+
+            return {
+                product: finalProduct,
+                versionRationale: parsedResponse.versionRationale,
+                selfCritique: parsedResponse.selfCritique,
+                suggestedNextStep: parsedResponse.suggestedNextStep,
+                status,
+                apiStreamDetails,
+                isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',
+                promptSystemInstructionSent: systemInstruction,
+                promptCoreUserInstructionsSent: coreUserInstructions,
+                promptFullUserPromptSent: fullUserPromptText,
+                groundingMetadata: lastDetailWithMetadata?.groundingMetadata
+            };
         }
-        const isConverged = accumulatedText.trim().startsWith(CONVERGED_PREFIX);
-        const finalProduct = trimmedProduct;
-        const status = isConverged ? 'CONVERGED' : 'COMPLETED';
-
-        const lastDetailWithMetadata = [...apiStreamDetails].reverse().find(d => d.groundingMetadata);
-
-        return {
-            product: finalProduct,
-            status,
-            apiStreamDetails,
-            isStuckOnMaxTokensContinuation: apiStreamDetails[apiStreamDetails.length - 1]?.finishReason === 'MAX_TOKENS',
-            promptSystemInstructionSent: systemInstruction,
-            promptCoreUserInstructionsSent: coreUserInstructions,
-            promptFullUserPromptSent: fullUserPromptText,
-            groundingMetadata: lastDetailWithMetadata?.groundingMetadata
-        };
 
     } catch (error: any) {
-        console.error(`Error during Gemini API call for Iteration ${currentIterationOverall}`, error);
+        console.error(`Error during Gemini API call for Iteration ${formatVersion(currentVersion)}`, error);
         let errorMessage = `An unknown API error occurred. Name: ${error.name || 'N/A'}, Message: ${error.message || 'No message'}.`;
         let isRateLimitErrorFlag = false;
 
-        const errorStr = String(error.message || '').toUpperCase();
-        if (errorStr.includes("429") || errorStr.includes("QUOTA") || errorStr.includes("RATE LIMIT") || errorStr.includes("RESOURCE_EXHAUSTED")) {
+        const errorStr = String(error.message || error.toString() || '').toUpperCase();
+        if (error.message && error.message.includes("is unsupported")) { // Catch the specific error
+            errorMessage = `API Configuration Error: ${error.message}. This often happens when tools (like Search) are used with incompatible settings (like JSON output). The system tried to handle this, but an error still occurred.`;
+        } else if (errorStr.includes("429") || errorStr.includes("QUOTA") || errorStr.includes("RATE LIMIT") || errorStr.includes("RESOURCE_EXHAUSTED")) {
             errorMessage = `API Quota Exceeded or Rate Limit Hit after multiple retries. Original: "${error.message}".`;
             isRateLimitErrorFlag = true;
         } else if (errorStr.includes("FUNCTION CALLING IS UNSUPPORTED")) {

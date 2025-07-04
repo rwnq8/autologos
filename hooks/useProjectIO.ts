@@ -1,4 +1,3 @@
-
 // hooks/useProjectIO.ts
 
 import { useCallback, useRef, useEffect } from 'react';
@@ -8,6 +7,7 @@ import { generateFileName, DEFAULT_PROJECT_NAME_FALLBACK } from '../services/uti
 import { reconstructProduct } from '../services/diffService.ts';
 import * as GeminaiService from '../services/geminiService.ts';
 import { formatVersion, compareVersions } from '../services/versionUtils.ts';
+import { splitToChunks } from '../services/chunkingService.ts';
 
 
 function uuidv4() {
@@ -64,6 +64,7 @@ export const useProjectIO = (
     const engineData: AutologosIterativeEngineData = {
       initialPrompt: currentState.initialPrompt,
       iterationHistory: currentState.iterationHistory,
+      documentChunks: currentState.documentChunks,
       maxMajorVersions: currentState.maxMajorVersions,
       temperature: currentModelParams.temperature,
       topP: currentModelParams.topP,
@@ -159,10 +160,16 @@ export const useProjectIO = (
     
     const { product: productAtLastIter } = reconstructProduct(lastVersion, engineData.iterationHistory, correctedInitialPrompt);
 
+    // Backward compatibility for chunking
+    const documentChunks = engineData.documentChunks && engineData.documentChunks.length > 0
+        ? engineData.documentChunks
+        : splitToChunks(engineData.currentProductBeforeHalt || productAtLastIter || "");
+
     const importedProcessStateBase: Partial<ProcessState> = {
       ...engineData,
       initialPrompt: correctedInitialPrompt,
       loadedFiles: loadedFilesFromData,    
+      documentChunks: documentChunks,
       projectId: projectFile.header.projectId,
       projectName: projectFile.header.projectName || DEFAULT_PROJECT_NAME_FALLBACK,
       projectObjective: projectFile.header.projectObjective || null,

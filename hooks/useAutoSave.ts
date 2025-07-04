@@ -5,6 +5,7 @@ import type { ProcessState, AutologosIterativeEngineData, ModelConfig, LoadedFil
 import * as storageService from '../services/storageService.ts';
 import { DEFAULT_PROJECT_NAME_FALLBACK } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
+import { splitToChunks } from '../services/chunkingService.ts';
 
 type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'loaded' | 'not_found' | 'found_autosave' | 'cleared' | 'loading' | 'clearing';
 
@@ -71,6 +72,7 @@ export const useAutoSave = (
     const dataToSave: AutologosIterativeEngineData = {
         initialPrompt: currentState.initialPrompt,
         iterationHistory: leanHistory,
+        documentChunks: currentState.documentChunks,
         maxMajorVersions: currentState.maxMajorVersions,
         temperature: currentModelParams.temperature,
         topP: currentModelParams.topP,
@@ -149,11 +151,17 @@ export const useAutoSave = (
 
         const { product: productAtLastIter } = reconstructProduct(lastVersion, engineData.iterationHistory, correctedInitialPrompt);
 
+        // Backward compatibility for chunking
+        const documentChunks = engineData.documentChunks && engineData.documentChunks.length > 0
+            ? engineData.documentChunks
+            : splitToChunks(engineData.currentProductBeforeHalt || productAtLastIter || "");
+
         const restoredProcessState: ProcessState = {
           ...initialProcessStateValues,
           ...engineData,
           initialPrompt: correctedInitialPrompt, 
-          loadedFiles: loadedFilesFromData,     
+          loadedFiles: loadedFilesFromData,
+          documentChunks: documentChunks,
           apiKeyStatus: initialProcessStateValues.apiKeyStatus, 
           isProcessing: false, 
           statusMessage: "Session restored from auto-save.",

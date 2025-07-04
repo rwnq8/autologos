@@ -1,8 +1,29 @@
 import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult, Version } from '../types/index.ts';
 import { formatVersion } from './versionUtils.ts';
 
-export const CONVERGED_PREFIX = "CONVERGED:";
 export const MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT = 250000;
+
+const JSON_RESPONSE_SCHEMA = `
+Your response MUST be a single, valid JSON object that adheres to the following TypeScript interface.
+Do NOT add any conversational filler, markdown fences, or other text outside of the JSON object itself.
+
+interface Response {
+  // Your concise rationale for the changes made in this version compared to the previous one. Focus on the 'why' and what was improved.
+  versionRationale: string;
+
+  // The complete, new, and refined text of the product. This is the main output.
+  newProductContent: string;
+
+  // A brief, honest critique of the 'newProductContent' you just generated. What are its remaining weaknesses or areas for future improvement?
+  selfCritique: string;
+
+  // Based on your self-critique, what is the best next step for the overall process?
+  // 'refine_further': If the product is good but can still be substantially improved.
+  // 'expand_section': If a specific part of the product needs more detail.
+  // 'declare_convergence': If the product is complete, well-supported, and further changes would be trivial or detrimental.
+  suggestedNextStep: 'refine_further' | 'expand_section' | 'declare_convergence';
+}`;
+
 
 export const getOutlineGenerationPromptComponents = (
   fileManifest: string
@@ -43,6 +64,7 @@ export const getUserPromptComponents = (
   outputParagraphNumberedHeadingsGlobal: boolean,
   isGlobalMode: boolean,
   isInitialProductEmptyAndFilesLoaded: boolean,
+  isJsonMode: boolean, // New parameter to control output format
   retryContext?: RetryContext,
   stagnationNudgeStrategy?: NudgeStrategy,
   initialOutlineForIter1?: OutlineGenerationResult,
@@ -80,14 +102,24 @@ export const getUserPromptComponents = (
       `CRITICAL CONTEXT OF ORIGINAL FILES: The complete data of all original input files was provided to you in the very first API call of this entire multi-version process (or for the outline generation stage if applicable). Your primary knowledge base for all subsequent refinements is this full original file data. The 'File Manifest' is only a summary; refer to the complete file data provided initially for all tasks. Synthesize information from ALL provided files. Cross-reference details across files if relevant. Your product should reflect the combined knowledge and themes within these files.`
     );
     
-    systemInstructionParts.push(`GENERAL RULES:
-- **Output Structure**: Produce ONLY the new, modified textual product. Do NOT include conversational filler, apologies, or self-references like "Here's the updated product:".
-- **Convergence**: If you determine that the product cannot be meaningfully improved further according to the current iteration's goals, OR if your generated product is identical to the 'Current State of Product' you received, prefix your ENTIRE response with "${CONVERGED_PREFIX}". Do this sparingly and only when truly converged.
+  if (isJsonMode) {
+    systemInstructionParts.push(`GENERAL RULES & OUTPUT FORMAT:
+- **Output Structure**: ${JSON_RESPONSE_SCHEMA}
 - **Coherence and Substantiation**: Each version MUST become more logically coherent and well-supported. Strengthen arguments, ensure claims are substantiated (using your internal knowledge or provided context), and improve the logical flow. The goal is a final product that is a robust, defensible, and well-reasoned case.
-- **Avoid Disclaimers & Hedging**: As part of building a coherent case, you MUST NOT include weak disclaimers about the content being "conceptual," "for illustrative purposes," or "requiring further refinement/legal review." The iterative process IS that refinement.
-- **Substantial Improvement Required**: Each new version MUST represent a significant and substantive improvement over the last. Do not make trivial, stylistic-only changes (mere "wordsmithing"). This includes swapping synonyms without changing meaning. Focus on adding clarity, depth, new information, or improving the logical structure. If you cannot make a substantial improvement, you MUST declare convergence using the '${CONVERGED_PREFIX}' prefix.
+- **Avoid Disclaimers & Hedging**: As part of building a coherent case, you MUST NOT include weak disclaimers in the 'newProductContent' about the content being "conceptual," "for illustrative purposes," or "requiring further refinement/legal review." The iterative process IS that refinement.
+- **Substantial Improvement Required**: Each new version MUST represent a significant and substantive improvement over the last. Do not make trivial, stylistic-only changes (mere "wordsmithing"). This includes swapping synonyms without changing meaning. Focus on adding clarity, depth, new information, or improving the logical structure. If you cannot make a substantial improvement, you MUST declare convergence by setting 'suggestedNextStep' to 'declare_convergence'.
 - **Heed Meta-Instructions**: When a specific meta-instruction is given (e.g., to break stagnation), you MUST prioritize it and make a conceptually different response.`
     );
+  } else {
+    // Text-only instructions for when tools are used
+    systemInstructionParts.push(`GENERAL RULES & OUTPUT FORMAT:
+- **Output Structure**: Your response should be ONLY the new, modified textual product. Do NOT include conversational filler, apologies, self-references, or any other text outside of the product itself.
+- **Coherence and Substantiation**: Each version MUST become more logically coherent and well-supported. Strengthen arguments, ensure claims are substantiated (using your internal knowledge or provided context), and improve the logical flow. The goal is a final product that is a robust, defensible, and well-reasoned case.
+- **Avoid Disclaimers & Hedging**: As part of building a coherent case, you MUST NOT include weak disclaimers in the product about it being "conceptual," "for illustrative purposes," or "requiring further refinement/legal review." The iterative process IS that refinement.
+- **Substantial Improvement Required**: Each new version MUST represent a significant and substantive improvement over the last. Do not make trivial, stylistic-only changes (mere "wordsmithing"). This includes swapping synonyms without changing meaning. Focus on adding clarity, depth, new information, or improving the logical structure. If you cannot make a substantial improvement, you should aim to return the product as-is with minimal changes.
+- **Heed Meta-Instructions**: When a specific meta-instruction is given (e.g., to break stagnation), you MUST prioritize it and make a conceptually different response.`
+    );
+  }
   
   if (isInitialProductEmptyAndFilesLoaded && majorVersion === 1) {
       systemInstructionParts.push(
@@ -96,7 +128,7 @@ export const getUserPromptComponents = (
 2. Identify common themes, chapters, sections, and any versioning patterns.
 3. AGGRESSIVELY de-duplicate and consolidate information, BUT prioritize capturing the full breadth and depth of unique content from the source files.
 4. Produce a SINGLE, COHERENT, WELL-STRUCTURED initial document that synthetically represents the core, essential information from ALL files.
-Your output for this version MUST be a de-duplicated synthesis. This synthesized document will be the 'Current State of Product' for Version 2.`
+Your output for this version MUST be a de-duplicated synthesis, placed in the 'newProductContent' field of the JSON response (if JSON mode is active) or as the direct text output.`
       );
     }
   
@@ -123,6 +155,9 @@ Your output for this version MUST be a de-duplicated synthesis. This synthesized
       coreUserInstructions += `Task: Targeted Refinement.\nBased ON THE FULL 'CURRENT STATE OF PRODUCT' for context, your SOLE objective is to rewrite ONLY the following specific text selection based on the provided instructions. You MUST output the entire new product, with only the selected part changed.\n\n---TEXT SELECTION TO REFINE---\n${targetedSelectionText}\n-----------------------------\n\n---INSTRUCTIONS FOR THIS SELECTION---\n${instructionsForTargetedSelection}\n----------------------------------`;
   } else {
       coreUserInstructions += `Your task is to refine the "Current State of Product". Analyze it and implement the most impactful improvements to produce the next version.`;
+      if (isJsonMode) {
+          coreUserInstructions += ` Follow the JSON response schema.`;
+      }
   }
 
 
@@ -187,8 +222,8 @@ export const buildTextualPromptPart = (
     promptParts.push(coreUserInstructions);
     promptParts.push("------------------------------------------");
    
-    promptParts.push("REMINDER: Your response should be ONLY the new, modified textual product. Do NOT include conversational filler, apologies, or self-references. If converged, prefix your ENTIRE response with \"" + CONVERGED_PREFIX + "\".");
-    promptParts.push(`NEW MODIFIED PRODUCT (${formatVersion(currentVersion)}):`);
+    // The following lines were removed to prevent prompt leakage.
+    // The core instructions and system prompt are sufficient.
 
     return promptParts.join('\n');
 };

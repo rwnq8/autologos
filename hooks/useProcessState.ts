@@ -6,7 +6,6 @@ import * as geminiService from '../services/geminiService.ts';
 import * as storageService from '../services/storageService.ts';
 import { INITIAL_PROJECT_NAME_STATE } from '../services/utils.ts';
 import { getProductSummary } from '../services/iterationUtils.ts';
-import { CONVERGED_PREFIX } from '../services/promptBuilderService.ts';
 import * as Diff from 'diff';
 import { compareVersions } from '../services/versionUtils.ts';
 
@@ -22,6 +21,7 @@ export const createInitialProcessState = (
   initialPrompt: "",
   currentProduct: null,
   iterationHistory: [],
+  documentChunks: [], // Initialize new chunking structure
   currentMajorVersion: 0,
   currentMinorVersion: 0,
   maxMajorVersions: 40,
@@ -40,6 +40,7 @@ export const createInitialProcessState = (
   currentProductBeforeHalt: null,
   currentVersionBeforeHalt: undefined,
   promptChangedByFileLoad: false,
+  streamBuffer: null,
   outputParagraphShowHeadings: false,
   outputParagraphMaxHeadingDepth: 3,
   outputParagraphNumberedHeadings: false,
@@ -190,6 +191,7 @@ export const useProcessState = () => {
         updates.currentProduct = null;
         updates.finalProduct = null;
         updates.iterationHistory = [];
+        updates.documentChunks = [];
         updates.currentMajorVersion = 0;
         updates.currentMinorVersion = 0;
         updates.projectCodename = null; // Also reset codename on input change

@@ -1,19 +1,69 @@
 
+
 import React, { useState } from 'react';
 import { useEngine } from '../../contexts/ApplicationContext.tsx';
-import { SELECTABLE_MODELS, type ProcessState, type StrategistLLMContext } from '../../types/index.ts'; 
+import { SELECTABLE_MODELS, type ProcessState, type StagnationInfo } from '../../types/index.ts'; 
 import * as ModelStrategyService from '../../services/ModelStrategyService.ts';
 import { calculateQualitativeStates } from '../../services/strategistUtils.ts'; 
 
+
+const formatStagnationMessage = (stagnationInfo: StagnationInfo): { text: string, colorClass: string } => {
+    const { 
+        consecutiveIdenticalProductIterations, 
+        consecutiveLowValueIterations, 
+        consecutiveWordsmithingIterations, 
+        consecutiveCoherenceDegradation,
+        isStagnant
+    } = stagnationInfo;
+
+    if (consecutiveIdenticalProductIterations > 0) {
+        const plural = consecutiveIdenticalProductIterations > 1 ? 's were' : ' was';
+        return { 
+            text: `Assessment: Stalled. Last ${consecutiveIdenticalProductIterations} version${plural} identical. Forcing creative change.`,
+            colorClass: 'text-red-600 dark:text-red-400'
+        };
+    }
+    if (consecutiveWordsmithingIterations > 0) {
+        const plural = consecutiveWordsmithingIterations > 1 ? 's had' : ' had';
+        return {
+            text: `Assessment: Stagnation. Last ${consecutiveWordsmithingIterations} version${plural} only minor wording changes. Applying nudge.`,
+            colorClass: 'text-orange-600 dark:text-orange-400'
+        };
+    }
+    if (consecutiveCoherenceDegradation > 0) {
+        const plural = consecutiveCoherenceDegradation > 1 ? 's showed' : ' showed';
+        return {
+            text: `Assessment: Quality Drop. Last ${consecutiveCoherenceDegradation} version${plural} reduced coherence. Applying corrective strategy.`,
+            colorClass: 'text-yellow-600 dark:text-yellow-500'
+        };
+    }
+    if (consecutiveLowValueIterations > 0) {
+        const plural = consecutiveLowValueIterations > 1 ? 's were' : ' was';
+        return {
+            text: `Assessment: Low Value. Last ${consecutiveLowValueIterations} version${plural} too similar. Increasing creativity.`,
+            colorClass: 'text-amber-600 dark:text-amber-400'
+        };
+    }
+    if (isStagnant) {
+        return {
+            text: `Assessment: Mild Stagnation. Last version was very similar. Applying gentle nudge.`,
+            colorClass: 'text-yellow-600 dark:text-yellow-500'
+        };
+    }
+    
+    return {
+        text: 'Assessment: Healthy. No significant stagnation detected.',
+        colorClass: 'text-green-600 dark:text-green-400'
+    };
+};
 
 const ProcessStatusDisplay: React.FC = () => {
   const engine = useEngine();
   const { process: processCtx, app: appCtx, modelConfig: modelConfigCtx, plan: planCtx } = engine;
 
   const [showConvergenceInfo, setShowConvergenceInfo] = useState(false);
-  const convergenceTooltipText = `The AI signals convergence by prefixing its output with "CONVERGED:":
+  const convergenceTooltipText = `The AI signals convergence by setting a flag in its structured response:
 - It believes the current Plan Stage goals or Global Mode refinement is maximally achieved.
-- OR the output is identical to the previous iteration.
 - Further changes would be trivial, purely stylistic, or detrimental.`;
 
   let progressPercentValue = 0;
@@ -34,7 +84,7 @@ const ProcessStatusDisplay: React.FC = () => {
     } else {
       const iterationBeingProcessedGlobal = processCtx.currentMajorVersion + 1;
       progressPercentValue = modelConfigCtx.maxIterations > 0 ? (iterationBeingProcessedGlobal / modelConfigCtx.maxIterations) * 100 : 0;
-      progressText = `Global Iter. ${Math.max(1, iterationBeingProcessedGlobal)} / ${modelConfigCtx.maxIterations}`;
+      progressText = `Global Iter. ${Math.max(1, processCtx.currentMajorVersion)} / ${modelConfigCtx.maxIterations}`;
     }
   } else {
     if (!planCtx.isPlanActive) {
@@ -58,24 +108,9 @@ const ProcessStatusDisplay: React.FC = () => {
         lowerInsight.includes("resource_exhausted");
 
     if (appCtx.isApiRateLimited || isQuotaErrorIndicatedByInsight) {
-      const rateLimitUrl = "https://ai.google.dev/gemini-api/docs/rate-limits";
       const modelNameInUse = processCtx.currentModelForIteration || processCtx.selectedModelName || "the selected model";
       const modelDisplayName = SELECTABLE_MODELS.find(m => m.name === modelNameInUse)?.displayName || modelNameInUse;
-      let originalApiMessage = "";
-      const originalMsgMatch = (processCtx.aiProcessInsight || "").match(/Original(?: API Message)?:\s*"(.*?)"/i);
-
-      if (originalMsgMatch && originalMsgMatch[1]) {
-        originalApiMessage = originalMsgMatch[1].trim();
-      } else if (appCtx.isApiRateLimited) {
-        if (appCtx.rateLimitCooldownActiveSeconds > 0) {
-            originalApiMessage = `The API rate limit is currently active. Please wait for the cooldown (${appCtx.rateLimitCooldownActiveSeconds}s).`;
-        } else {
-            originalApiMessage = `The API rate limit is currently active. Please wait for the cooldown period to end.`;
-        }
-      } else if (processCtx.aiProcessInsight) {
-        originalApiMessage = processCtx.aiProcessInsight;
-      }
-
+      
       return (
         <div className="mt-2 p-4 bg-yellow-50 dark:bg-yellow-700/30 border-l-4 border-yellow-400 dark:border-yellow-500 text-yellow-700 dark:text-yellow-200 rounded-md shadow-md">
           <h3 className="text-md font-semibold mb-1">API Quota Limit Reached</h3>
@@ -88,33 +123,19 @@ const ProcessStatusDisplay: React.FC = () => {
 
   const quotaErrorDisplay = checkAndRenderQuotaError();
   
-  const modelNameInUse = processCtx.currentModelForIteration || processCtx.selectedModelName;
-  const modelDisplayName = SELECTABLE_MODELS.find(m => m.name === modelNameInUse)?.displayName || modelNameInUse;
-
-  let strategyRationaleText = processCtx.aiProcessInsight || 'System Idle. Ready for input.';
-  let dynamicInsightText = "";
+  let dynamicInsightText = processCtx.aiProcessInsight || 'System Idle. Ready for input.';
   if (processCtx.isProcessing) {
-    strategyRationaleText = processCtx.aiProcessInsight || 'Evaluating strategy...';
-    let modelDetails = `Using: ${modelDisplayName}`;
-    if (processCtx.currentAppliedModelConfig) {
-        const { temperature, topP, topK, thinkingConfig } = processCtx.currentAppliedModelConfig;
-        modelDetails += ` (T:${temperature.toFixed(2)}, P:${topP.toFixed(2)}, K:${topK}${thinkingConfig !== undefined ? `, Budget:${thinkingConfig.thinkingBudget}` : ''})`;
-    }
-    dynamicInsightText = `${strategyRationaleText}`;
+    dynamicInsightText = processCtx.aiProcessInsight || 'Evaluating strategy...';
   } else if (processCtx.finalProduct) {
-      dynamicInsightText = `Process completed. Final product generated. Input Complexity: ${processCtx.inputComplexity || 'N/A'}. ${strategyRationaleText}`;
+      dynamicInsightText = `Process completed. Final product generated.`;
   } else if (processCtx.currentProductBeforeHalt) {
-      dynamicInsightText = `Process Halted. Input Complexity: ${processCtx.inputComplexity || 'N/A'}. ${strategyRationaleText}`;
-  } else {
+      dynamicInsightText = `Process Halted.`;
+  } else if (!processCtx.currentProduct) {
       const initialStrategy = ModelStrategyService.determineInitialStrategy(processCtx, modelConfigCtx.getUserSetBaseConfig());
       dynamicInsightText = `Input Complexity: ${processCtx.inputComplexity}. Initial Strategy: ${initialStrategy.rationale}`;
   }
 
-  const { stagnationInfo } = processCtx;
-  const isBootstrappedBase = processCtx.iterationHistory[0]?.entryType === 'bootstrap_synthesis_milestone';
-  const { stagnationSeverity } = calculateQualitativeStates(processCtx.currentProduct, stagnationInfo, processCtx.inputComplexity, processCtx.stagnationNudgeAggressiveness, isBootstrappedBase);
-  let stagnationStatusText = `System Stagnation Assessment: ${stagnationSeverity}. Details: Identical Prods: ${stagnationInfo.consecutiveIdenticalProductIterations}, Low Value Iters: ${stagnationInfo.consecutiveLowValueIterations}, Stagnant Iters: ${stagnationInfo.consecutiveStagnantIterations}. Nudge Strategy System Applied: ${stagnationInfo.nudgeStrategyApplied || 'none'}.`;
-
+  const stagnationDisplay = formatStagnationMessage(processCtx.stagnationInfo);
 
   return (
     <div className="bg-white/50 dark:bg-black/20 p-6 rounded-lg border border-slate-300/70 dark:border-white/10">
@@ -133,10 +154,19 @@ const ProcessStatusDisplay: React.FC = () => {
       </p>
 
       {quotaErrorDisplay ? quotaErrorDisplay : (
-        <>
-          <p className="text-xs text-sky-600 dark:text-sky-400 italic min-h-[1.25em] break-words mb-1" aria-live="polite">{dynamicInsightText}</p>
-          <p className="text-xs text-amber-600 dark:text-amber-400 min-h-[1.25em] break-words" aria-live="polite">{stagnationStatusText}</p>
-        </>
+        <div className="space-y-1">
+          <p className="text-xs text-sky-600 dark:text-sky-400 italic min-h-[1.25em] break-words" aria-live="polite">
+            <strong>Strategy:</strong> {dynamicInsightText}
+          </p>
+          <p className={`text-xs min-h-[1.25em] break-words font-medium ${stagnationDisplay.colorClass}`} aria-live="polite">
+            {stagnationDisplay.text}
+          </p>
+          {processCtx.isProcessing && processCtx.streamBuffer && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 animate-pulse" aria-live="polite">
+              [AI is generating response... buffer size: {processCtx.streamBuffer.length}]
+            </p>
+          )}
+        </div>
       )}
 
       {(processCtx.isProcessing || (!processCtx.isProcessing && processCtx.iterationHistory.length > 0 && !processCtx.finalProduct )) &&

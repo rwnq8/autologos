@@ -71,14 +71,12 @@ const AI_ERROR_PHRASES = [
   "Please provide me with the text you'd like me to continue generating from! I need the starting point",
 ];
 
+// This is no longer the primary validation method for prompt leakage, as JSON output prevents it.
+// Kept for historical reference or if a non-JSON mode is ever re-introduced.
 const PROMPT_LEAKAGE_MARKERS = [
   "---FILE MANIFEST (Original Input Summary)---",
   "---CURRENT STATE OF PRODUCT (",
   "------------------------------------------",
-  "REMINDER: Your response should be ONLY the new, modified textual product.",
-  "NEW MODIFIED PRODUCT (Version ",
-  "---PREVIOUSLY_GENERATED_PARTIAL_RESPONSE_THIS_ITERATION---",
-  "---CONTINUATION_REQUEST---",
   "CRITICAL CONTEXT OF ORIGINAL FILES:",
   "GLOBAL MODE DYNAMIC PARAMS:",
   "ITERATIVE PLAN MODE:",
@@ -87,18 +85,7 @@ const PROMPT_LEAKAGE_MARKERS = [
   "Executing Iterative Plan Stage (Overall Version",
   "This is Version ",
   "Task: Initial Document Synthesis.",
-  "Analyze & Refine:",
-  "Substantial Change:",
-  "Output:",
-  "Adhere to Stage Goals:",
-  "Formatting Details (if 'paragraph' format):",
-  "JSON Output (if 'json' format):",
-  "Content Consistency:",
-  "Specific Instructions for Stage:"
 ];
-
-export const CONVERGED_PREFIX = "CONVERGED:";
-const PROMPT_LEAKAGE_SNIPPET_RADIUS = 50;
 
 export const isDataDump = (
   newProduct: string,
@@ -168,7 +155,7 @@ export const isDataDump = (
 
 
 export function isLikelyAiErrorResponse(
-  newProductInput: string, // Renamed to avoid confusion
+  newProduct: string,
   previousProduct: string,
   currentLogEntryForValidation: IterationLogEntry,
   initialOutlineForIter1?: OutlineGenerationResult,
@@ -176,9 +163,6 @@ export function isLikelyAiErrorResponse(
   formatInstruction?: OutputFormat,
   inputComplexity?: 'SIMPLE' | 'MODERATE' | 'COMPLEX'
 ): IsLikelyAiErrorResponseResult {
-  const newProduct = newProductInput.startsWith(CONVERGED_PREFIX)
-    ? newProductInput.substring(CONVERGED_PREFIX.length)
-    : newProductInput;
 
   const newCleanedForErrorPhrases = newProduct.trim().toLowerCase();
   const newLengthChars = newProduct.trim().length;
@@ -195,6 +179,8 @@ export function isLikelyAiErrorResponse(
     : null;
 
   // --- Start of Prioritized Critical Checks ---
+  // NOTE: Prompt leakage is no longer checked here as structured JSON output from the AI prevents it.
+  // The primary validation for that is now the JSON parsing step in geminiService.
 
   // 1. Problematic API Finish Reason + Minimal Output
   if (lastApiCallDetails) {
@@ -204,21 +190,7 @@ export function isLikelyAiErrorResponse(
     }
   }
 
-  // 2. Prompt Leakage
-  for (const marker of PROMPT_LEAKAGE_MARKERS) {
-    let isActualLeak = false; let markerIndexForSnippet = -1;
-    if (marker === "Output:") { /* ... (existing complex marker check) ... */ }
-    else if (marker === "------------------------------------------") { /* ... (existing complex marker check) ... */ }
-    else { const foundIndex = newProduct.indexOf(marker); if (foundIndex !== -1) { isActualLeak = true; markerIndexForSnippet = foundIndex; } }
-    if (isActualLeak && markerIndexForSnippet !== -1) {
-      const snippetStart = Math.max(0, markerIndexForSnippet - PROMPT_LEAKAGE_SNIPPET_RADIUS);
-      const snippetEnd = Math.min(newProduct.length, markerIndexForSnippet + marker.length + PROMPT_LEAKAGE_SNIPPET_RADIUS);
-      const snippet = newProduct.substring(snippetStart, snippetEnd).replace(/\n/g, '\\n');
-      return { isError: true, isCriticalFailure: false, reason: `AI response appears to contain parts of the input prompt instructions (marker: "${marker}").`, checkDetails: { type: 'prompt_leakage', value: { marker, snippet } as PromptLeakageDetailValue }};
-    }
-  }
-
-  // 3. Catastrophic Collapse
+  // 2. Catastrophic Collapse
   if (prevLengthChars >= PREVIOUS_MIN_CHARS_FOR_CATASTROPHIC_CHECK &&
       newLengthChars < MIN_CHARS_FOR_CATASTROPHIC_COLLAPSE &&
       newWordCount < MIN_WORDS_FOR_CATASTROPHIC_COLLAPSE &&
@@ -231,23 +203,18 @@ export function isLikelyAiErrorResponse(
   }
 
 
-  // 4. Error Phrase Detection
+  // 3. Error Phrase Detection
   let foundErrorPhrase: string | null = null;
   for (const phrase of AI_ERROR_PHRASES) {
     if (newCleanedForErrorPhrases.includes(phrase.toLowerCase())) { foundErrorPhrase = phrase; break; }
   }
 
-  // 5. Combined Error Phrase + Significant Uninstructed Reduction
+  // 4. Combined Error Phrase + Significant Uninstructed Reduction
   if (foundErrorPhrase && prevLengthChars > MIN_CHARS_FOR_REDUCTION_CHECK && newLengthChars < prevLengthChars * SIGNIFICANT_REDUCTION_WITH_ERROR_PHRASE_THRESHOLD && !isInstructedToShortenOrCondense) {
     return { isError: true, isCriticalFailure: true, reason: `CRITICAL: AI response contains an error/stall phrase ("${foundErrorPhrase}") AND resulted in significant content reduction (>20%) without instruction.`, checkDetails: { type: 'error_phrase_with_significant_reduction', value: { phrase: foundErrorPhrase, previousLengthChars: prevLengthChars, newLengthChars: newLengthChars, percentageCharChange: parseFloat(((newLengthChars / prevLengthChars - 1) * 100).toFixed(2))} as any }};
   }
   
-  // 6. Initial Synthesis Check is now handled externally by isDataDump for Iteration 0 processing.
-  // This check in isLikelyAiErrorResponse focused on Iteration 1 which is where the product is first created.
-  // The logic has been extracted.
-  
-
-  // 7. Reduction Checks (Extreme and Drastic)
+  // 5. Reduction Checks (Extreme and Drastic)
   if (prevLengthChars >= MIN_CHARS_FOR_REDUCTION_CHECK && prevWordCount >= MIN_WORDS_FOR_REDUCTION_CHECK) {
     const charPercentageChange = prevLengthChars > 0 ? (newLengthChars / prevLengthChars) : 1.0;
     const wordPercentageChange = prevWordCount > 0 ? (newWordCount / prevWordCount) : 1.0;
@@ -273,7 +240,7 @@ export function isLikelyAiErrorResponse(
   }
 
 
-  // 8. Simple Error Phrase Check (if not combined with other issues)
+  // 6. Simple Error Phrase Check (if not combined with other issues)
   if (foundErrorPhrase) {
     // If the output is VERY short and contains an error phrase, it's a critical failure.
     if (newLengthChars < (foundErrorPhrase.length + 50)) {

@@ -1,14 +1,18 @@
+
+
 import { useRef, useState, useCallback, useEffect } from 'react';
 import type { ProcessState, IterationLogEntry, IterateProductResult, PlanStage, ModelConfig, StagnationInfo, ApiStreamCallDetail, FileProcessingInfo, IterationResultDetails, AiResponseValidationInfo, NudgeStrategy, RetryContext, OutlineGenerationResult, SelectableModelName, LoadedFile, IsLikelyAiErrorResponseResult, IterationEntryType, DevLogEntry, StrategistLLMContext, Version, ModelStrategy } from '../types/index.ts';
+import { SELECTABLE_MODELS } from '../types/index.ts';
 import * as GeminaiService from '../services/geminiService.ts';
 import { getUserPromptComponents } from '../services/promptBuilderService.ts';
-import { isLikelyAiErrorResponse, getProductSummary, parseAndCleanJsonOutput, CONVERGED_PREFIX, isDataDump } from '../services/iterationUtils.ts';
+import { isLikelyAiErrorResponse, getProductSummary, parseAndCleanJsonOutput } from '../services/iterationUtils.ts';
 import * as ModelStrategyService from '../services/ModelStrategyService.ts';
 import { calculateQualitativeStates } from '../services/strategistUtils.ts';
 import { calculateFleschReadingEase, calculateJaccardSimilarity, calculateLexicalDensity, calculateAvgSentenceLength, calculateSimpleTTR } from '../services/textAnalysisService.ts';
 import type { AddLogEntryParams } from './useProcessState.ts';
 import { getRelevantDevLogContext } from '../services/devLogContextualizerService.ts';
 import { reconstructProduct } from '../services/diffService.ts';
+import { splitToChunks, reconstructFromChunks } from '../services/chunkingService.ts';
 
 
 const SELF_CORRECTION_MAX_ATTEMPTS = 2;
@@ -75,9 +79,6 @@ export const useIterativeLogic = (
     const directResponseTail = iterationProductForLog && iterationProductForLog.length > 500 ? iterationProductForLog.substring(iterationProductForLog.length - 500) : "";
 
     let finalProductForSummary = iterationProductForLog;
-    if (iterationProductForLog && iterationProductForLog.startsWith(CONVERGED_PREFIX)) {
-        finalProductForSummary = iterationProductForLog.substring(CONVERGED_PREFIX.length);
-    }
     const activePlanStage = processState.isPlanActive && processState.currentPlanStageIndex !== null ? processState.planStages[processState.currentPlanStageIndex] : null;
     if (activePlanStage && activePlanStage.format === 'json' && finalProductForSummary) {
         finalProductForSummary = parseAndCleanJsonOutput(finalProductForSummary);
@@ -95,6 +96,8 @@ export const useIterativeLogic = (
       lexicalDensity: calculateLexicalDensity(finalProductForSummary), 
       avgSentenceLength: calculateAvgSentenceLength(finalProductForSummary), 
       typeTokenRatio: calculateSimpleTTR(finalProductForSummary), 
+      versionRationale: apiResult?.versionRationale,
+      selfCritique: apiResult?.selfCritique,
       fileProcessingInfo: fileProcessingInfoForLog || { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: 0, loadedFilesForIterationContext: [] },
       promptSystemInstructionSent: apiResult?.promptSystemInstructionSent,
       promptCoreUserInstructionsSent: apiResult?.promptCoreUserInstructionsSent,
@@ -128,7 +131,7 @@ export const useIterativeLogic = (
 
   const handleProcessHalt = useCallback((
     currentVersionForHalt: Version, 
-    currentProdForHalt: string | null, 
+    lastGoodProduct: string | null, 
     haltMessage: string, 
     apiResult?: IterateProductResult
   ) => {
@@ -140,7 +143,9 @@ export const useIterativeLogic = (
       isProcessing: false,
       statusMessage: finalHaltMessage,
       aiProcessInsight: apiResult?.errorMessage || 'User initiated halt.',
-      currentProductBeforeHalt: currentProdForHalt,
+      currentProduct: lastGoodProduct, // Revert to the last known good product
+      streamBuffer: null,
+      currentProductBeforeHalt: lastGoodProduct,
       currentVersionBeforeHalt: currentVersionForHalt,
     });
   }, [updateProcessState]);
@@ -168,6 +173,7 @@ export const useIterativeLogic = (
     updateProcessState({
       isProcessing: true,
       statusMessage: 'Starting process...',
+      streamBuffer: null,
       aiProcessInsight: 'Initializing...',
       finalProduct: null,
       configAtFinalization: null,
@@ -205,8 +211,15 @@ export const useIterativeLogic = (
       stagnationNudgeAggressiveness,
       inputComplexity,
       devLog,
-      ensembleSubProducts
+      ensembleSubProducts,
+      documentChunks
     } = initialProcessState;
+
+    // Ensure product string is reconstructed from chunks if they exist
+    if (documentChunks && documentChunks.length > 0) {
+      currentProductForIteration = reconstructFromChunks(documentChunks);
+    }
+
 
     if (isTargetedRefinementMode && !targetedSelectionText) {
       handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0}, currentProductForIteration, "Targeted refinement started without a text selection.");
@@ -225,7 +238,7 @@ export const useIterativeLogic = (
 
     for (let currentIteration = 1; currentIteration <= maxMajorVersions; currentIteration++) {
       if (haltSignalRef.current) {
-        handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0}, currentProductForIteration, "Halt signal received before loop start.");
+        handleProcessHalt({major: majorVersionForIteration, minor: minorVersionForIteration, patch: 0}, currentProductForIteration, "Halt signal received. Process stopped.");
         break;
       }
       
@@ -281,12 +294,14 @@ export const useIterativeLogic = (
       const handleStreamChunk = (chunkText: string) => {
         if (!haltSignalRef.current) {
           accumulatedText += chunkText;
-          currentStreamBufferRef.current += chunkText;
-          updateProcessState({ currentProduct: previousProductForLog + currentStreamBufferRef.current });
+          currentStreamBufferRef.current = accumulatedText;
+          // Update the transient stream buffer for UI feedback
+          updateProcessState({ streamBuffer: currentStreamBufferRef.current });
         }
       };
 
       currentStreamBufferRef.current = "";
+      updateProcessState({ streamBuffer: "" }); // Clear buffer at start of attempt
       let attempt = 0;
       let result: IterateProductResult | null = null;
       let validationInfo: AiResponseValidationInfo = { checkName: 'N/A', passed: true, reason: 'Validation not run.' };
@@ -297,7 +312,7 @@ export const useIterativeLogic = (
 
       while (attempt < SELF_CORRECTION_MAX_ATTEMPTS) {
         if (haltSignalRef.current) {
-          handleProcessHalt(currentVersionForLoop, currentProductForIteration, 'Halt signal received during retry loop.');
+          handleProcessHalt(currentVersionForLoop, currentProductForIteration, 'Halt signal received. Process stopped.');
           return;
         }
 
@@ -305,7 +320,7 @@ export const useIterativeLogic = (
         
         result = await GeminaiService.iterateProduct({
             currentProduct: currentProductForIteration,
-            currentIterationOverall: majorVersionForIteration,
+            currentVersion: currentVersionForLoop,
             maxIterationsOverall: maxMajorVersions,
             fileManifest: initialPrompt,
             loadedFiles,
@@ -339,10 +354,7 @@ export const useIterativeLogic = (
         }
 
         finalProduct = result.product;
-        const isConverged = finalProduct.trim().startsWith(CONVERGED_PREFIX);
-        if (isConverged) {
-            finalProduct = finalProduct.substring(CONVERGED_PREFIX.length);
-        }
+        const isConverged = result.suggestedNextStep === 'declare_convergence' || result.status === 'CONVERGED';
 
         const validationResult: IsLikelyAiErrorResponseResult = isLikelyAiErrorResponse(
             finalProduct,
@@ -370,13 +382,18 @@ export const useIterativeLogic = (
             break; 
         } else if (!isCriticalFailure && attempt < SELF_CORRECTION_MAX_ATTEMPTS - 1 && !isConverged) {
             attempt++;
+            
+            const modelDataForRetry = SELECTABLE_MODELS.find(m => m.name === modelStrategy.modelName);
+            const isUsingToolsForRetry = isSearchGroundingEnabled || (isUrlBrowsingEnabled && !!modelDataForRetry?.supportsFunctionCalling);
+
             retryContext = {
                 previousErrorReason: validationInfo.reason,
-                originalCoreInstructions: getUserPromptComponents(currentVersionForLoop, maxMajorVersions, null, false, 0, false, true, false).coreUserInstructions,
+                originalCoreInstructions: getUserPromptComponents(currentVersionForLoop, maxMajorVersions, null, false, 0, false, true, false, !isUsingToolsForRetry).coreUserInstructions,
             };
             updateProcessState({statusMessage: `Iteration v${majorVersionForIteration}.${minorVersionForIteration}: Validation failed. Retrying...`});
             accumulatedText = "";
             currentStreamBufferRef.current = "";
+            updateProcessState({ streamBuffer: "" }); // Clear buffer for retry
         } else {
             break;
         }
@@ -455,7 +472,14 @@ export const useIterativeLogic = (
       );
       
       currentProductForIteration = finalProduct;
-      updateProcessState({ currentProduct: finalProduct, stagnationInfo: newStagnationInfo });
+      // CRITICAL: Update the product string AND the new document chunks
+      const newChunks = splitToChunks(finalProduct);
+      updateProcessState({
+        currentProduct: finalProduct,
+        documentChunks: newChunks,
+        stagnationInfo: newStagnationInfo,
+        streamBuffer: null,
+      });
       
       if (result.status === 'CONVERGED' || result.status === 'HALTED' || result.status === 'ERROR' || isCriticalFailure) {
         updateProcessState({
@@ -463,6 +487,7 @@ export const useIterativeLogic = (
           finalProduct: currentProductForIteration,
           statusMessage: `Process ended: ${isCriticalFailure ? 'Critical validation failure' : result.status}.`,
           configAtFinalization: modelStrategy.config,
+          streamBuffer: null,
         });
         isProcessingRef.current = false;
         break;
@@ -474,6 +499,7 @@ export const useIterativeLogic = (
           finalProduct: currentProductForIteration,
           statusMessage: 'Process ended: Reached max iterations.',
           configAtFinalization: modelStrategy.config,
+          streamBuffer: null,
         });
         isProcessingRef.current = false;
         break;
@@ -487,6 +513,7 @@ export const useIterativeLogic = (
             statusMessage: `Targeted refinement to v${majorVersionForIteration}.${minorVersionForIteration} complete.`,
             instructionsForSelectionRefinement: "",
             currentTextSelectionForRefinement: null,
+            streamBuffer: null,
         });
         isProcessingRef.current = false;
         break; // Exit the loop after one targeted refinement
@@ -526,10 +553,12 @@ export const useIterativeLogic = (
         statusMessage: 'Starting ensemble synthesis...',
         aiProcessInsight: 'Preparing file samples for sub-processes.',
         currentProduct: null,
+        documentChunks: [],
         iterationHistory: [],
         currentMajorVersion: 0,
         currentMinorVersion: 0,
         finalProduct: null,
+        streamBuffer: null,
     });
     
     const samplesToRun = loadedFiles.length > 50 ? bootstrapSamples + 2 : (loadedFiles.length > 30 ? bootstrapSamples + 1 : bootstrapSamples);
@@ -569,9 +598,10 @@ export const useIterativeLogic = (
         for (let j = 0; j < bootstrapSubIterations; j++) {
             if (haltSignalRef.current) break;
             
+            const bootstrapVersion: Version = { major: 0, minor: i, patch: j };
             const result = await GeminaiService.iterateProduct({
                 currentProduct: subProduct,
-                currentIterationOverall: j + 1,
+                currentVersion: bootstrapVersion,
                 maxIterationsOverall: bootstrapSubIterations,
                 fileManifest: sampleManifest,
                 loadedFiles: sampleFiles,
@@ -622,9 +652,12 @@ export const useIterativeLogic = (
     
     if (subProducts.length > 0) {
         updateProcessState({ statusMessage: "Integrating ensemble results...", ensembleSubProducts: subProducts });
+        let integratedProductBuffer = "";
+
+        const integrationVersion: Version = { major: 0, minor: samplesToRun, patch: 0 };
         const integrationResult = await GeminaiService.iterateProduct({
             currentProduct: "",
-            currentIterationOverall: 1, // It's like the first "real" iteration
+            currentVersion: integrationVersion,
             maxIterationsOverall: 1,
             fileManifest: "Multiple ensemble sub-products generated.",
             loadedFiles: [], // Files aren't sent for integration, only sub-products
@@ -633,30 +666,33 @@ export const useIterativeLogic = (
             outputParagraphShowHeadings: false,
             outputParagraphMaxHeadingDepth: 2,
             outputParagraphNumberedHeadings: false,
-            modelConfigToUse: baseModelConfig,
+            modelConfigToUse: { ...baseModelConfig, temperature: 0.2 }, // Use lower temp for integration
             isGlobalMode: true,
             isSearchGroundingEnabled: false,
             isUrlBrowsingEnabled: false,
             modelToUse: 'gemini-2.5-pro', // Use a more powerful model for integration
             onStreamChunk: (chunk) => {
-                const { processState: currentState } = latestStateRef.current;
-                updateProcessState({ currentProduct: (currentState.currentProduct || "") + chunk });
+                integratedProductBuffer += chunk;
+                updateProcessState({ streamBuffer: integratedProductBuffer });
             },
             isHaltSignalled: () => haltSignalRef.current,
         });
+        
+        const finalIntegratedProduct = integrationResult.product;
+        const finalIntegratedChunks = splitToChunks(finalIntegratedProduct);
 
         logIterationData(
             { major: 0, minor: samplesToRun, patch: 0 },
             'ensemble_integration',
-            integrationResult.product,
+            finalIntegratedProduct,
             `Ensemble Integration Complete`,
             "",
             integrationResult,
-            baseModelConfig,
+            { ...baseModelConfig, temperature: 0.2 },
             { filesSentToApiIteration: null, numberOfFilesActuallySent: 0, totalFilesSizeBytesSent: 0, fileManifestProvidedCharacterCount: "Multiple ensemble sub-products generated.".length, loadedFilesForIterationContext: [] },
             undefined,
-            integrationResult.product.length,
-            integrationResult.product.length,
+            finalIntegratedProduct.length,
+            finalIntegratedProduct.length,
             1,
             "Ensemble Integration",
             'gemini-2.5-pro',
@@ -672,10 +708,12 @@ export const useIterativeLogic = (
             undefined
         );
         updateProcessState({
-            currentProduct: integrationResult.product,
-            finalProduct: integrationResult.product, // Treat this as a final base product for now
+            currentProduct: finalIntegratedProduct,
+            documentChunks: finalIntegratedChunks,
+            finalProduct: finalIntegratedProduct, // Treat this as a final base product for now
             statusMessage: "Ensemble synthesis complete. You can now save this base product or start a refinement process.",
             aiProcessInsight: "Generated a robust base product from multiple file samples.",
+            streamBuffer: null,
         });
     } else {
          updateProcessState({ statusMessage: "Ensemble synthesis finished, but no sub-products were generated." });

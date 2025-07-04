@@ -38,6 +38,8 @@ export interface IterationLogEntry {
   lexicalDensity?: number;
   avgSentenceLength?: number;
   typeTokenRatio?: number;
+  versionRationale?: string;
+  selfCritique?: string;
   fileProcessingInfo: FileProcessingInfo;
   promptSystemInstructionSent?: string;
   promptCoreUserInstructionsSent?: string;

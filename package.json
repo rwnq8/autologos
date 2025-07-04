@@ -10,10 +10,12 @@
   },
   "dependencies": {
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "@google/generative-ai": "^0.24.1",
-    "diff": "^8.0.2",
-    "@google/genai": "^1.7.0"
+    "react/jsx-runtime": "18.2.0",
+    "react-dom/client": "18.2.0",
+    "diff": "5.2.0",
+    "@google/genai": "0.12.0",
+    "uuid": "9.0.1",
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

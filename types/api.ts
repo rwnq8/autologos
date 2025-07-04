@@ -17,8 +17,18 @@ export interface ApiStreamCallDetail {
   groundingMetadata?: any;
 }
 
+export interface StructuredIterationResponse {
+  versionRationale: string;
+  newProductContent: string;
+  selfCritique: string;
+  suggestedNextStep: 'refine_further' | 'expand_section' | 'declare_convergence';
+}
+
 export interface IterateProductResult {
-  product: string;
+  product: string; // This will hold the newProductContent from the JSON
+  versionRationale?: string;
+  selfCritique?: string;
+  suggestedNextStep?: 'refine_further' | 'expand_section' | 'declare_convergence';
   status: 'COMPLETED' | 'CONVERGED' | 'HALTED' | 'ERROR';
   errorMessage?: string;
   promptSystemInstructionSent?: string;

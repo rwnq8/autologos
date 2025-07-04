@@ -1,11 +1,7 @@
 
 
-
-
-
-
 import React, { createContext, useContext, useCallback, useState, useEffect, useMemo } from 'react';
-import type { ProcessState, ModelConfig, SettingsSuggestionSource, StaticAiModelDetails, SelectableModelName, AutologosProjectFile, PlanTemplate, IterationLogEntry, Version, PlanStage, LoadedFile } from '../types/index.ts';
+import type { ProcessState, ModelConfig, SettingsSuggestionSource, StaticAiModelDetails, SelectableModelName, AutologosProjectFile, PlanTemplate, IterationLogEntry, Version, PlanStage, LoadedFile, DocumentChunk } from '../types/index.ts';
 import { SELECTABLE_MODELS } from '../types/index.ts';
 import type { ModelConfigContextType } from './ModelConfigContext.tsx';
 import { useProcessState, createInitialProcessState } from '../hooks/useProcessState.ts';
@@ -20,6 +16,7 @@ import { inferProjectNameFromInput } from '../services/projectUtils.ts';
 import { generateFileName, toYamlStringLiteral } from '../services/utils.ts';
 import { reconstructProduct } from '../services/diffService.ts';
 import { formatVersion } from '../services/versionUtils.ts';
+import { splitToChunks, reconstructFromChunks } from '../services/chunkingService.ts';
 
 // Define the shape of the comprehensive engine object
 interface EngineContextType {
@@ -223,10 +220,12 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   
   const handleRewind = (version: Version) => {
     const { product } = reconstructProduct(version, processState.iterationHistory, processState.initialPrompt);
+    const newChunks = splitToChunks(product);
     processActions.updateProcessState({
         currentProduct: product,
+        documentChunks: newChunks,
         currentMajorVersion: version.major,
-        currentMinorVersion: version.minor,
+        currentMinorVersion: version.minor || 0,
         finalProduct: null,
         statusMessage: `Rewound to version ${formatVersion(version)}`,
     });
