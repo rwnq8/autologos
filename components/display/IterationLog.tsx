@@ -1,7 +1,8 @@
+
 import React, { useState, useMemo } from 'react';
 import type { IterationLogEntry, Version } from '../../types/index.ts'; 
 import { LogEntryItem } from './LogEntryItem.tsx';
-import { useProcessContext } from '../../contexts/ProcessContext.tsx';
+import { useEngine } from '../../contexts/ApplicationContext.tsx';
 import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter.ts';
 import { formatVersion } from '../../services/versionUtils.ts';
 
@@ -15,7 +16,7 @@ const GROUP_SIZE = 10;
 const IterationLog: React.FC<IterationLogProps> = ({
   onSaveLog,
 }) => {
-  const processCtx = useProcessContext();
+  const { process: processCtx } = useEngine();
   const [expandedLogItemKey, setExpandedLogItemKey] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<{ [key: string]: boolean }>({});
   const [globalCopyStatus, setGlobalCopyStatus] = useState<string>(''); 
@@ -84,7 +85,7 @@ const IterationLog: React.FC<IterationLogProps> = ({
             aria-label="Download full version log"
             disabled={processCtx.iterationHistory.length === 0}
           >
-            Download Full Log (.json)
+            Download Full Project
           </button>
         </div>
       </div>
@@ -97,7 +98,7 @@ const IterationLog: React.FC<IterationLogProps> = ({
               logEntry={log}
               isExpanded={expandedLogItemKey === versionKey}
               onToggleExpand={toggleLogItem}
-              reconstructProductCallback={(version, hist) => processCtx.reconstructProductCallback(version, hist, processCtx.initialPrompt)}
+              reconstructProductCallback={processCtx.reconstructProductCallback}
               iterationHistory={processCtx.iterationHistory} 
               onRewind={processCtx.handleRewind}
               onExportIterationMarkdown={processCtx.handleExportIterationMarkdown}
@@ -107,10 +108,11 @@ const IterationLog: React.FC<IterationLogProps> = ({
         })}
 
         {groupedOlderEntries.map((group, index) => {
+          if (group.length === 0) return null;
           const firstInGroup = group[0];
           const lastInGroup = group[group.length - 1];
           const groupKey = `${formatVersion(lastInGroup)}-${formatVersion(firstInGroup)}`;
-          const isGroupExpanded = expandedGroups[groupKey];
+          const isGroupExpanded = !!expandedGroups[groupKey];
           
           return (
             <div key={groupKey} className="bg-slate-100/70 dark:bg-white/5 rounded-md">
@@ -132,7 +134,7 @@ const IterationLog: React.FC<IterationLogProps> = ({
                         logEntry={log}
                         isExpanded={expandedLogItemKey === versionKey}
                         onToggleExpand={toggleLogItem}
-                        reconstructProductCallback={(version, hist) => processCtx.reconstructProductCallback(version, hist, processCtx.initialPrompt)}
+                        reconstructProductCallback={processCtx.reconstructProductCallback}
                         iterationHistory={processCtx.iterationHistory} 
                         onRewind={processCtx.handleRewind}
                         onExportIterationMarkdown={processCtx.handleExportIterationMarkdown}

@@ -4,42 +4,18 @@ import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type It
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents, CONVERGED_PREFIX } from './promptBuilderService.ts';
 import { urlBrowseTool } from './toolDefinitions.ts';
 
-let apiKeyWarningLoggedOnce = false;
+const API_KEY = process.env.API_KEY;
 
-const API_KEY: string | undefined = (() => {
-  try {
-    if (typeof process !== 'undefined' && process.env && typeof process.env.API_KEY === 'string' && process.env.API_KEY.length > 0) {
-      return process.env.API_KEY;
-    }
-    return undefined;
-  } catch (e) {
-    if (!apiKeyWarningLoggedOnce) {
-      console.error("Error accessing process.env.API_KEY. Gemini API calls will be disabled.", e);
-      apiKeyWarningLoggedOnce = true;
-    }
-    return undefined;
-  }
-})();
+let ai: GoogleGenAI | null;
 
-let ai: GoogleGenAI | null = null;
-let apiKeyAvailable = false;
-
-if (API_KEY) {
-    try {
-        ai = new GoogleGenAI({ apiKey: API_KEY });
-        apiKeyAvailable = true;
-    } catch (error) {
-        console.error("Error during GoogleGenAI client initialization. Gemini API calls will be disabled.", error);
-        ai = null;
-        apiKeyAvailable = false;
-    }
+if (!API_KEY) {
+  console.warn("API_KEY was not found or is not configured. GoogleGenAI client not initialized. Gemini API calls will be disabled.");
+  ai = null;
 } else {
-    if (!apiKeyWarningLoggedOnce) {
-        console.warn("API_KEY was not found or is not configured. GoogleGenAI client not initialized. Gemini API calls will be disabled.");
-        apiKeyWarningLoggedOnce = true;
-    }
-    apiKeyAvailable = false;
+  // Per guidelines, initialize directly. The `ai` null check in each function will handle cases where this might fail.
+  ai = new GoogleGenAI({ apiKey: API_KEY });
 }
+
 
 export const DEFAULT_MODEL_NAME: SelectableModelName = 'gemini-2.5-flash-preview-04-17';
 export const CREATIVE_DEFAULTS: ModelConfig = { temperature: 0.75, topP: 0.95, topK: 60 };
@@ -50,7 +26,7 @@ export const getAiModelDetails = (currentModelName: string): StaticAiModelDetail
   const model = SELECTABLE_MODELS.find(m => m.name === currentModelName);
   return { modelName: model ? model.displayName : currentModelName, tools: model ? model.description : "Details unavailable" };
 };
-export const isApiKeyAvailable = (): boolean => apiKeyAvailable;
+export const isApiKeyAvailable = (): boolean => !!ai;
 
 export const suggestModelParameters = (textForAnalysis: string): SuggestedParamsResponse => {
     if (textForAnalysis.length < 100) {

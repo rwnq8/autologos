@@ -1,12 +1,7 @@
 
-
-
-
-
-
-import React, { useState, useContext } from 'react'; 
+import React from 'react'; 
 import type { LoadedFile, CommonControlProps } from '../../types/index.ts';
-import { useProcessContext } from '../../contexts/ProcessContext.tsx';
+import { useEngine } from '../../contexts/ApplicationContext.tsx';
 
 interface InputDataControlsProps extends CommonControlProps {
   onImportClick: () => void;
@@ -17,7 +12,7 @@ const InputDataControls: React.FC<InputDataControlsProps> = ({
   commonButtonClasses,
   onImportClick,
 }) => {
-  const processCtx = useProcessContext();
+  const { process: processCtx } = useEngine();
 
   const handleRemoveFile = (fileToRemove: LoadedFile) => {
     if (processCtx.isProcessing) return;
@@ -31,8 +26,6 @@ const InputDataControls: React.FC<InputDataControlsProps> = ({
 
   const onInitialPromptTextAreaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     if (processCtx.isProcessing) return;
-    // Only update initialPrompt via this text area if no files are loaded.
-    // If files are loaded, initialPrompt is the manifest.
     if (processCtx.loadedFiles.length === 0) {
       processCtx.handleInitialPromptChange(e.target.value);
     }
@@ -45,7 +38,7 @@ const InputDataControls: React.FC<InputDataControlsProps> = ({
       </label>
       <textarea
         id="initialPromptText"
-        rows={processCtx.loadedFiles.length > 0 ? 2 : 4} // Smaller if files are loaded (shows manifest)
+        rows={processCtx.loadedFiles.length > 0 ? 2 : 4}
         className={commonInputClasses + " resize-y"}
         placeholder={
           processCtx.loadedFiles.length > 0
@@ -54,7 +47,7 @@ const InputDataControls: React.FC<InputDataControlsProps> = ({
         }
         value={processCtx.initialPrompt}
         onChange={onInitialPromptTextAreaChange}
-        disabled={processCtx.isProcessing || processCtx.loadedFiles.length > 0} // Disabled for edits if files loaded
+        disabled={processCtx.isProcessing || processCtx.loadedFiles.length > 0}
         aria-label="Initial prompt or starting text"
       />
       {processCtx.loadedFiles.length > 0 && (

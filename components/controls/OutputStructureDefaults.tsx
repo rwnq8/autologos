@@ -1,23 +1,21 @@
 
-import React, { useState, useContext } from 'react';
+import React, { useState } from 'react';
 import type { CommonControlProps } from '../../types/index.ts';
-import { useProcessContext } from '../../contexts/ProcessContext';
-
-// OutputStructureDefaultsProps removed
+import { useEngine } from '../../contexts/ApplicationContext.tsx';
 
 const OutputStructureDefaults: React.FC<CommonControlProps> = ({
   commonInputClasses,
   commonCheckboxLabelClasses,
   commonCheckboxInputClasses,
 }) => {
-  const processCtx = useProcessContext();
+  const { process: processCtx } = useEngine();
   const [showParagraphFormattingOptions, setShowParagraphFormattingOptions] = useState(false);
 
   return (
     <div className="pt-4 border-t border-slate-300/70 dark:border-white/10">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-md font-semibold text-primary-600 dark:text-primary-300">
-          Output Structure Defaults (for Plan Stages)
+          Output Structure Defaults
         </h3>
         <button
           onClick={() => setShowParagraphFormattingOptions(!showParagraphFormattingOptions)}
@@ -27,14 +25,12 @@ const OutputStructureDefaults: React.FC<CommonControlProps> = ({
           disabled={processCtx.isProcessing}
         >
           {showParagraphFormattingOptions ? "Collapse" : "Expand"}
-          <span className="sr-only">{showParagraphFormattingOptions ? "Collapse Output Structure Defaults" : "Expand Output Structure Defaults"}</span>
         </button>
       </div>
       {showParagraphFormattingOptions && (
         <div id="paragraph-formatting-details" className="mt-1 p-3 bg-slate-100/60 dark:bg-black/20 rounded-md border border-slate-200 dark:border-white/10 space-y-3 animate-fadeIn">
           <p className="text-xs text-slate-600 dark:text-slate-300">
-            These settings define default paragraph formatting. Plan stages using 'paragraph' format can override these.
-            In Basic Autonomous Mode, the AI generally determines structure; these settings act as a hint if applicable.
+            These settings define default paragraph formatting for Plan stages.
           </p>
           <label className={commonCheckboxLabelClasses}>
             <input id="output-show-headings" type="checkbox" checked={processCtx.outputParagraphShowHeadings} onChange={(e) => processCtx.updateProcessState({ outputParagraphShowHeadings: e.target.checked })} disabled={processCtx.isProcessing} className={(commonCheckboxInputClasses ?? '') + " mr-2"} />

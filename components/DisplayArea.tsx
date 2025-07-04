@@ -1,10 +1,9 @@
 
 
-import React, { useContext } from 'react';
+import React from 'react';
 import type { IterationLogEntry, PlanStage } from '../types/index.ts';
 import { generateFileName } from '../services/utils.ts';
-import { useApplicationContext } from '../contexts/ApplicationContext.tsx';
-import { useProcessContext } from '../contexts/ProcessContext.tsx';
+import { useEngine } from '../contexts/ApplicationContext.tsx';
 // PlanContext is not directly used for rendering by DisplayArea itself, 
 // but its state (isPlanActive, planStages) is available via processCtx for YAML.
 
@@ -13,8 +12,7 @@ import ProductOutputDisplay from './display/ProductOutputDisplay.tsx';
 import IterationLog from './display/IterationLog.tsx';
 
 const DisplayArea: React.FC = () => {
-  const appCtx = useApplicationContext();
-  const processCtx = useProcessContext();
+  const { app: appCtx, process: processCtx } = useEngine();
 
    const handleSaveFinalProduct = () => {
     if (!processCtx.finalProduct || !appCtx.staticAiModelDetails || !processCtx.configAtFinalization) return;

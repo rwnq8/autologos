@@ -1,7 +1,8 @@
+
 import React, { useState } from 'react';
 import type { IterationLogEntry, ReconstructedProductResult, Version, IterationEntryType } from '../../types/index.ts';
 import * as GeminaiDiff from 'diff';
-import { useProcessContext } from '../../contexts/ProcessContext.tsx';
+import { useEngine } from '../../contexts/ApplicationContext.tsx';
 import { formatLogEntryDiagnostics } from '../../services/diagnosticsFormatter.ts'; 
 import { formatVersion } from '../../services/versionUtils.ts';
 
@@ -11,7 +12,7 @@ interface LogEntryItemProps {
   onToggleExpand: (versionKey: string) => void;
   onRewind: (version: Version) => void;
   onExportIterationMarkdown: (version: Version) => void;
-  reconstructProductCallback: (targetVersion: Version, history: IterationLogEntry[]) => ReconstructedProductResult; 
+  reconstructProductCallback: (targetVersion: Version, history: IterationLogEntry[], basePrompt: string) => ReconstructedProductResult; 
   iterationHistory: IterationLogEntry[]; 
   isProcessing: boolean;
 }
@@ -26,8 +27,9 @@ const getDiffTitle = (entry: IterationLogEntry): string => {
   if (entry.entryType === 'ensemble_integration') {
     return `Changes to create Integrated Base (${currentVersionString})`;
   }
-  if (entry.entryType === 'ensemble_sub_iteration') {
-    return `Product of Ensemble Sub-Iteration (Sample ${entry.ensembleSampleId})`;
+  if (entry.entryType === 'ensemble_sub_iteration' || entry.entryType === 'bootstrap_sub_iteration') {
+      const runType = entry.entryType === 'ensemble_sub_iteration' ? 'Ensemble' : 'Bootstrap';
+      return `Product of ${runType} Sub-Iteration (Run ${entry.bootstrapRun || entry.ensembleSampleId})`;
   }
   return `Changes for ${currentVersionString}`;
 };
@@ -39,6 +41,9 @@ const getEntryTypeFriendlyName = (entryType?: IterationEntryType): string => {
         case 'manual_edit': return 'Manual Edit';
         case 'ensemble_integration': return 'Ensemble Integration';
         case 'ensemble_sub_iteration': return 'Ensemble Sub-Run';
+        case 'targeted_refinement': return 'Targeted Refinement';
+        case 'bootstrap_sub_iteration': return 'Bootstrap Sub-Run';
+        case 'bootstrap_synthesis_milestone': return 'Bootstrap Milestone';
         default: return 'AI Version';
     }
 }
@@ -80,7 +85,8 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
   iterationHistory, 
   isProcessing,
 }) => {
-  const { initialPrompt: baseInitialPrompt } = useProcessContext(); 
+  const { process } = useEngine();
+  const { initialPrompt: baseInitialPrompt } = process; 
   const [localCopyStatus, setLocalCopyStatus] = useState<string | undefined>(undefined);
 
   const handleCopySingleDiagnostic = async () => {
