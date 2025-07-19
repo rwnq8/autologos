@@ -5,6 +5,7 @@ import type { PlanStage, PlanTemplate } from './plan.ts';
 import type { SettingsSuggestionSource, DiffViewType } from './ui.ts';
 import type { DocumentChunk, OutlineNode } from './document.ts';
 import { AUTOLOGOS_PROJECT_FILE_FORMAT_VERSION, THIS_APP_ID, APP_VERSION } from './constants.ts';
+import type { GeneratedImage } from './api.ts';
 
 
 export interface LoadedFile {
@@ -120,6 +121,11 @@ export interface ProcessState {
   activeChunkId: string | null;
   isDiffViewerOpen: boolean;
   diffViewerContent: { oldText: string, newText: string, version: string } | null;
+
+  imageGenerationPrompt: string;
+  numberOfImagesToGenerate: number;
+  generatedImages: GeneratedImage[];
+  isGeneratingImages: boolean;
 }
 
 
@@ -188,6 +194,10 @@ export interface AutologosIterativeEngineData extends Omit<ModelConfig, 'maxIter
   ensembleSubProducts: string[] | null;
   isDocumentMapOpen?: boolean;
   activeChunkId?: string | null;
+  
+  imageGenerationPrompt?: string;
+  numberOfImagesToGenerate?: number;
+  generatedImages?: GeneratedImage[];
 }
 
 export interface ProjectFileHeader {

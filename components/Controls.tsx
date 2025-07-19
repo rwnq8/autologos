@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import type { CommonControlProps } from '../types/index.ts';
+import ImageGenerationControls from './controls/ImageGenerationControls.tsx';
 
 // Import sub-components
 import InputDataControls from './controls/InputDataControls.tsx';
@@ -13,7 +14,7 @@ interface ControlsProps {
     commonControlProps: CommonControlProps;
     isOpen: boolean;
     onClose: () => void;
-    initialTab: 'run' | 'plan' | 'devlog';
+    initialTab: 'run' | 'plan' | 'devlog' | 'image';
     onImportClick: () => void;
 }
 
@@ -36,7 +37,7 @@ const Controls: React.FC<ControlsProps> = ({
         return null;
     }
 
-    const getTabClass = (tabName: 'run' | 'plan' | 'devlog') => {
+    const getTabClass = (tabName: 'run' | 'plan' | 'devlog' | 'image') => {
         return `px-4 py-2 text-sm font-medium rounded-t-lg focus:outline-none focus:ring-2 focus:ring-primary-500 transition-colors -mb-px border-b-0 ${
             activeTab === tabName
                 ? 'bg-white dark:bg-slate-800 text-primary-600 dark:text-primary-300 border-t border-x border-slate-300 dark:border-white/20'
@@ -55,6 +56,7 @@ const Controls: React.FC<ControlsProps> = ({
                 <div className="flex justify-between items-center pt-2">
                     <div id="controls-panel-title" className="flex border-b border-slate-300 dark:border-white/20">
                         <button onClick={() => setActiveTab('run')} className={getTabClass('run')}>Configure & Run</button>
+                        <button onClick={() => setActiveTab('image')} className={getTabClass('image')}>Image Studio</button>
                         <button onClick={() => setActiveTab('plan')} className={getTabClass('plan')}>Iterative Plan</button>
                         <button onClick={() => setActiveTab('devlog')} className={getTabClass('devlog')}>Dev Log</button>
                     </div>
@@ -76,6 +78,7 @@ const Controls: React.FC<ControlsProps> = ({
                             </div>
                         </div>
                     )}
+                    {activeTab === 'image' && <ImageGenerationControls {...commonControlProps} />}
                     {activeTab === 'plan' && <IterativePlanEditor {...commonControlProps} />}
                     {activeTab === 'devlog' && <DevLogControls {...commonControlProps} />}
                 </div>

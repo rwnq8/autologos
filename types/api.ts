@@ -100,3 +100,8 @@ export interface IsLikelyAiErrorResponseResult {
   reason: string;
   checkDetails: AiResponseValidationInfo['details'];
 }
+
+export interface GeneratedImage {
+  base64: string;
+  prompt: string;
+}

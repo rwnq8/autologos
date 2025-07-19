@@ -10,43 +10,24 @@ import { calculateQualitativeStates } from '../../services/strategistUtils.ts';
 const formatStagnationMessage = (stagnationInfo: StagnationInfo): { text: string, colorClass: string } => {
     const { 
         consecutiveIdenticalProductIterations, 
-        consecutiveWordsmithingIterations, 
-        consecutiveCoherenceDegradation,
-        semanticSimilarity,
-        coherenceScore
+        consecutiveWordsmithingIterations,
     } = stagnationInfo;
 
-    if (consecutiveIdenticalProductIterations > 0) {
-        const plural = consecutiveIdenticalProductIterations > 1 ? 's were' : ' was';
+    if (consecutiveIdenticalProductIterations > 1) {
         return { 
-            text: `Critical Stall: Last ${consecutiveIdenticalProductIterations} version${plural} identical. Forcing radical change or halting.`,
+            text: `Critical Stall: Last ${consecutiveIdenticalProductIterations} versions were identical. Forcing radical change or halting.`,
             colorClass: 'text-red-600 dark:text-red-400 font-bold'
         };
     }
-    if (coherenceScore !== undefined && coherenceScore < 0.4) {
+    
+    if (consecutiveWordsmithingIterations > 1) {
         return {
-            text: `Assessment: Coherence Drop (Score: ${coherenceScore.toFixed(2)}). Applying corrective strategy.`,
-            colorClass: 'text-orange-600 dark:text-orange-400 font-semibold'
-        };
-    }
-    if (semanticSimilarity !== undefined && semanticSimilarity > 0.95) {
-        return {
-            text: `Assessment: Semantic Stall (Similarity: ${semanticSimilarity.toFixed(2)}). Meaning is unchanged. Applying nudge.`,
-            colorClass: 'text-yellow-600 dark:text-yellow-500 font-semibold'
-        };
-    }
-    if (consecutiveWordsmithingIterations > 0) {
-        const plural = consecutiveWordsmithingIterations > 1 ? 's had' : ' had';
-        return {
-            text: `Assessment: Stagnation. Last ${consecutiveWordsmithingIterations} version${plural} only minor wording changes. Applying nudge.`,
+            text: `Assessment: Stagnation. Last ${consecutiveWordsmithingIterations} versions had only minor wording changes. Applying nudge.`,
             colorClass: 'text-yellow-600 dark:text-yellow-500'
         };
     }
     
-    return {
-        text: 'Assessment: Healthy. No significant stagnation detected.',
-        colorClass: 'text-green-600 dark:text-green-400'
-    };
+    return { text: '', colorClass: '' };
 };
 
 const ProcessStatusDisplay: React.FC = () => {
@@ -73,7 +54,7 @@ const ProcessStatusDisplay: React.FC = () => {
         clearTimeout(timer);
       };
     }
-  }, [processCtx.isProcessing]);
+  }, [processCtx.isProcessing, processCtx.currentMajorVersion, processCtx.currentMinorVersion]);
 
 
   const convergenceTooltipText = `The AI signals convergence by setting a flag in its structured response:
@@ -176,9 +157,11 @@ const ProcessStatusDisplay: React.FC = () => {
           <p className="text-xs text-sky-600 dark:text-sky-400 italic min-h-[1.25em] break-words" aria-live="polite">
             <strong>Strategy:</strong> {dynamicInsightText}
           </p>
-          <p className={`text-xs min-h-[1.25em] break-words ${stagnationDisplay.colorClass}`} aria-live="polite">
-            {stagnationDisplay.text}
-          </p>
+          {stagnationDisplay.text && (
+            <p className={`text-xs min-h-[1.25em] break-words ${stagnationDisplay.colorClass}`} aria-live="polite">
+              {stagnationDisplay.text}
+            </p>
+          )}
           {isTakingTooLong && processCtx.isProcessing && (
              <p className="text-xs text-orange-500 dark:text-orange-400 animate-pulse font-semibold" aria-live="polite">
                 This iteration is taking longer than usual. The AI might be processing a very complex task...

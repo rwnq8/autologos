@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { useEngine } from '../../contexts/ApplicationContext.tsx';
 import { formatVersion } from '../../services/versionUtils.ts';
@@ -33,6 +34,15 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
   const scrollableContainerRef = useRef<HTMLDivElement>(null);
   const [isCurrentProductDetailsExpanded, setIsCurrentProductDetailsExpanded] = useState(true);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied'>('idle');
+
+  const hasDocumentMapContent = useMemo(() => {
+    if (processCtx.isOutlineMode) {
+        const outline = processCtx.currentOutline || processCtx.finalOutline;
+        return (outline?.length ?? 0) > 0;
+    }
+    const headingChunks = processCtx.documentChunks?.filter(chunk => chunk.type.startsWith('heading_')) || [];
+    return headingChunks.length > 0;
+  }, [processCtx.isOutlineMode, processCtx.currentOutline, processCtx.finalOutline, processCtx.documentChunks]);
 
   const {
     displayMode,
@@ -163,14 +173,16 @@ const ProductOutputDisplay: React.FC<ProductOutputDisplayProps> = ({
     <div className="bg-white/50 dark:bg-black/20 p-6 rounded-lg border border-slate-300/70 dark:border-white/10">
       <div className="flex flex-wrap justify-between items-center mb-2">
         <div className="flex items-center">
-            <button
-                onClick={() => processCtx.updateProcessState({ isDocumentMapOpen: !processCtx.isDocumentMapOpen })}
-                className="mr-3 p-1.5 rounded-full text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                title={processCtx.isDocumentMapOpen ? "Collapse Document Map" : "Expand Document Map"}
-                aria-label={processCtx.isDocumentMapOpen ? "Collapse Document Map" : "Expand Document Map"}
-            >
-                {processCtx.isDocumentMapOpen ? <LayoutSidebarLeftCollapseIcon /> : <LayoutSidebarLeftExpandIcon />}
-            </button>
+            {hasDocumentMapContent && (
+              <button
+                  onClick={() => processCtx.updateProcessState({ isDocumentMapOpen: !processCtx.isDocumentMapOpen })}
+                  className="mr-3 p-1.5 rounded-full text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                  title={processCtx.isDocumentMapOpen ? "Collapse Document Map" : "Expand Document Map"}
+                  aria-label={processCtx.isDocumentMapOpen ? "Collapse Document Map" : "Expand Document Map"}
+              >
+                  {processCtx.isDocumentMapOpen ? <LayoutSidebarLeftCollapseIcon /> : <LayoutSidebarLeftExpandIcon />}
+              </button>
+            )}
             <h2 className="text-xl font-semibold text-primary-600 dark:text-primary-300">{productSectionTitleValue}</h2>
             <button
                 onClick={() => setIsCurrentProductDetailsExpanded(!isCurrentProductDetailsExpanded)}

@@ -1,10 +1,6 @@
 
-
-
-
-
-import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
-import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version, StructuredIterationResponse, DocumentChunk, OutlineNode, DevLogEntry, ChunkOperation } from "../types/index.ts";
+import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration, type GenerateImagesResponse } from "@google/genai";
+import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version, StructuredIterationResponse, DocumentChunk, OutlineNode, DevLogEntry, ChunkOperation, GeneratedImage } from "../types/index.ts";
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents } from './promptBuilderService.ts';
 import { urlBrowseTool } from './toolDefinitions.ts';
 import { formatVersion } from './versionUtils.ts';
@@ -90,7 +86,6 @@ Output Requirements:
 2. The response MUST contain ONLY the codename, with no other text, explanation, or markdown.
 3. Do not use generic words like 'project', 'file', 'document'. Be creative and thematic based on the content.`;
 
-  // Use the actual file content for analysis, not the manifest string from initialPrompt.
   let contentForAnalysis = "";
   if (loadedFiles.length > 0) {
       contentForAnalysis = loadedFiles
@@ -102,130 +97,163 @@ Output Requirements:
   
   const promptForCodename = `Analyze the following content and generate a codename as per the system instructions.`;
   
-  try {
-    const result = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-preview-04-17', // Fast and cheap for this task
-      contents: promptForCodename + '\n\n' + contentForAnalysis,
-      config: {
-        systemInstruction: systemInstruction,
-        temperature: 0.8, // Be creative
-        topP: 0.95,
-        topK: 50,
-        thinkingConfig: { thinkingBudget: 0 } // Low latency
+  const MAX_RETRIES = 3;
+  const INITIAL_DELAY_MS = 1000;
+  let attempt = 0;
+
+  while(attempt < MAX_RETRIES) {
+    try {
+      const result = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-preview-04-17', // Fast and cheap for this task
+        contents: promptForCodename + '\n\n' + contentForAnalysis,
+        config: {
+          systemInstruction: systemInstruction,
+          temperature: 0.8, // Be creative
+          topP: 0.95,
+          topK: 50,
+          thinkingConfig: { thinkingBudget: 0 } // Low latency
+        }
+      });
+      
+      const codename = result.text.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      if (codename) {
+        return codename;
       }
-    });
-    
-    const codename = result.text.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-    if (codename) {
-      return codename;
+      throw new Error("AI returned an empty codename.");
+    } catch (error: any) {
+      attempt++;
+      const errorStr = String(error.message || error.toString() || '').toUpperCase();
+      const isRetryable = error.toString().includes("500") || errorStr.includes("INTERNAL") || error.toString().includes("429") || errorStr.includes("QUOTA");
+      
+      if (isRetryable && attempt < MAX_RETRIES) {
+        const delay = INITIAL_DELAY_MS * Math.pow(2, attempt - 1);
+        console.warn(`Codename generation failed. Retrying attempt ${attempt + 1}/${MAX_RETRIES} after ${delay}ms...`, error);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        console.error("Error generating project codename after all retries:", error);
+        return `fallback-${Math.random().toString(36).substring(2, 8)}`; // Fallback
+      }
     }
-    // Fallback if AI returns empty string
-    throw new Error("AI returned an empty codename.");
-  } catch (error) {
-    console.error("Error generating project codename:", error);
-    return `fallback-${Math.random().toString(36).substring(2, 8)}`; // Fallback
   }
+  return `fallback-${Math.random().toString(36).substring(2, 8)}`; // Fallback if all retries fail
 };
 
 
 export const generateInitialOutline = async (fileManifest: string, loadedFiles: LoadedFile[], modelConfig: ModelConfig, modelToUse: SelectableModelName, isOutlineMode: boolean, devLogContextString?: string): Promise<OutlineGenerationResult> => {
   if (!ai) return { outline: "", outlineNodes: [], identifiedRedundancies: "", errorMessage: "Gemini API client not initialized." };
   
-  try {
-    const { systemInstruction, coreUserInstructions } = getOutlineGenerationPromptComponents(fileManifest, isOutlineMode, loadedFiles);
-    
-    const requestParts: Part[] = loadedFiles.map(file => ({
-      inlineData: { mimeType: getSanitizedMimeType(file.mimeType || 'text/plain'), data: toBase64(file.content) }
-    }));
-    requestParts.push({ text: coreUserInstructions });
+  const MAX_RETRIES = 3;
+  const INITIAL_DELAY_MS = 2000;
+  let attempt = 0;
 
-    const { ...apiConfig } = modelConfig;
-    
-    const configForRequest: any = {
-        ...apiConfig,
-        systemInstruction,
-    };
-    if (isOutlineMode) {
-        configForRequest.responseMimeType = "application/json";
-    }
-
-    const result: GenerateContentResponse = await ai.models.generateContent({
-        model: modelToUse,
-        contents: [{ role: "user", parts: requestParts }],
-        config: configForRequest
-    });
-    
-    const finishReason = result.candidates?.[0]?.finishReason || "UNKNOWN";
-    if (finishReason && !['STOP', 'MAX_TOKENS'].includes(finishReason)) {
-        const errorMessage = `Initial outline generation failed. Stream finished with an unexpected reason: '${finishReason}'. This may be due to safety filters or other API issues.`;
-        console.error(errorMessage, { safetyRatings: result.candidates?.[0]?.safetyRatings });
-        return { outline: "", outlineNodes: [], identifiedRedundancies: "", errorMessage, apiDetails: [] };
-    }
-
-    const responseText = result.text;
-
-    const apiStreamDetails: ApiStreamCallDetail[] = [{
-        callCount: 1,
-        promptForThisCall: coreUserInstructions, // Simplified prompt log
-        finishReason: finishReason,
-        safetyRatings: result.candidates?.[0]?.safetyRatings || null,
-        textLengthThisCall: responseText.length,
-        isContinuation: false
-    }];
-
-    if (isOutlineMode) {
-        try {
-            let jsonStr = responseText.trim();
-            const firstBrace = jsonStr.indexOf('{');
-            const lastBrace = jsonStr.lastIndexOf('}');
-            
-            if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
-                throw new Error("No valid JSON object found in the response.");
-            }
-            jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
-
-            const parsedResponse = JSON.parse(jsonStr);
-            return {
-                outline: JSON.stringify(parsedResponse.outline, null, 2), // Stringified for text view
-                outlineId: parsedResponse.outlineId || null,
-                outlineNodes: parsedResponse.outline,
-                identifiedRedundancies: "N/A in Outline Mode",
-                apiDetails: apiStreamDetails
-            };
-        } catch (e: any) {
-            const errorMessage = `CRITICAL: AI returned malformed JSON for outline, preventing processing. Error: ${e.message}. Raw output head: ${responseText.substring(0, 300)}`;
-            console.error(errorMessage, {rawOutput: responseText});
-            return { outline: "", outlineNodes: [], identifiedRedundancies: "", errorMessage, apiDetails: [] };
-        }
-    } else {
-        // Text-based outline parsing
-        let outline = "";
-        let identifiedRedundancies = "";
-        const outlineMatch = responseText.match(/Outline:([\s\S]*?)Redundancies:/i);
-        const redundanciesMatch = responseText.match(/Redundancies:([\s\S]*)/i);
-
-        if (outlineMatch && outlineMatch[1]) {
-            outline = outlineMatch[1].trim();
+  while(attempt < MAX_RETRIES) {
+    try {
+      const { systemInstruction, coreUserInstructions } = getOutlineGenerationPromptComponents(fileManifest, isOutlineMode, loadedFiles);
+      
+      const requestParts: Part[] = loadedFiles.map(file => ({
+        inlineData: { mimeType: getSanitizedMimeType(file.mimeType || 'text/plain'), data: toBase64(file.content) }
+      }));
+      requestParts.push({ text: coreUserInstructions });
+  
+      const { ...apiConfig } = modelConfig;
+      
+      const configForRequest: any = {
+          ...apiConfig,
+          systemInstruction,
+      };
+      if (isOutlineMode) {
+          configForRequest.responseMimeType = "application/json";
+      }
+  
+      const result: GenerateContentResponse = await ai.models.generateContent({
+          model: modelToUse,
+          contents: [{ role: "user", parts: requestParts }],
+          config: configForRequest
+      });
+      
+      const finishReason = result.candidates?.[0]?.finishReason || "UNKNOWN";
+      if (finishReason && !['STOP', 'MAX_TOKENS'].includes(finishReason)) {
+          const errorMessage = `Initial outline generation failed. Stream finished with an unexpected reason: '${finishReason}'. This may be due to safety filters or other API issues.`;
+          console.error(errorMessage, { safetyRatings: result.candidates?.[0]?.safetyRatings });
+          return { outline: "", outlineNodes: [], identifiedRedundancies: "", errorMessage, apiDetails: [] };
+      }
+  
+      const responseText = result.text;
+  
+      const apiStreamDetails: ApiStreamCallDetail[] = [{
+          callCount: 1,
+          promptForThisCall: coreUserInstructions, // Simplified prompt log
+          finishReason: finishReason,
+          safetyRatings: result.candidates?.[0]?.safetyRatings || null,
+          textLengthThisCall: responseText.length,
+          isContinuation: false
+      }];
+  
+      if (isOutlineMode) {
+          try {
+              let jsonStr = responseText.trim();
+              const firstBrace = jsonStr.indexOf('{');
+              const lastBrace = jsonStr.lastIndexOf('}');
+              
+              if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+                  throw new Error("No valid JSON object found in the response.");
+              }
+              jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
+  
+              const parsedResponse = JSON.parse(jsonStr);
+              return {
+                  outline: JSON.stringify(parsedResponse.outline, null, 2), // Stringified for text view
+                  outlineId: parsedResponse.outlineId || null,
+                  outlineNodes: parsedResponse.outline,
+                  identifiedRedundancies: "N/A in Outline Mode",
+                  apiDetails: apiStreamDetails
+              };
+          } catch (e: any) {
+              const errorMessage = `CRITICAL: AI returned malformed JSON for outline, preventing processing. Error: ${e.message}. Raw output head: ${responseText.substring(0, 300)}`;
+              console.error(errorMessage, {rawOutput: responseText});
+              return { outline: "", outlineNodes: [], identifiedRedundancies: "", errorMessage, apiDetails: [] };
+          }
+      } else {
+          // Text-based outline parsing
+          let outline = "";
+          let identifiedRedundancies = "";
+          const outlineMatch = responseText.match(/Outline:([\s\S]*?)Redundancies:/i);
+          const redundanciesMatch = responseText.match(/Redundancies:([\s\S]*)/i);
+  
+          if (outlineMatch && outlineMatch[1]) {
+              outline = outlineMatch[1].trim();
+          } else {
+              const redIndex = responseText.toLowerCase().indexOf("redundancies:");
+              if (redIndex !== -1) {
+                  outline = responseText.substring(0, redIndex).replace(/^outline:/i, "").trim();
+              } else {
+                  outline = responseText.trim();
+              }
+          }
+  
+          if (redundanciesMatch && redundanciesMatch[1]) {
+              identifiedRedundancies = redundanciesMatch[1].trim();
+          }
+  
+          return { outline, identifiedRedundancies, apiDetails: apiStreamDetails };
+      }
+    } catch (error: any) {
+        attempt++;
+        const errorStr = String(error.message || error.toString() || '').toUpperCase();
+        const isRetryable = error.toString().includes("500") || errorStr.includes("INTERNAL") || error.toString().includes("429") || errorStr.includes("QUOTA");
+        
+        if (isRetryable && attempt < MAX_RETRIES) {
+          const delay = INITIAL_DELAY_MS * Math.pow(2, attempt - 1);
+          console.warn(`Outline generation failed. Retrying attempt ${attempt + 1}/${MAX_RETRIES} after ${delay}ms...`, error);
+          await new Promise(resolve => setTimeout(resolve, delay));
         } else {
-            const redIndex = responseText.toLowerCase().indexOf("redundancies:");
-            if (redIndex !== -1) {
-                outline = responseText.substring(0, redIndex).replace(/^outline:/i, "").trim();
-            } else {
-                outline = responseText.trim();
-            }
+          console.error('Error during Gemini API call for outline generation after all retries:', error);
+          let errorMessage = `An unknown API error occurred during outline generation. Name: ${error.name || 'N/A'}, Message: ${error.message || 'No message'}.`;
+          return { outline: "", identifiedRedundancies: "", errorMessage, apiDetails: [] };
         }
-
-        if (redundanciesMatch && redundanciesMatch[1]) {
-            identifiedRedundancies = redundanciesMatch[1].trim();
-        }
-
-        return { outline, identifiedRedundancies, apiDetails: apiStreamDetails };
     }
-  } catch (error: any) {
-      console.error('Error during Gemini API call for outline generation:', error);
-      let errorMessage = `An unknown API error occurred during outline generation. Name: ${error.name || 'N/A'}, Message: ${error.message || 'No message'}.`;
-      return { outline: "", identifiedRedundancies: "", errorMessage, apiDetails: [] };
   }
+  return { outline: "", identifiedRedundancies: "", errorMessage: "Outline generation failed after all retries.", apiDetails: [] };
 };
 
 
@@ -376,12 +404,14 @@ export const iterateProduct = async ({
                 } catch (error: any) {
                     const errorStr = String(error.message || error.toString() || '').toUpperCase();
                     const isRateLimitError = error.toString().includes("429") || errorStr.includes("QUOTA") || errorStr.includes("RATE LIMIT") || errorStr.includes("RESOURCE_EXHAUSTED");
+                    const isInternalServerError = error.toString().includes("500") || error.toString().includes("503") || errorStr.includes("INTERNAL");
 
-                    if (isRateLimitError && attempt < MAX_RETRIES - 1) {
+                    if ((isRateLimitError || isInternalServerError) && attempt < MAX_RETRIES - 1) {
                         attempt++;
                         const delay = INITIAL_DELAY_MS * Math.pow(2, attempt - 1);
-                        console.warn(`Rate limit hit on API call ${callCount}. Retrying attempt ${attempt}/${MAX_RETRIES} after ${delay}ms...`, error);
-                        onStreamChunk(`\n[SYSTEM: API rate limit hit. Retrying in ${delay / 1000}s...]\n`);
+                        const reason = isInternalServerError ? "internal API error" : "API rate limit hit";
+                        console.warn(`${reason} on API call ${callCount}. Retrying attempt ${attempt + 1}/${MAX_RETRIES} after ${delay}ms...`, error);
+                        onStreamChunk(`\n[SYSTEM: ${reason}. Retrying in ${delay / 1000}s...]\n`);
                         await new Promise(resolve => setTimeout(resolve, delay));
                         onStreamChunk(`\n[SYSTEM: Retrying API call, attempt ${attempt + 1}...]\n`);
                     } else {
@@ -610,4 +640,47 @@ export const iterateProduct = async ({
 
         return { product: currentProduct, status: 'ERROR', errorMessage, isRateLimitError: isRateLimitErrorFlag };
     }
-}
+};
+
+export const generateImages = async (prompt: string, numberOfImages: number): Promise<GeneratedImage[]> => {
+  if (!ai) {
+    throw new Error("Gemini API client not initialized.");
+  }
+  
+  const MAX_RETRIES = 3;
+  const INITIAL_DELAY_MS = 2000;
+  let attempt = 0;
+
+  while(true) {
+    try {
+      const response: GenerateImagesResponse = await ai.models.generateImages({
+        model: 'imagen-3.0-generate-002',
+        prompt: prompt,
+        config: { numberOfImages: numberOfImages, outputMimeType: 'image/jpeg' },
+      });
+
+      return response.generatedImages.map(img => ({
+        base64: img.image.imageBytes,
+        prompt: prompt,
+      }));
+    } catch (error: any) {
+      attempt++;
+      const errorStr = String(error.message || error.toString() || '').toUpperCase();
+      const isRateLimitError = error.toString().includes("429") || errorStr.includes("QUOTA") || errorStr.includes("RATE LIMIT") || errorStr.includes("RESOURCE_EXHAUSTED");
+      const isInternalServerError = error.toString().includes("500") || error.toString().includes("503") || errorStr.includes("INTERNAL");
+      
+      if ((isRateLimitError || isInternalServerError) && attempt < MAX_RETRIES) {
+        const delay = INITIAL_DELAY_MS * Math.pow(2, attempt - 1);
+        const reason = isRateLimitError ? "API rate limit hit" : "Internal API error";
+        console.warn(`Image generation: ${reason}. Retrying attempt ${attempt + 1}/${MAX_RETRIES} after ${delay}ms...`, error);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        console.error("Error generating images:", error);
+        if (error instanceof Error) {
+            throw new Error(`Image generation failed: ${error.message}`);
+        }
+        throw new Error('An unknown error occurred during image generation.');
+      }
+    }
+  }
+};

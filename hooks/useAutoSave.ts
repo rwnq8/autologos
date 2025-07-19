@@ -111,6 +111,9 @@ export const useAutoSave = (
         ensembleSubProducts: processState.ensembleSubProducts,
         isDocumentMapOpen: processState.isDocumentMapOpen,
         activeChunkId: processState.activeChunkId,
+        imageGenerationPrompt: processState.imageGenerationPrompt,
+        numberOfImagesToGenerate: processState.numberOfImagesToGenerate,
+        generatedImages: processState.generatedImages,
       };
 
       await storageService.saveState(engineData);
@@ -175,7 +178,10 @@ export const useAutoSave = (
             currentMinorVersion: loadedData.currentVersionBeforeHalt?.minor ?? lastVersion.minor,
             ensembleSubProducts: loadedData.ensembleSubProducts || null,
             isDocumentMapOpen: loadedData.isDocumentMapOpen ?? true,
-            activeChunkId: loadedData.activeChunkId ?? null
+            activeChunkId: loadedData.activeChunkId ?? null,
+            imageGenerationPrompt: loadedData.imageGenerationPrompt || "A photorealistic image of a majestic lion in the savanna at sunset, with a dramatic sky.",
+            numberOfImagesToGenerate: loadedData.numberOfImagesToGenerate || 1,
+            generatedImages: loadedData.generatedImages || [],
         };
         
         const fullNewState: ProcessState = {

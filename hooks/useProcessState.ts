@@ -1,7 +1,8 @@
+
 // hooks/useProcessState.ts
 
 import { useState, useCallback } from 'react';
-import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate, ModelStrategy, OutlineNode, DocumentChunk } from '../types/index.ts';
+import type { ProcessState, LoadedFile, IterationLogEntry, ModelConfig, ApiStreamCallDetail, FileProcessingInfo, SelectableModelName, AiResponseValidationInfo, DiffViewType, StagnationInfo, IterationEntryType, DevLogEntry, Version, PlanTemplate, ModelStrategy, OutlineNode, DocumentChunk, GeneratedImage } from '../types/index.ts';
 import * as geminiService from '../services/geminiService.ts';
 import * as storageService from '../services/storageService.ts';
 import { INITIAL_PROJECT_NAME_STATE } from '../services/utils.ts';
@@ -87,7 +88,7 @@ export const createInitialProcessState = (
   ensembleSubProducts: null,
   awaitingStrategyDecision: false,
   projectCodename: null,
-  isDocumentMapOpen: true,
+  isDocumentMapOpen: false,
   activeChunkId: null,
   isDiffViewerOpen: false,
   diffViewerContent: null,
@@ -95,6 +96,10 @@ export const createInitialProcessState = (
   outlineId: null,
   currentOutline: null,
   finalOutline: null,
+  imageGenerationPrompt: "A photorealistic image of a majestic lion in the savanna at sunset, with a dramatic sky.",
+  numberOfImagesToGenerate: 1,
+  generatedImages: [],
+  isGeneratingImages: false,
 });
 
 const calculateInputComplexity = (initialPrompt: string, loadedFiles: LoadedFile[]): 'SIMPLE' | 'MODERATE' | 'COMPLEX' => {
@@ -121,8 +126,11 @@ export const useProcessState = () => {
     )
   );
 
-  const updateProcessState = useCallback((updates: Partial<ProcessState>) => {
-    setState(prev => ({ ...prev, ...updates }));
+  const updateProcessState = useCallback((updates: Partial<ProcessState> | ((prevState: ProcessState) => Partial<ProcessState>)) => {
+    setState(prevState => {
+      const newUpdates = typeof updates === 'function' ? updates(prevState) : updates;
+      return { ...prevState, ...newUpdates };
+    });
   }, []);
 
   const handleLoadedFilesChange = useCallback((newlySelectedFiles: LoadedFile[], action: 'add' | 'remove' | 'clear' = 'add') => {

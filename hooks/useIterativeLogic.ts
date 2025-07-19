@@ -247,7 +247,11 @@ export const useIterativeLogic = (
             documentChunks,
             iterationHistory, 
             currentMajorVersion: 1, 
-            currentMinorVersion: 0 
+            currentMinorVersion: 0,
+            finalProduct: null,
+            configAtFinalization: null,
+            currentProductBeforeHalt: null,
+            currentVersionBeforeHalt: undefined,
         });
     }
 
@@ -267,12 +271,17 @@ export const useIterativeLogic = (
 
         const totalIterationsLimit = maxMajorVersions;
         
+        let exitStatus: 'COMPLETED_MAX_ITERATIONS' | 'CONVERGED' | 'HALTED_BY_USER' | 'CRITICAL_ERROR' = 'COMPLETED_MAX_ITERATIONS';
+        let exitMessage = '';
+
         for (let i = 0; i < totalIterationsLimit; i++) {
             if (haltSignalRef.current) {
+                 const { currentMajorVersion: haltMajor, currentMinorVersion: haltMinor, currentProduct: haltProduct } = latestStateRef.current.processState;
+                exitStatus = 'HALTED_BY_USER';
+                exitMessage = `Process halted by user at v${haltMajor}.${haltMinor}.`;
                 updateProcessState({
-                    statusMessage: `Process halted by user at v${currentVersion.major}.${currentVersion.minor}.`,
-                    currentProductBeforeHalt: currentProduct,
-                    currentVersionBeforeHalt: currentVersion,
+                    currentProductBeforeHalt: haltProduct,
+                    currentVersionBeforeHalt: { major: haltMajor, minor: haltMinor }
                 });
                 break;
             }
@@ -287,7 +296,6 @@ export const useIterativeLogic = (
               currentVersion = { major: 1, minor: 0 };
             } else {
               currentVersion = { major: loopProcessState.currentMajorVersion, minor: loopProcessState.currentMinorVersion + 1 };
-              // Simple version rollover for logging clarity.
               if (currentVersion.minor >= 20) {
                 currentVersion.major += 1;
                 currentVersion.minor = 0;
@@ -302,17 +310,29 @@ export const useIterativeLogic = (
 
             const isBootstrappedBase = !!loopProcessState.ensembleSubProducts && loopProcessState.ensembleSubProducts.length > 0 && isFirstIterationOfProcess;
             
-            // Stagnation analysis
-            const previousProductForStagnation = reconstructProduct(
-                { major: loopProcessState.currentMajorVersion, minor: loopProcessState.currentMinorVersion },
-                loopProcessState.iterationHistory,
-                loopProcessState.initialPrompt
-            ).product;
+            const productOfLastIteration = currentProduct || "";
+            let productOfTwoIterationsAgo = "";
+            const lastCompletedVersion = { major: loopProcessState.currentMajorVersion, minor: loopProcessState.currentMinorVersion };
+            
+            if (lastCompletedVersion.major > 1 || (lastCompletedVersion.major === 1 && lastCompletedVersion.minor > 0)) {
+                const versionBeforeLast = { major: lastCompletedVersion.major, minor: lastCompletedVersion.minor - 1 };
+                if (versionBeforeLast.minor < 0) {
+                    versionBeforeLast.major--;
+                    versionBeforeLast.minor = 19;
+                }
+                if (versionBeforeLast.major >= 1) {
+                    productOfTwoIterationsAgo = reconstructProduct(
+                        versionBeforeLast,
+                        loopProcessState.iterationHistory,
+                        loopProcessState.initialPrompt
+                    ).product;
+                }
+            }
 
-            const similarity = calculateJaccardSimilarity(previousProductForStagnation, currentProduct);
-            const charDelta = (currentProduct?.length || 0) - (previousProductForStagnation?.length || 0);
+            const similarity = calculateJaccardSimilarity(productOfLastIteration, productOfTwoIterationsAgo);
+            const charDelta = (productOfLastIteration.length) - (productOfTwoIterationsAgo.length);
             const isEffectivelyIdentical = similarity > 0.999 && Math.abs(charDelta) < 15;
-            const isWordsmithing = !isEffectivelyIdentical && similarity > 0.95 && Math.abs(charDelta) < (previousProductForStagnation.length * 0.05);
+            const isWordsmithing = !isEffectivelyIdentical && similarity > 0.95 && Math.abs(charDelta) < (productOfLastIteration.length * 0.05);
 
             const newStagnationInfo: StagnationInfo = { ...loopProcessState.stagnationInfo, similarityWithPrevious: similarity };
             if (isEffectivelyIdentical) {
@@ -389,7 +409,8 @@ export const useIterativeLogic = (
 
             if (apiResult.status === 'ERROR' || (!apiResult.product && !apiResult.chunkOperations && !apiResult.outline)) {
                 logIterationData(currentVersion, 'ai_iteration', currentProduct, `Error on v${currentVersion.major}.${currentVersion.minor}: ${apiResult.errorMessage}`, currentProduct, apiResult, strategy.config);
-                updateProcessState({ statusMessage: `Error: ${apiResult.errorMessage || 'Unknown error from API result.'}` });
+                exitMessage = `Error: ${apiResult.errorMessage || 'Unknown error from API result.'}`;
+                exitStatus = 'CRITICAL_ERROR';
                 if (apiResult.isRateLimitError) handleRateLimitErrorEncountered();
                 break;
             }
@@ -406,9 +427,7 @@ export const useIterativeLogic = (
                 newProduct = JSON.stringify(apiResult.outline, null, 2); // For logging/diffing
                 updateProcessState({ currentOutline: apiResult.outline, outlineId: apiResult.outlineId });
             } else {
-                // Text-based response (e.g., from search grounding)
                 let textResponse = apiResult.product;
-                // Sanitize markdown fences from text-based responses
                 const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
                 const match = textResponse.match(fenceRegex);
                 if (match && match[2]) {
@@ -433,10 +452,10 @@ export const useIterativeLogic = (
             if (validationResult.isError) {
                 updateProcessState({ statusMessage: `v${currentVersion.major}.${currentVersion.minor}: Validation failed. ${validationResult.reason}` });
                 if (validationResult.isCriticalFailure) {
-                    updateProcessState({ statusMessage: `Critical Failure: ${validationResult.reason}. Process halted.` });
+                    exitMessage = `Critical Failure: ${validationResult.reason}. Process halted.`;
+                    exitStatus = 'CRITICAL_ERROR';
                     break;
                 }
-                // Handle non-critical retry
                 selfCorrectionAttempt++;
                 if (selfCorrectionAttempt < SELF_CORRECTION_MAX_ATTEMPTS) {
                     retryContext = {
@@ -444,15 +463,15 @@ export const useIterativeLogic = (
                         originalCoreInstructions: getUserPromptComponents(currentVersion, maxMajorVersions, null, false, 0, false, !isPlanActive, isFirstIterationOfProcess, true, isOutlineMode).coreUserInstructions
                     };
                     updateProcessState({ statusMessage: `Validation failed. Attempting self-correction (${selfCorrectionAttempt}/${SELF_CORRECTION_MAX_ATTEMPTS}).` });
-                    i--; // Decrement loop counter to re-run this iteration number
+                    i--; 
                     continue; 
                 } else {
-                    updateProcessState({ statusMessage: `Self-correction failed after ${selfCorrectionAttempt} attempts. Process halted.` });
+                    exitMessage = `Self-correction failed after ${selfCorrectionAttempt} attempts. Process halted.`;
+                    exitStatus = 'CRITICAL_ERROR';
                     break;
                 }
             }
             
-            // Success path
             selfCorrectionAttempt = 0;
             retryContext = undefined;
             currentProduct = newProduct;
@@ -464,33 +483,55 @@ export const useIterativeLogic = (
                 statusMessage: `Completed v${currentVersion.major}.${currentVersion.minor}.`,
             });
             
+            if (isFirstIterationOfProcess) {
+                const hasMapContent = isOutlineMode 
+                    ? (apiResult.outline && apiResult.outline.length > 0)
+                    : newChunks?.some(c => c.type.startsWith('heading_'));
+                
+                if (hasMapContent) {
+                    updateProcessState({ isDocumentMapOpen: true });
+                }
+            }
+
             await performAutoSave();
 
             if (apiResult.status === 'CONVERGED') {
-                updateProcessState({ finalProduct: currentProduct, configAtFinalization: strategy.config });
+                exitStatus = 'CONVERGED';
                 break;
             }
         }
+
+        const { processState: finalLoopState, getUserSetBaseConfig: finalConfigGetter } = latestStateRef.current;
+        const finalConfig = finalConfigGetter();
+        let finalUpdates: Partial<ProcessState> = {
+            configAtFinalization: finalConfig,
+        };
+
+        switch(exitStatus) {
+            case 'COMPLETED_MAX_ITERATIONS':
+                finalUpdates.finalProduct = finalLoopState.currentProduct;
+                finalUpdates.finalOutline = finalLoopState.currentOutline;
+                finalUpdates.statusMessage = `Process completed its run of ${maxMajorVersions} iterations. Final product generated.`;
+                break;
+            case 'CONVERGED':
+                finalUpdates.finalProduct = finalLoopState.currentProduct;
+                finalUpdates.finalOutline = finalLoopState.currentOutline;
+                finalUpdates.statusMessage = `Process converged at v${finalLoopState.currentMajorVersion}.${finalLoopState.currentMinorVersion}. Final product generated.`;
+                break;
+            case 'HALTED_BY_USER':
+                finalUpdates.statusMessage = exitMessage;
+                break;
+            case 'CRITICAL_ERROR':
+                finalUpdates.statusMessage = exitMessage;
+                break;
+        }
+        updateProcessState(finalUpdates);
+
     } finally {
         isProcessingRef.current = false;
-        const { processState: finalLoopState, getUserSetBaseConfig: finalConfigGetter } = latestStateRef.current;
-        // Mark as complete if the loop finished without being halted.
-        if (!haltSignalRef.current) {
-            updateProcessState({
-                isProcessing: false,
-                finalProduct: finalLoopState.currentProduct,
-                statusMessage: `Process completed its run of ${maxMajorVersions} iterations.`,
-                configAtFinalization: finalConfigGetter(),
-                currentProductBeforeHalt: null,
-                currentVersionBeforeHalt: undefined
-            });
-        } else {
-             updateProcessState({
-                isProcessing: false,
-                currentProductBeforeHalt: null,
-                currentVersionBeforeHalt: undefined
-             });
-        }
+        updateProcessState({
+            isProcessing: false,
+        });
         await performAutoSave();
     }
   }, [

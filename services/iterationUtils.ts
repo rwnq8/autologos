@@ -1,3 +1,4 @@
+
 // services/iterationUtils.ts
 
 import type { OutputLength, OutputFormat, AiResponseValidationInfo, ReductionDetailValue, PromptLeakageDetailValue, IterationLogEntry, LoadedFile, OutlineGenerationResult, FileProcessingInfo, IsLikelyAiErrorResponseResult } from '../types/index.ts';
@@ -260,13 +261,13 @@ export function isLikelyAiErrorResponse(
                 }
             }; 
         }
-        // Any other uninstructed extreme reduction is now a critical failure.
-        return { 
-            isError: true, 
-            isCriticalFailure: true, 
-            reason: `CRITICAL: Extreme uninstructed reduction of content occurred (over 75% reduction). This is a critical failure as the AI likely misunderstood the task (e.g., switched to summarization). Halting process.`, 
-            checkDetails: { 
-                type: 'extreme_reduction_error', 
+        // Any other uninstructed extreme reduction is a recoverable error.
+        return {
+            isError: true,
+            isCriticalFailure: false, // Allows recovery instead of halting
+            reason: `Extreme uninstructed reduction of content occurred (over 75% reduction). AI may have misunderstood the task (e.g., summarization). Attempting recovery.`,
+            checkDetails: {
+                type: 'extreme_reduction_error',
                 value: { ...reductionDetailsBase, thresholdUsed: 'extreme' }
             }
         };

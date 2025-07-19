@@ -1,7 +1,7 @@
 
 
 import React, { createContext, useContext, useCallback, useState, useEffect, useMemo, ReactNode } from 'react';
-import type { ProcessState, ModelConfig, SettingsSuggestionSource, StaticAiModelDetails, SelectableModelName, AutologosProjectFile, PlanTemplate, IterationLogEntry, Version, PlanStage, LoadedFile, DocumentChunk } from '../types/index.ts';
+import type { ProcessState, ModelConfig, SettingsSuggestionSource, StaticAiModelDetails, SelectableModelName, AutologosProjectFile, PlanTemplate, IterationLogEntry, Version, PlanStage, LoadedFile, DocumentChunk, GeneratedImage } from '../types/index.ts';
 import { SELECTABLE_MODELS } from '../types/index.ts';
 import type { ModelConfigContextType } from './ModelConfigContext.tsx';
 import { useProcessState, createInitialProcessState } from '../hooks/useProcessState.ts';
@@ -45,6 +45,7 @@ interface EngineContextType {
     saveManualEdits: () => Promise<void>;
     openDiffViewer: (version: Version) => void;
     closeDiffViewer: () => void;
+    handleGenerateImages: () => Promise<void>;
   };
   modelConfig: ModelConfigContextType;
   plan: ReturnType<typeof usePlanTemplates> & {
@@ -137,6 +138,33 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     modelParams, 
     () => modelParams.resetModelParametersToDefaults()
   );
+
+  const handleGenerateImages = useCallback(async () => {
+    const { imageGenerationPrompt, numberOfImagesToGenerate, isGeneratingImages } = processState;
+    if (isGeneratingImages) return;
+    if (!imageGenerationPrompt.trim()) {
+        processActions.updateProcessState({ statusMessage: "Please enter an image generation prompt." });
+        return;
+    }
+
+    processActions.updateProcessState({ isGeneratingImages: true, statusMessage: `Generating ${numberOfImagesToGenerate} image(s)...` });
+
+    try {
+        const newImages = await geminiService.generateImages(imageGenerationPrompt, numberOfImagesToGenerate);
+        processActions.updateProcessState(prev => ({
+            generatedImages: [...newImages, ...(prev.generatedImages || [])],
+            isGeneratingImages: false,
+            statusMessage: `Successfully generated ${newImages.length} image(s).`
+        }));
+        await autoSave.performAutoSave();
+    } catch (error) {
+        console.error("Image generation failed:", error);
+        processActions.updateProcessState({
+            isGeneratingImages: false,
+            statusMessage: `Error generating images: ${(error as Error).message}`
+        });
+    }
+  }, [processState.imageGenerationPrompt, processState.numberOfImagesToGenerate, processState.isGeneratingImages, processActions, autoSave]);
   
   const projectIO = useProjectIO(
     processState, 
@@ -304,6 +332,7 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       saveManualEdits,
       openDiffViewer,
       closeDiffViewer,
+      handleGenerateImages,
     },
     modelConfig: {
       ...modelParams,
@@ -333,6 +362,7 @@ export const EngineProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     saveManualEdits,
     openDiffViewer,
     closeDiffViewer,
+    handleGenerateImages,
     modelParams,
     onMaxIterationsChange,
     planTemplates,

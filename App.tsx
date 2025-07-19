@@ -1,5 +1,5 @@
 
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useMemo } from 'react';
 import { toYamlStringLiteral, generateFileName } from './services/utils.ts';
 import Controls from './components/Controls.tsx';
 import TargetedRefinementModal from './components/modals/TargetedRefinementModal.tsx';
@@ -32,9 +32,19 @@ const AppLayout: React.FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     
     const [isControlsOpen, setIsControlsOpen] = useState(false);
-    const [activeControlTab, setActiveControlTab] = useState<'run' | 'plan' | 'devlog'>('run');
+    const [activeControlTab, setActiveControlTab] = useState<'run' | 'plan' | 'devlog' | 'image'>('run');
 
-    const toggleControlsPanel = (tab: 'run' | 'plan' | 'devlog') => {
+    const hasDocumentMapContent = useMemo(() => {
+        if (engine.process.isOutlineMode) {
+            return (engine.process.currentOutline?.length ?? 0) > 0;
+        }
+        const headingChunks = engine.process.documentChunks?.filter(chunk => chunk.type.startsWith('heading_')) || [];
+        return headingChunks.length > 0;
+    }, [engine.process.isOutlineMode, engine.process.currentOutline, engine.process.documentChunks]);
+
+    const showDocumentMap = hasDocumentMapContent && engine.process.isDocumentMapOpen;
+
+    const toggleControlsPanel = (tab: 'run' | 'plan' | 'devlog' | 'image') => {
         setActiveControlTab(tab);
         setIsControlsOpen(true);
     };
@@ -235,7 +245,7 @@ project_codename: ${toYamlStringLiteral(projectCodename || "none")}
                 <div 
                     aria-hidden="true"
                     className={`fixed inset-0 z-30 bg-black/60 transition-opacity md:hidden ${
-                        engine.process.isDocumentMapOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                        showDocumentMap ? 'opacity-100' : 'opacity-0 pointer-events-none'
                     }`}
                     onClick={() => engine.process.updateProcessState({ isDocumentMapOpen: false })}
                 />
@@ -250,7 +260,7 @@ project_codename: ${toYamlStringLiteral(projectCodename || "none")}
                         md:relative md:h-auto md:flex-shrink-0 md:shadow-none md:bg-transparent md:dark:bg-transparent md:border-l-0
                         overflow-hidden
                         w-64
-                        ${engine.process.isDocumentMapOpen 
+                        ${showDocumentMap
                             ? 'translate-x-0 md:w-64' 
                             : 'translate-x-full md:w-0'
                         }
@@ -260,7 +270,7 @@ project_codename: ${toYamlStringLiteral(projectCodename || "none")}
                         w-full h-full p-4 overflow-y-auto
                         md:bg-slate-100 md:dark:bg-slate-800/50 md:border-l md:border-slate-300 md:dark:border-slate-700
                         transition-opacity duration-300
-                        ${engine.process.isDocumentMapOpen ? 'opacity-100' : 'opacity-0'}
+                        ${showDocumentMap ? 'opacity-100' : 'opacity-0'}
                     `}>
                         <ErrorBoundary>
                             <DocumentMap />

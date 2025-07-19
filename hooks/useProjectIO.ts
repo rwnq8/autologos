@@ -111,6 +111,9 @@ export const useProjectIO = (
       ensembleSubProducts: currentState.ensembleSubProducts,
       isDocumentMapOpen: currentState.isDocumentMapOpen,
       activeChunkId: currentState.activeChunkId,
+      imageGenerationPrompt: currentState.imageGenerationPrompt,
+      numberOfImagesToGenerate: currentState.numberOfImagesToGenerate,
+      generatedImages: currentState.generatedImages,
     };
 
     const projectFile: AutologosProjectFile = {
@@ -202,6 +205,9 @@ export const useProjectIO = (
       ensembleSubProducts: engineData.ensembleSubProducts || null,
       isDocumentMapOpen: engineData.isDocumentMapOpen ?? true,
       activeChunkId: engineData.activeChunkId ?? null,
+      imageGenerationPrompt: engineData.imageGenerationPrompt || "A photorealistic image of a majestic lion in the savanna at sunset, with a dramatic sky.",
+      numberOfImagesToGenerate: engineData.numberOfImagesToGenerate || 1,
+      generatedImages: engineData.generatedImages || [],
     };
 
     const fullNewState: ProcessState = {

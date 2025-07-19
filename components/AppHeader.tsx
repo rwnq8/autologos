@@ -6,7 +6,7 @@ interface AppHeaderProps {
     fileInputRef: React.RefObject<HTMLInputElement>;
     onImportClick: () => void;
     onFilesSelected: (files: FileList | null) => Promise<void>;
-    onToggleControls: (tab: 'run' | 'plan' | 'devlog') => void;
+    onToggleControls: (tab: 'run' | 'plan' | 'devlog' | 'image') => void;
 }
 
 const AppHeader: React.FC<AppHeaderProps> = ({
@@ -41,14 +41,15 @@ const AppHeader: React.FC<AppHeaderProps> = ({
         <header className="bg-slate-800 dark:bg-black/50 text-white p-3 shadow-md flex justify-between items-center sticky top-0 z-20 gap-4 flex-wrap">
             <div className="flex items-center gap-4">
                 <h1 className="text-xl font-semibold text-primary-300 whitespace-nowrap">Autologos Engine</h1>
-                <nav className="flex items-center gap-2 sm:gap-4 border-l border-slate-600 pl-4">
+                <nav className="flex items-center gap-1 sm:gap-2 border-l border-slate-600 pl-2 sm:pl-4">
                     <button onClick={() => onToggleControls('run')} className={headerButtonClasses}>Configure</button>
+                    <button onClick={() => onToggleControls('image')} className={headerButtonClasses}>Image Studio</button>
                     <button onClick={() => onToggleControls('plan')} className={headerButtonClasses}>Plan</button>
                     <button onClick={() => onToggleControls('devlog')} className={headerButtonClasses}>Dev Log</button>
                 </nav>
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-3 flex-grow justify-center">
+            <div className="flex items-center gap-2 sm:gap-3 flex-grow justify-end">
                 <input
                     type="file"
                     ref={fileInputRef}
@@ -74,9 +75,6 @@ const AppHeader: React.FC<AppHeaderProps> = ({
                 <button onClick={process.handleReset} disabled={process.isProcessing} className={neutralButtonClasses}>
                     Reset
                 </button>
-            </div>
-
-            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                 {getAutoSaveStatusDisplay()}
             </div>
         </header>
