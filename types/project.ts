@@ -1,6 +1,6 @@
 // types/project.ts
 import type { IterationLogEntry, DevLogEntry, Version } from './log.ts';
-import type { ModelConfig, SelectableModelName } from './models.ts';
+import type { ModelConfig, SelectableModelName, ModelStrategy } from './models.ts';
 import type { PlanStage, PlanTemplate } from './plan.ts';
 import type { SettingsSuggestionSource, DiffViewType } from './ui.ts';
 import type { DocumentChunk, OutlineNode } from './document.ts';
@@ -14,7 +14,7 @@ export interface LoadedFile {
   size: number;
 }
 
-export type NudgeStrategy = 'none' | 'params_light' | 'params_heavy' | 'meta_instruct' | 'radical_kickstart';
+export type NudgeStrategy = 'none' | 'params_light' | 'params_heavy' | 'meta_instruct' | 'radical_kickstart' | 'coherence_builder';
 
 export interface StagnationInfo {
     isStagnant: boolean;
@@ -23,10 +23,12 @@ export interface StagnationInfo {
     lastMeaningfulChangeProductLength: number | undefined;
     lastProductLengthForStagnation: number | undefined;
     similarityWithPrevious: number | undefined;
-    nudgeStrategyApplied: NudgeStrategy;
+    nudgeStrategyApplied: NudgeStrategy | ModelStrategy['id'];
     consecutiveLowValueIterations: number;
     consecutiveWordsmithingIterations: number;
     consecutiveCoherenceDegradation: number;
+    semanticSimilarity?: number;
+    coherenceScore?: number;
 }
 
 export interface StrategistLLMContext {

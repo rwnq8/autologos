@@ -249,9 +249,6 @@ export const useIterativeLogic = (
             currentMajorVersion: 1, 
             currentMinorVersion: 0 
         });
-    } else {
-        currentVersion = { major: currentMajorVersion, minor: currentMinorVersion + 1 };
-        updateProcessState({ currentMinorVersion: currentMinorVersion + 1 });
     }
 
     try {
@@ -268,7 +265,9 @@ export const useIterativeLogic = (
         let retryContext: RetryContext | undefined = undefined;
         let isRadicalRefinementKickstart = false;
 
-        while (currentVersion.major <= maxMajorVersions) {
+        const totalIterationsLimit = maxMajorVersions;
+        
+        for (let i = 0; i < totalIterationsLimit; i++) {
             if (haltSignalRef.current) {
                 updateProcessState({
                     statusMessage: `Process halted by user at v${currentVersion.major}.${currentVersion.minor}.`,
@@ -284,14 +283,53 @@ export const useIterativeLogic = (
             } = latestStateRef.current;
             const userSetConfig = loopGetUserSetConfig();
 
+            if (isInitialRun && i === 0) {
+              currentVersion = { major: 1, minor: 0 };
+            } else {
+              currentVersion = { major: loopProcessState.currentMajorVersion, minor: loopProcessState.currentMinorVersion + 1 };
+              // Simple version rollover for logging clarity.
+              if (currentVersion.minor >= 20) {
+                currentVersion.major += 1;
+                currentVersion.minor = 0;
+              }
+            }
+            updateProcessState({ currentMajorVersion: currentVersion.major, currentMinorVersion: currentVersion.minor });
+
+
             const isFirstIterationOfProcess = currentVersion.major === 1 && currentVersion.minor === 0;
 
             const relevantDevLogContext = await getRelevantDevLogContext(devLog || [], options.userRawPromptForContextualizer || initialPrompt);
 
             const isBootstrappedBase = !!loopProcessState.ensembleSubProducts && loopProcessState.ensembleSubProducts.length > 0 && isFirstIterationOfProcess;
+            
+            // Stagnation analysis
+            const previousProductForStagnation = reconstructProduct(
+                { major: loopProcessState.currentMajorVersion, minor: loopProcessState.currentMinorVersion },
+                loopProcessState.iterationHistory,
+                loopProcessState.initialPrompt
+            ).product;
+
+            const similarity = calculateJaccardSimilarity(previousProductForStagnation, currentProduct);
+            const charDelta = (currentProduct?.length || 0) - (previousProductForStagnation?.length || 0);
+            const isEffectivelyIdentical = similarity > 0.999 && Math.abs(charDelta) < 15;
+            const isWordsmithing = !isEffectivelyIdentical && similarity > 0.95 && Math.abs(charDelta) < (previousProductForStagnation.length * 0.05);
+
+            const newStagnationInfo: StagnationInfo = { ...loopProcessState.stagnationInfo, similarityWithPrevious: similarity };
+            if (isEffectivelyIdentical) {
+                newStagnationInfo.consecutiveIdenticalProductIterations += 1;
+                newStagnationInfo.consecutiveWordsmithingIterations = 0;
+            } else if (isWordsmithing) {
+                newStagnationInfo.consecutiveWordsmithingIterations += 1;
+                newStagnationInfo.consecutiveIdenticalProductIterations = 0;
+            } else {
+                newStagnationInfo.consecutiveIdenticalProductIterations = 0;
+                newStagnationInfo.consecutiveWordsmithingIterations = 0;
+            }
+            updateProcessState({ stagnationInfo: newStagnationInfo });
+
             const qualitativeStates = calculateQualitativeStates(
                 loopProcessState.currentProduct,
-                loopProcessState.stagnationInfo,
+                newStagnationInfo,
                 loopProcessState.inputComplexity,
                 loopProcessState.stagnationNudgeAggressiveness,
                 isBootstrappedBase
@@ -299,8 +337,11 @@ export const useIterativeLogic = (
 
             const strategy = await ModelStrategyService.reevaluateStrategy({ 
                 ...loopProcessState, 
+                stagnationInfo: newStagnationInfo,
                 ...qualitativeStates 
             }, userSetConfig);
+            
+            isRadicalRefinementKickstart = strategy.activeMetaInstruction?.includes("CRITICAL: Process is stuck") ?? false;
             
             updateProcessState({
                 statusMessage: `v${currentVersion.major}.${currentVersion.minor}: Running... (Attempt ${attempt + 1})`,
@@ -346,9 +387,9 @@ export const useIterativeLogic = (
             currentStreamBufferRef.current = "";
             updateProcessState({ streamBuffer: null });
 
-            if (apiResult.status === 'ERROR' || !apiResult.product && !apiResult.chunkOperations && !apiResult.outline) {
+            if (apiResult.status === 'ERROR' || (!apiResult.product && !apiResult.chunkOperations && !apiResult.outline)) {
                 logIterationData(currentVersion, 'ai_iteration', currentProduct, `Error on v${currentVersion.major}.${currentVersion.minor}: ${apiResult.errorMessage}`, currentProduct, apiResult, strategy.config);
-                updateProcessState({ statusMessage: `Error: ${apiResult.errorMessage}` });
+                updateProcessState({ statusMessage: `Error: ${apiResult.errorMessage || 'Unknown error from API result.'}` });
                 if (apiResult.isRateLimitError) handleRateLimitErrorEncountered();
                 break;
             }
@@ -387,7 +428,7 @@ export const useIterativeLogic = (
                 details: validationResult.checkDetails,
             };
             
-            logIterationData(currentVersion, 'ai_iteration', newProduct, apiResult.status, previousProduct, apiResult, strategy.config, undefined, aiValidationInfo);
+            logIterationData(currentVersion, 'ai_iteration', newProduct, apiResult.status, previousProduct, apiResult, strategy.config, undefined, aiValidationInfo, undefined, undefined, attempt, strategy.rationale, strategy.modelName, strategy.activeMetaInstruction, validationResult.isCriticalFailure, undefined, undefined, similarity, undefined, isEffectivelyIdentical, isWordsmithing);
 
             if (validationResult.isError) {
                 updateProcessState({ statusMessage: `v${currentVersion.major}.${currentVersion.minor}: Validation failed. ${validationResult.reason}` });
@@ -403,7 +444,8 @@ export const useIterativeLogic = (
                         originalCoreInstructions: getUserPromptComponents(currentVersion, maxMajorVersions, null, false, 0, false, !isPlanActive, isFirstIterationOfProcess, true, isOutlineMode).coreUserInstructions
                     };
                     updateProcessState({ statusMessage: `Validation failed. Attempting self-correction (${selfCorrectionAttempt}/${SELF_CORRECTION_MAX_ATTEMPTS}).` });
-                    continue; // Skip version increment and loop again
+                    i--; // Decrement loop counter to re-run this iteration number
+                    continue; 
                 } else {
                     updateProcessState({ statusMessage: `Self-correction failed after ${selfCorrectionAttempt} attempts. Process halted.` });
                     break;
@@ -419,8 +461,6 @@ export const useIterativeLogic = (
             updateProcessState({
                 currentProduct,
                 documentChunks,
-                currentMajorVersion: currentVersion.major,
-                currentMinorVersion: currentVersion.minor,
                 statusMessage: `Completed v${currentVersion.major}.${currentVersion.minor}.`,
             });
             
@@ -430,31 +470,31 @@ export const useIterativeLogic = (
                 updateProcessState({ finalProduct: currentProduct, configAtFinalization: strategy.config });
                 break;
             }
-
-            currentVersion.minor++;
-            if (currentVersion.minor >= maxMajorVersions) { // Simplified logic for now
-                 currentVersion.major++;
-                 currentVersion.minor = 0;
-            }
         }
     } finally {
         isProcessingRef.current = false;
-        updateProcessState({
-            isProcessing: false,
-            currentProductBeforeHalt: null,
-            currentVersionBeforeHalt: undefined
-        });
+        const { processState: finalLoopState, getUserSetBaseConfig: finalConfigGetter } = latestStateRef.current;
+        // Mark as complete if the loop finished without being halted.
+        if (!haltSignalRef.current) {
+            updateProcessState({
+                isProcessing: false,
+                finalProduct: finalLoopState.currentProduct,
+                statusMessage: `Process completed its run of ${maxMajorVersions} iterations.`,
+                configAtFinalization: finalConfigGetter(),
+                currentProductBeforeHalt: null,
+                currentVersionBeforeHalt: undefined
+            });
+        } else {
+             updateProcessState({
+                isProcessing: false,
+                currentProductBeforeHalt: null,
+                currentVersionBeforeHalt: undefined
+             });
+        }
         await performAutoSave();
     }
   }, [
-      processState.initialPrompt, processState.currentProduct, processState.documentChunks, processState.currentOutline,
-      processState.currentMajorVersion, processState.currentMinorVersion, processState.maxMajorVersions,
-      processState.iterationHistory, processState.loadedFiles, processState.isPlanActive, processState.planStages,
-      processState.currentPlanStageIndex, processState.currentStageIteration, processState.selectedModelName,
-      processState.isSearchGroundingEnabled, processState.isUrlBrowsingEnabled, processState.stagnationNudgeEnabled,
-      processState.stagnationNudgeAggressiveness, processState.strategistInfluenceLevel, processState.devLog,
-      processState.isOutlineMode,
-      updateProcessState, logIterationData, performAutoSave, addDevLogEntry, handleRateLimitErrorEncountered
+      processState, updateProcessState, addLogEntryFromHook, addDevLogEntry, getUserSetBaseConfig, performAutoSave, handleRateLimitErrorEncountered, logIterationData
   ]);
 
   return {

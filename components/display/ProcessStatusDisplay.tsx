@@ -10,43 +10,35 @@ import { calculateQualitativeStates } from '../../services/strategistUtils.ts';
 const formatStagnationMessage = (stagnationInfo: StagnationInfo): { text: string, colorClass: string } => {
     const { 
         consecutiveIdenticalProductIterations, 
-        consecutiveLowValueIterations, 
         consecutiveWordsmithingIterations, 
         consecutiveCoherenceDegradation,
-        isStagnant
+        semanticSimilarity,
+        coherenceScore
     } = stagnationInfo;
 
     if (consecutiveIdenticalProductIterations > 0) {
         const plural = consecutiveIdenticalProductIterations > 1 ? 's were' : ' was';
         return { 
-            text: `Assessment: Stalled. Last ${consecutiveIdenticalProductIterations} version${plural} identical. Forcing creative change.`,
-            colorClass: 'text-red-600 dark:text-red-400'
+            text: `Critical Stall: Last ${consecutiveIdenticalProductIterations} version${plural} identical. Forcing radical change or halting.`,
+            colorClass: 'text-red-600 dark:text-red-400 font-bold'
+        };
+    }
+    if (coherenceScore !== undefined && coherenceScore < 0.4) {
+        return {
+            text: `Assessment: Coherence Drop (Score: ${coherenceScore.toFixed(2)}). Applying corrective strategy.`,
+            colorClass: 'text-orange-600 dark:text-orange-400 font-semibold'
+        };
+    }
+    if (semanticSimilarity !== undefined && semanticSimilarity > 0.95) {
+        return {
+            text: `Assessment: Semantic Stall (Similarity: ${semanticSimilarity.toFixed(2)}). Meaning is unchanged. Applying nudge.`,
+            colorClass: 'text-yellow-600 dark:text-yellow-500 font-semibold'
         };
     }
     if (consecutiveWordsmithingIterations > 0) {
         const plural = consecutiveWordsmithingIterations > 1 ? 's had' : ' had';
         return {
             text: `Assessment: Stagnation. Last ${consecutiveWordsmithingIterations} version${plural} only minor wording changes. Applying nudge.`,
-            colorClass: 'text-orange-600 dark:text-orange-400'
-        };
-    }
-    if (consecutiveCoherenceDegradation > 0) {
-        const plural = consecutiveCoherenceDegradation > 1 ? 's showed' : ' showed';
-        return {
-            text: `Assessment: Quality Drop. Last ${consecutiveCoherenceDegradation} version${plural} reduced coherence. Applying corrective strategy.`,
-            colorClass: 'text-yellow-600 dark:text-yellow-500'
-        };
-    }
-    if (consecutiveLowValueIterations > 0) {
-        const plural = consecutiveLowValueIterations > 1 ? 's were' : ' was';
-        return {
-            text: `Assessment: Low Value. Last ${consecutiveLowValueIterations} version${plural} too similar. Increasing creativity.`,
-            colorClass: 'text-amber-600 dark:text-amber-400'
-        };
-    }
-    if (isStagnant) {
-        return {
-            text: `Assessment: Mild Stagnation. Last version was very similar. Applying gentle nudge.`,
             colorClass: 'text-yellow-600 dark:text-yellow-500'
         };
     }
@@ -184,7 +176,7 @@ const ProcessStatusDisplay: React.FC = () => {
           <p className="text-xs text-sky-600 dark:text-sky-400 italic min-h-[1.25em] break-words" aria-live="polite">
             <strong>Strategy:</strong> {dynamicInsightText}
           </p>
-          <p className={`text-xs min-h-[1.25em] break-words font-medium ${stagnationDisplay.colorClass}`} aria-live="polite">
+          <p className={`text-xs min-h-[1.25em] break-words ${stagnationDisplay.colorClass}`} aria-live="polite">
             {stagnationDisplay.text}
           </p>
           {isTakingTooLong && processCtx.isProcessing && (

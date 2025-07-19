@@ -1,4 +1,5 @@
 
+
 import React, { useState } from 'react';
 import ReactDiffViewer from 'react-diff-viewer';
 import type { IterationLogEntry, ReconstructedProductResult, Version, IterationEntryType } from '../../types/index.ts';
@@ -146,6 +147,8 @@ export const LogEntryItem: React.FC<LogEntryItemProps> = ({
                     {logEntry.linesAdded !== undefined && <span className="text-green-600 dark:text-green-400">+{logEntry.linesAdded} lines</span>}
                     {logEntry.linesRemoved !== undefined && <span className="text-red-600 dark:text-red-400">-{logEntry.linesRemoved} lines</span>}
                     <span>Readability: <span className={readability.color}>{readability.text} ({logEntry.readabilityScoreFlesch?.toFixed(1) || 'N/A'})</span></span>
+                    {logEntry.semanticSimilarity !== undefined && <span>Semantic Sim: <span className="font-medium text-purple-600 dark:text-purple-400">{logEntry.semanticSimilarity.toFixed(3)}</span></span>}
+                    {logEntry.coherenceScore !== undefined && <span>Coherence Score: <span className="font-medium text-sky-600 dark:text-sky-400">{logEntry.coherenceScore.toFixed(3)}</span></span>}
                 </div>
             </div>
             <div className="flex-shrink-0 text-slate-500 dark:text-slate-400">

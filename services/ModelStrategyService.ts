@@ -28,30 +28,27 @@ export const determineInitialStrategy = (
     processState: Pick<ProcessState, 'inputComplexity' | 'initialPrompt' | 'loadedFiles' | 'selectedModelName' | 'strategistInfluenceLevel' | 'stagnationNudgeAggressiveness'>,
     baseUserConfig: ModelConfig
 ): ModelStrategy => {
-    let modelName: SelectableModelName = processState.selectedModelName || DEFAULT_MODEL_NAME;
+    let modelName: SelectableModelName = 'gemini-2.5-flash-preview-04-17';
     let config = { ...baseUserConfig };
     const rationales: string[] = [];
     let thinkingBudget: number | undefined = undefined;
 
     switch (processState.inputComplexity) {
         case 'SIMPLE':
-            modelName = 'gemini-2.5-pro';
-            rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Pro for simple input, aiming for high-quality initial output. User preferences applied.");
+            thinkingBudget = 1; // Use thinking for higher quality on simple tasks
+            rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Flash (thinking enabled) for simple input, aiming for high-quality initial output. User preferences applied.");
             break;
         case 'MODERATE':
-            modelName = 'gemini-2.5-flash-preview-04-17';
             thinkingBudget = 1;
             rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Flash (thinking enabled) for moderate input, balancing capability and efficiency. User preferences applied.");
             break;
         case 'COMPLEX':
-            modelName = 'gemini-2.5-lite-preview-04-17';
-            thinkingBudget = 0;
-            rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Lite for very large/complex input, optimizing for efficiency and speed. User preferences applied.");
+            thinkingBudget = 0; // Disable thinking for speed on complex tasks
+            rationales.push("Heuristic: Initial Strategy - Using Gemini 2.5 Flash (no thinking) for very large/complex input, optimizing for efficiency and speed. User preferences applied.");
             break;
         default:
-            modelName = processState.selectedModelName || DEFAULT_MODEL_NAME;
-            rationales.push("Heuristic: Initial Strategy - Defaulting to user-selected model or application default. User preferences applied.");
-            if (modelName === 'gemini-2.5-flash-preview-04-17') thinkingBudget = 1;
+            rationales.push("Heuristic: Initial Strategy - Defaulting to Gemini 2.5 Flash. User preferences applied.");
+            thinkingBudget = 1;
             break;
     }
 
@@ -82,8 +79,7 @@ export const reevaluateStrategy = async (
     const { 
         currentMajorVersion, maxMajorVersions, isPlanActive, stagnationInfo,
         stagnationNudgeEnabled, stagnationNudgeAggressiveness,
-        currentModelForIteration, selectedModelName,
-        isRadicalRefinementKickstartAttempt
+        currentModelForIteration, selectedModelName
     } = processState;
 
     const rationales: string[] = [];
@@ -91,23 +87,29 @@ export const reevaluateStrategy = async (
     let nextModelName: SelectableModelName = currentModelForIteration || selectedModelName || DEFAULT_MODEL_NAME;
     let activeMetaInstruction: string | undefined = undefined;
     const COHERENCE_DEGRADATION_THRESHOLD = 2;
+    const WORDSMITHING_KICKSTART_THRESHOLD = 3;
+
+    const isRadicalRefinementKickstart = stagnationInfo.consecutiveWordsmithingIterations >= WORDSMITHING_KICKSTART_THRESHOLD;
+
 
     if (isPlanActive) {
         nextConfig = { ...baseUserConfig };
         rationales.push("Plan Mode: Using fixed parameters set by user for all plan stages.");
     } else if (stagnationNudgeEnabled && stagnationInfo.consecutiveCoherenceDegradation >= COHERENCE_DEGRADATION_THRESHOLD) {
         rationales.push(`Strategy: Coherence Degradation Detected after ${stagnationInfo.consecutiveCoherenceDegradation} iterations.`);
-        nextModelName = 'gemini-2.5-pro';
+        nextModelName = 'gemini-2.5-flash-preview-04-17';
         nextConfig = { ...GENERAL_BALANCED_DEFAULTS };
+        nextConfig.thinkingConfig = { thinkingBudget: 1 };
         activeMetaInstruction = `CRITICAL: The product's quality and coherence are degrading. Previous versions were more information-rich or varied. Your task is to perform a 'Coherence Building' pass. Review the document's logical structure, strengthen its arguments, and ensure claims are well-supported. Do NOT simply rephrase or shorten the content. Your goal is to produce a version that is demonstrably more robust and coherent.`;
-        rationales.push(`Coherence Builder: Switching to Gemini 2.5 Pro with a balanced configuration. Applying a forceful 'Coherence Building' meta-instruction.`);
+        rationales.push(`Coherence Builder: Using Gemini 2.5 Flash (thinking enabled) with a balanced configuration. Applying a forceful 'Coherence Building' meta-instruction.`);
         stagnationInfo.consecutiveCoherenceDegradation = 0; // Reset counter after acting
-    } else if (isRadicalRefinementKickstartAttempt) {
+    } else if (isRadicalRefinementKickstart) {
         rationales.push("Strategy: Radical Refinement Kickstart initiated to break critical stagnation.");
-        nextModelName = 'gemini-2.5-pro';
+        nextModelName = 'gemini-2.5-flash-preview-04-17';
         nextConfig = { ...CREATIVE_DEFAULTS, temperature: 0.8 };
-        activeMetaInstruction = "CRITICAL: Process is stuck in a loop of trivial, non-substantive changes (wordsmithing). You MUST re-evaluate the product's core concepts and generate a substantially different and improved version. Add net-new information, depth, or a completely fresh perspective. Do NOT just rephrase existing content. A significant, conceptual change is required to proceed.";
-        rationales.push("Radical Kickstart: Switching to Gemini 2.5 Pro with high creativity. Applying forceful meta-instruction to break wordsmithing loop.");
+        nextConfig.thinkingConfig = { thinkingBudget: 1 };
+        activeMetaInstruction = "CRITICAL: Process is stuck in a loop of trivial, non-substantive changes (wordsmithing). You MUST re-evaluate the product's core concepts and generate a substantially different and improved version. Add net-new information, depth, or a completely fresh perspective. Do not just rephrase existing content. A significant, conceptual change is required to proceed.";
+        rationales.push("Radical Kickstart: Using Gemini 2.5 Flash (thinking enabled) with high creativity. Applying forceful meta-instruction to break wordsmithing loop.");
     } else {
         // Global Mode Heuristic Sweep
         const interpolationFactor = Math.min(1.0, (currentMajorVersion + 1) / DETERMINISTIC_TARGET_ITERATION);

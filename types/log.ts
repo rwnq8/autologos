@@ -1,4 +1,3 @@
-
 // types/log.ts
 
 import type { ApiStreamCallDetail, AiResponseValidationInfo, OutlineGenerationResult } from './api';
@@ -71,6 +70,8 @@ export interface IterationLogEntry {
   attemptCount?: number;
   bootstrapRun?: number;
   outlineForIter1?: OutlineGenerationResult;
+  semanticSimilarity?: number;
+  coherenceScore?: number;
 }
 
 export type DevLogEntryType = 'issue' | 'fix' | 'feature' | 'decision' | 'note';

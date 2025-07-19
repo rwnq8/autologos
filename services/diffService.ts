@@ -32,7 +32,8 @@ export const reconstructProduct = (
 
   for (const logEntry of relevantHistory) {
     try {
-      const patchObjects = Diff.parsePatch(logEntry.productDiff!);
+      if (!logEntry.productDiff) continue;
+      const patchObjects = Diff.parsePatch(logEntry.productDiff);
       
       if (patchObjects.length === 0) {
         // Some diffs might be empty (e.g., no change). This is valid.
@@ -44,7 +45,8 @@ export const reconstructProduct = (
       // Looping is safer to handle potential library changes or single/multiple patch files in the diff string.
       for (const patch of patchObjects) {
           if (typeof patchedResult === 'string') {
-              patchedResult = Diff.applyPatch(patchedResult, patch);
+              // Add fuzzFactor to make patching more resilient to minor whitespace/newline differences.
+              patchedResult = Diff.applyPatch(patchedResult, patch, { fuzzFactor: 2 });
           } else {
               break; // A patch failed. Stop processing this entry's patches.
           }

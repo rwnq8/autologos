@@ -24,9 +24,9 @@ const MAX_INPUT_CHARS_FOR_ABSOLUTE_CHAR_LIMIT_ITER1 = 500 * 1024;
 const ABSOLUTE_MAX_CHARS_ITER1_PRODUCT = 1200000;
 
 // Catastrophic Collapse Check
-const MIN_CHARS_FOR_CATASTROPHIC_COLLAPSE = 20;
-const MIN_WORDS_FOR_CATASTROPHIC_COLLAPSE = 5;
-const PREVIOUS_MIN_CHARS_FOR_CATASTROPHIC_CHECK = 200; // Previous product must have been somewhat substantial
+const MIN_CHARS_FOR_CATASTROPHIC_COLLAPSE = 15; // Lowered to catch "undefined" etc.
+const MIN_WORDS_FOR_CATASTROPHIC_COLLAPSE = 4; // Lowered
+const PREVIOUS_MIN_CHARS_FOR_CATASTROPHIC_CHECK = 100; // Previous product must have been somewhat substantial
 
 // Premature Convergence Check - Constants moved to strategistUtils.ts
 
@@ -69,6 +69,7 @@ const AI_ERROR_PHRASES = [
   "Please provide the portion of the response that you would like me to continue generating from.",
   "Okay, I'm ready. Please provide me with the text you'd like me to continue generating from.",
   "Please provide me with the text you'd like me to continue generating from! I need the starting point",
+  "undefined"
 ];
 
 // This is no longer the primary validation method for prompt leakage, as JSON output prevents it.
@@ -210,7 +211,7 @@ export function isLikelyAiErrorResponse(
       !isInstructedToShortenOrCondense) {
     return {
         isError: true, isCriticalFailure: true,
-        reason: `CRITICAL: AI response resulted in catastrophic content collapse (from ${prevLengthChars} chars to ${newLengthChars} chars) without instruction.`,
+        reason: `CRITICAL: AI response resulted in catastrophic content collapse (from ${prevLengthChars} chars to ${newLengthChars} chars) without instruction. This often indicates an API error or a nonsensical response like "undefined".`,
         checkDetails: { type: 'catastrophic_collapse', value: { previousLengthChars: prevLengthChars, newLengthChars: newLengthChars, previousWordCount: prevWordCount, newWordCount: newWordCount } as any }
     };
   }

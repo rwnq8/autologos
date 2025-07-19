@@ -1,3 +1,5 @@
+
+
 import type { LoadedFile, PlanStage, OutputFormat, OutputLength, OutputComplexity, NudgeStrategy, RetryContext, OutlineGenerationResult, Version, DocumentChunk, OutlineNode, ChunkOperation } from '../types/index.ts';
 import { formatVersion } from './versionUtils.ts';
 import { reconstructFromChunks } from './chunkingService.ts';
@@ -184,6 +186,12 @@ export const getUserPromptComponents = (
   const { major: majorVersion } = currentVersion;
   const isEnsembleIntegration = !!ensembleSubProducts && ensembleSubProducts.length > 0;
 
+  if (isRadicalRefinementKickstart) {
+    systemInstructionParts.push(
+        `CRITICAL META-INSTRUCTION: The iterative process has become stagnant, making only trivial wording changes. Your primary objective for this version is to break this loop by making a SUBSTANTIAL, CONCEPTUAL change. Do not merely rephrase. Introduce new insights, restructure a core argument, add significant depth to a shallow section, or challenge a previous assertion. A radical, high-value change is required.`
+    );
+  }
+
   if (devLogContextString && !devLogContextString.includes("No specific, highly relevant DevLog entries found") && !devLogContextString.includes("DevLog Contextualizer Inactive") && !devLogContextString.includes("No DevLog entries to analyze")) {
     systemInstructionParts.push(
       `CRITICAL AWARENESS FROM DEVELOPMENT LOG:\nThe following entries from the project's development log have been identified as highly relevant to your current task. Take them into account during your refinement process to avoid past issues, adhere to decisions, or understand key context.\n---\n${devLogContextString}\n---`
@@ -258,11 +266,11 @@ Prohibited Output: Meta-references to the content (e.g., "the product," "the doc
   
   if (isInitialProductEmptyAndFilesLoaded && majorVersion === 1 && !isEnsembleIntegration) {
       systemInstructionParts.push(
-`CRITICAL INITIAL SYNTHESIS (Version 1 from Provided Information): The provided text/outline to refine is empty, and one or more information sources have been provided. The IMMEDIATE and PRIMARY task for this first version is NOT to simply list or concatenate content. The required process is:
+`CRITICAL INITIAL SYNTHESIS (Version 1 from Provided Information): The provided text to refine is empty, and one or more information sources have been provided. The IMMEDIATE and PRIMARY task for this first version is NOT to simply list or concatenate content. The required process is:
 1. Analyze ALL provided original source data.
 2. Identify common themes, chapters, sections, and any versioning patterns.
 3. AGGRESSIVELY de-duplicate and consolidate information, BUT prioritize capturing the full breadth and depth of unique content from the source information.
-4. Produce a SINGLE, COHERENT, WELL-STRUCTURED initial document/outline that synthetically represents the core, essential information from ALL provided sources.
+4. Produce a SINGLE, COHERENT, WELL-STRUCTURED initial document that synthetically represents the core, essential information from ALL provided sources. This should be a full prose document, not an outline or a summary.
 The output for this version MUST be the synthesized content.`
       );
     }
@@ -294,7 +302,7 @@ The output for this version MUST be the synthesized content.`
     if (isOutlineMode) {
         coreUserInstructions += `Task: Refine the provided "OUTLINE FOR REFINEMENT". Your goal is to make it more detailed, granular, and comprehensive. Expand on high-level points, break down complex ideas into more specific sub-nodes, and ensure that the key arguments and evidence from the source material are fully represented. Implement the most impactful improvements to produce the next version that is closer to a complete knowledge graph.`;
     } else {
-        coreUserInstructions += `Task: Refine the provided "DOCUMENT FOR REFINEMENT". Analyze it and implement the most impactful improvements to produce the next version.`;
+        coreUserInstructions += `Task: Refine the provided "DOCUMENT FOR REFINEMENT". Your goal is to substantively improve the existing text by enhancing its clarity, strengthening its arguments, and enriching its content. You must preserve the document's length and core ideas. Do not summarize. Implement impactful improvements throughout the text and return the full, modified document.`;
     }
 
     if (isJsonMode) {

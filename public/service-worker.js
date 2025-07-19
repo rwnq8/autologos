@@ -1,5 +1,3 @@
-
-
 // public/service-worker.js
 
 const PROXY_HOST = 'https://autologos-iterative-process-engine-183501038626.us-west1.run.app';
@@ -42,13 +40,18 @@ const handleGeminiProxy = async (request) => {
       return response;
     }
 
+    // Create a new Headers object and remove headers that can cause issues with streaming.
+    const responseHeaders = new Headers(response.headers);
+    responseHeaders.delete('Content-Length');
+    responseHeaders.delete('Content-Encoding');
+
     const { readable, writable } = new TransformStream();
     response.body.pipeTo(writable);
     
     return new Response(readable, {
       status: response.status,
       statusText: response.statusText,
-      headers: response.headers,
+      headers: responseHeaders, // Use the cleaned headers
     });
 
   } catch (error) {
@@ -93,7 +96,6 @@ const handleUrlBrowseProxy = async (request) => {
     });
 
   } catch (error) {
-    clearTimeout(timeoutId);
     let errorMessage = `Service Worker: Browse proxy failed for ${targetUrl}. Error: ${error.message}`;
     if (error.name === 'AbortError') {
       errorMessage = `Service Worker: Browse proxy timed out after 20 seconds for ${targetUrl}.`;

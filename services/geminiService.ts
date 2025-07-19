@@ -2,6 +2,7 @@
 
 
 
+
 import { GoogleGenAI, type GenerateContentResponse, type Part, type Content, type FunctionDeclaration } from "@google/genai";
 import { SELECTABLE_MODELS, type ModelConfig, type StaticAiModelDetails, type IterateProductResult, type ApiStreamCallDetail, type LoadedFile, type PlanStage, type SuggestedParamsResponse, type RetryContext, type OutlineGenerationResult, type NudgeStrategy, type SelectableModelName, type Version, StructuredIterationResponse, DocumentChunk, OutlineNode, DevLogEntry, ChunkOperation } from "../types/index.ts";
 import { getUserPromptComponents, buildTextualPromptPart, MAX_PRODUCT_CONTEXT_CHARS_IN_PROMPT, getOutlineGenerationPromptComponents } from './promptBuilderService.ts';
@@ -330,6 +331,8 @@ export const iterateProduct = async ({
                 tools.push({ functionDeclarations: [urlBrowseTool] });
             }
         }
+
+        const { ...apiConfig } = modelConfigToUse;
 
         const configForRequest: any = {
             ...apiConfig,
